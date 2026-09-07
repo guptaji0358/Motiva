@@ -32,7 +32,46 @@ during `cmake --build`:
 taskkill //F //IM VideoWallpaper.exe
 ```
 
-## Current status (2026-09-07, DirectComposition rewrite)
+## Current status (2026-09-08, Explorer-recovery deadlock fix)
+
+The DirectComposition rewrite below works, but the Explorer-restart
+recovery it shipped with had a real deadlock: recovery used
+`Qt::BlockingQueuedConnection` to call the renderer's rebind method from
+the GUI thread. If a `presentFrame()`/`Present()` call was already in
+flight on the render thread exactly when Explorer destroyed the old
+DirectComposition target, that call could take an indeterminate time to
+return, freezing the GUI thread until it did - matching every symptom the
+user reported in real usage (process "running" but fully unresponsive,
+had to End Task, second launch did nothing because the frozen process
+still held the single-instance lock). Fixed by making the rebind
+asynchronous (`rebindFinished(bool)` signal instead of a blocking return
+value) and by always destroying+recreating the native window on recovery
+rather than trusting `IsWindow()` on the old handle (its numeric value can
+be reused by one of the many windows Explorer creates moments later during
+its own restart).
+
+Verified via 6 total Explorer restarts across two separate test runs (5
+back-to-back, then 1 more after a clean relaunch), all via `--autostart`:
+every cycle recovered within about a tick, process never went
+"Not Responding", and live `EnumChildWindows` diagnostics confirmed
+correct z-order (`SHELLDLL_DefView` -> our window) under the new Progman
+each time. Second-instance-while-first-running retested clean.
+
+**Open, unconfirmed item:** once, shortly after the 5-rapid-cycles run
+completed, the process was found gone with no Windows Error Reporting
+crash record for it at all (checked the Application event log - nothing).
+Not reproduced on a subsequent clean retest of the same scenario. Possible
+directions if it recurs: resource accumulation across many rapid
+recreate-HWND-and-DComp-target cycles (`CreateTargetForHwnd`/
+`CreateWindowExW` calls, one pair per restart, are not obviously leaked by
+code inspection but were not specifically stress-tested for leaks), or
+something outside this app's control given the artificially rapid,
+back-to-back Explorer kill/restart cycling used for testing (not
+representative of how Explorer actually restarts in normal use). Worth
+a longer soak test (many cycles, minutes apart) before considering this
+closed.
+
+## Prior status (2026-09-07, DirectComposition rewrite)
 
 Presentation was rewritten from GDI (`WM_PAINT`/`StretchDIBits`) to
 DirectComposition + D3D11 (`D3DWallpaperRenderer`), driven by a live
