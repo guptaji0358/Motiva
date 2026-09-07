@@ -32,7 +32,33 @@ during `cmake --build`:
 taskkill //F //IM VideoWallpaper.exe
 ```
 
-## Current status (2026-09-07) — NOT reliably working
+## Current status (2026-09-07, updated) — partially fixed, needs live re-verification
+
+A second pass fixed several concrete, verified-in-code bugs (see git log for
+the full diagnosis/fix commit): the GUI-thread frame conversion and slow
+HALFTONE blit (playback smoothness/lag), the tray-Exit path skipping
+cleanup (process lingering after close), and — critically — a regression
+where the WorkerW-discovery probe (several seconds of Sleep-based waiting)
+was being re-run by the 3s health-check timer on every tick once it always
+failed, making the whole app go "Not Responding" indefinitely. That's now
+cooldown-gated to once per 5 minutes.
+
+**Still not fixed / needs your live verification:**
+- The WorkerW-discovery probe still runs *synchronously on the GUI thread*
+  the (now rare) times it does run - it should be moved to a background
+  thread with only the final `SetParent`/`SetWindowPos` marshaled back,
+  per the user's explicit "don't block the GUI thread" requirement. Not
+  done yet due to time constraints in that session.
+- Video-appears-only-after-Win-key and taskbar/icons-covered-while-visible
+  (issues D/E/F) were **not** re-verified after these fixes - the WorkerW
+  discovery message-toggle fix might have changed nothing on this specific
+  machine (it still falls back to Progman every time in testing). Get a
+  fresh screenshot and Task Manager check before assuming these are fixed.
+- Playback smoothness improvements (moving conversion off the GUI thread,
+  faster blit mode) are implemented and build cleanly but were not visually
+  verified - this tool session cannot see the interactive desktop.
+
+## Prior status (2026-09-07, original) — NOT reliably working
 
 Despite an earlier README claiming "confirmed working end-to-end", live
 testing on the actual dev machine (Windows 11, build `10.0.26200`, an
