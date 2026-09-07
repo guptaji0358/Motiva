@@ -281,39 +281,6 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
     }
 
     HWND progman = FindWindowW(L"Progman", nullptr);
-    const bool isProgmanFallback = (worker == progman);
-
-    if (isProgmanFallback) {
-        // Some Explorer builds never spawn the icon-less WorkerW that the
-        // classic technique relies on (confirmed by testing: only small,
-        // unrelated 166x47 WorkerW windows exist here, none desktop-sized).
-        // DWM only composites content between the wallpaper backdrop and
-        // the icon layer for that specific, Explorer-created WorkerW - a
-        // window we reparent as a *child* of Progman itself does not get
-        // that special treatment and stays invisible even though it is
-        // correctly sized, positioned, and reports IsWindowVisible==true
-        // (confirmed by testing). The fix is to not reparent into Progman
-        // at all: keep our window top-level and place it immediately
-        // behind Progman in the *global* top-level z-order instead, which
-        // is genuinely above the desktop backdrop (a top-level window is
-        // by definition rendered above it) while still sitting below
-        // Progman's own icon view.
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
-        SetParent(hwnd, nullptr);
-
-        RECT vd = GetVirtualDesktopRect();
-        SetWindowPos(hwnd, progman, vd.left, vd.top,
-                     vd.right - vd.left, vd.bottom - vd.top,
-                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
-        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        g_attachedHost = progman;
-        g_attachedProgman = progman;
-        g_hasAttached = true;
-        return true;
-    }
 
     // Make sure the window isn't flagged topmost - SetParent into a
     // non-topmost host reliably fails (ERROR_INVALID_PARAMETER) while a
@@ -323,14 +290,25 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
     SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
-    // Overwrite (not mask) the style/exstyle: Qt's own window flags for a
-    // frameless Qt::Tool widget can leave bit combinations (e.g. WS_POPUP
-    // together with layered/toolwindow ex-styles) that are invalid once
-    // combined with WS_CHILD, which is what actually made SetParent below
-    // fail with ERROR_INVALID_PARAMETER. A plain child window only needs
-    // WS_CHILD | WS_VISIBLE and no extended styles.
+    // Overwrite (not mask) the style/exstyle to a clean, known-valid
+    // combination for a reparented child window.
+    //
+    // WS_EX_NOREDIRECTIONBITMAP is load-bearing here, not cosmetic: live
+    // diagnostics on this machine (see CLAUDE.md) found that Progman
+    // itself carries this exact extended style. Windows normally gives a
+    // window its own GDI/DWM redirection bitmap for classic WM_PAINT
+    // content; WS_EX_NOREDIRECTIONBITMAP opts a window out of that in
+    // favor of presenting through DirectComposition instead. A plain GDI
+    // child we previously attached behind SHELLDLL_DefView was verified,
+    // via this same diagnostic tooling, to be geometrically correct and
+    // IsWindowVisible==true yet still not visually render - consistent
+    // with Progman's own redirection-bypassed compositing not picking up
+    // an ordinary GDI-painted child's content. Setting this style here,
+    // and presenting via a DirectComposition visual bound to this HWND
+    // (see D3DWallpaperRenderer) instead of WM_PAINT/GDI, matches the
+    // same compositing substrate Progman itself uses.
     SetWindowLongPtrW(hwnd, GWL_STYLE, WS_CHILD | WS_VISIBLE);
-    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, 0);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_NOREDIRECTIONBITMAP);
 
     // SetParent between windows with mismatched thread DPI-awareness
     // contexts (our Per-Monitor-V2-aware window vs. Explorer's

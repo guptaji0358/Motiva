@@ -104,7 +104,7 @@ void VideoPlayer::onConversionFinished() {
     if (!img.isNull()) {
         m_lastFrameSize = img.size();
         m_currentFrame = std::make_shared<const QImage>(std::move(img));
-        emit frameReady();
+        emit frameReady(m_currentFrame);
     }
 
     if (m_hasPendingFrame) {

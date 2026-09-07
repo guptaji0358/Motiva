@@ -23,6 +23,8 @@ set(SOURCES
     src/VideoPlayer.h
     src/WallpaperWindow.cpp
     src/WallpaperWindow.h
+    src/D3DWallpaperRenderer.cpp
+    src/D3DWallpaperRenderer.h
     src/WallpaperManager.cpp
     src/WallpaperManager.h
     src/WindowsDesktopWallpaper.cpp
@@ -43,6 +45,10 @@ target_link_libraries(VideoWallpaper PRIVATE
     User32
     Gdi32
     Advapi32
+    d3d11
+    dxgi
+    dcomp
+    d3dcompiler
 )
 
 target_include_directories(VideoWallpaper PRIVATE src)

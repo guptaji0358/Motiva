@@ -10,6 +10,8 @@
 #include <QFutureWatcher>
 #include <memory>
 
+Q_DECLARE_METATYPE(std::shared_ptr<const QImage>) // needed for the cross-thread frameReady queued connection
+
 // Owns the single decode/playback pipeline for the wallpaper video.
 // Decoding happens once regardless of how many monitor windows are
 // displaying the wallpaper - each frame is converted to a QImage here and
@@ -42,7 +44,13 @@ public:
     std::shared_ptr<const QImage> currentFrame() const { return m_currentFrame; }
 
 signals:
-    void frameReady();
+    // Carries the frame by value (a shared_ptr copy made here on this
+    // (GUI) thread before the signal crosses to each WallpaperWindow's own
+    // render thread via a queued connection) rather than requiring
+    // receivers to call currentFrame() themselves - that getter is only
+    // safe to call from this object's own thread, since m_currentFrame is
+    // written here with no synchronization.
+    void frameReady(std::shared_ptr<const QImage> frame);
     void errorOccurred(const QString& message);
     void playbackStateChanged(QMediaPlayer::PlaybackState state);
 
