@@ -100,27 +100,18 @@ void WallpaperManager::checkWorkerWHealth() {
     if (!m_active || m_windows.empty()) {
         return;
     }
-    HWND hwnd = m_windows.front()->handle();
-    HWND parent = GetParent(hwnd);
-    if (parent) {
-        // Reparented (child-attach) mode: if the WorkerW/Progman we're
-        // parented into disappeared (Explorer restarted), reattach.
-        if (!IsWindow(parent) || !WindowsDesktopWallpaper::IsWorkerWStillValid(parent)) {
-            qWarning() << "WorkerW lost (Explorer likely restarted) - reattaching wallpaper";
-            attachAllWindows();
-        }
-    } else {
-        // Top-level fallback mode (no real WorkerW exists on this Explorer
-        // build): there is no parent to go stale, but other windows or an
-        // Explorer restart can still shuffle it out of position behind
-        // Progman. Only re-pin when it has actually drifted (immediately
-        // preceding window is no longer Progman) - reattaching every tick
-        // regardless caused visible flicker.
-        HWND progman = FindWindowW(L"Progman", nullptr);
-        HWND prevInZOrder = GetWindow(hwnd, GW_HWNDPREV);
-        if (!progman || !IsWindow(hwnd) || prevInZOrder != progman) {
-            attachAllWindows();
-        }
+    // The ONLY condition that should ever cause us to touch the window
+    // hierarchy again after the initial attach is Explorer having
+    // genuinely restarted (crash, "Restart Explorer", shell update).
+    // Previous versions of this check also reattached on any perceived
+    // z-order drift (GW_HWNDPREV no longer being Progman) - but ordinary
+    // desktop use (opening a window, Start Menu, etc.) constantly shuffles
+    // top-level z-order, so that fired far too often and was the actual
+    // cause of visible flicker: SetParent/SetWindowPos/ShowWindow being
+    // re-run during normal use instead of "attach once, leave alone".
+    if (WindowsDesktopWallpaper::NeedsReattach()) {
+        qWarning() << "Explorer restart detected - reattaching wallpaper";
+        attachAllWindows();
     }
 }
 

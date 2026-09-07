@@ -121,6 +121,14 @@ void DumpAllWorkerWWindows() {
     }
 }
 
+// Set once, on every successful AttachToDesktop() - NOT touched anywhere
+// else. NeedsReattach() only ever compares against these; nothing polls or
+// re-derives z-order state, which is what previously caused a
+// reattach-on-every-perceived-drift loop (visible as flicker).
+HWND g_attachedHost = nullptr;
+HWND g_attachedProgman = nullptr;
+bool g_hasAttached = false;
+
 } // namespace
 
 std::vector<MonitorInfoData> WindowsDesktopWallpaper::EnumerateMonitors() {
@@ -301,6 +309,9 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
                      vd.right - vd.left, vd.bottom - vd.top,
                      SWP_NOACTIVATE | SWP_FRAMECHANGED);
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        g_attachedHost = progman;
+        g_attachedProgman = progman;
+        g_hasAttached = true;
         return true;
     }
 
@@ -374,6 +385,9 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
                  SWP_NOACTIVATE | SWP_FRAMECHANGED);
 
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    g_attachedHost = worker;
+    g_attachedProgman = progman;
+    g_hasAttached = true;
     return true;
 }
 
@@ -389,10 +403,28 @@ void WindowsDesktopWallpaper::DetachFromDesktop(HWND hwnd) {
     style &= ~WS_CHILD;
     style |= WS_POPUP;
     SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+
+    g_hasAttached = false;
+    g_attachedHost = nullptr;
+    g_attachedProgman = nullptr;
 }
 
 bool WindowsDesktopWallpaper::IsWorkerWStillValid(HWND workerW) {
     return workerW != nullptr && IsWindow(workerW);
+}
+
+bool WindowsDesktopWallpaper::NeedsReattach() {
+    if (!g_hasAttached) {
+        return false;
+    }
+    HWND currentProgman = FindWindowW(L"Progman", nullptr);
+    if (!currentProgman || currentProgman != g_attachedProgman) {
+        return true; // Explorer restarted - Progman itself is a new HWND
+    }
+    if (!IsWindow(g_attachedHost)) {
+        return true; // our host window was destroyed
+    }
+    return false;
 }
 
 RECT WindowsDesktopWallpaper::GetVirtualDesktopRect() {

@@ -46,6 +46,16 @@ public:
     // handle we cached — callers should poll this and reattach if false.
     static bool IsWorkerWStillValid(HWND workerW);
 
+    // True only when Explorer has genuinely restarted since the last
+    // successful AttachToDesktop() (the host window we attached under is
+    // gone, or Progman itself now resolves to a different HWND). This is
+    // the ONLY condition that should trigger re-attaching - deliberately
+    // does not look at z-order, which changes constantly during normal
+    // desktop use (opening windows, Start Menu, etc.) and previously
+    // caused a reattach-on-every-perceived-drift loop that flickered.
+    // Once attached, the render window should be left alone.
+    static bool NeedsReattach();
+
     // Full virtual desktop bounding rect (union of all monitors), physical px.
     static RECT GetVirtualDesktopRect();
 };
