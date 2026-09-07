@@ -65,9 +65,21 @@ public slots:
     // the DirectComposition target bound to that now-destroyed HWND is
     // left dangling. Call this after WallpaperWindow has created a *new*
     // native HWND to rebind the existing device/swap chain/visual/shaders/
-    // textures to it, without recreating any of them. Returns false (with
-    // a logged HRESULT) if rebinding fails.
-    bool rebindToWindow(HWND newHwnd);
+    // textures to it, without recreating any of them.
+    //
+    // Deliberately void/asynchronous, not a blocking call: this can run
+    // concurrently with a presentFrame() that was already mid-flight (e.g.
+    // inside Present()) when Explorer destroyed the old target. A caller
+    // on the GUI thread blocking on this via BlockingQueuedConnection was
+    // confirmed by testing to freeze the entire application whenever that
+    // race was hit - Present() can take an indeterminate amount of time to
+    // return once its presentation target has been invalidated out from
+    // under it. Completion is reported via rebindFinished() instead, which
+    // Qt delivers back to the caller's thread as a normal queued signal.
+    void rebindToWindow(HWND newHwnd);
+
+signals:
+    void rebindFinished(bool ok);
 
 private:
     bool createDeviceAndSwapChain(int width, int height);

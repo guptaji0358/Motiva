@@ -458,16 +458,20 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
     }
 }
 
-bool D3DWallpaperRenderer::rebindToWindow(HWND newHwnd) {
+void D3DWallpaperRenderer::rebindToWindow(HWND newHwnd) {
     if (!m_initialized || !m_dcompDevice) {
         qWarning() << "[D3DWallpaperRenderer] rebindToWindow called before initialize() - nothing to rebind.";
-        return false;
+        emit rebindFinished(false);
+        return;
     }
 
     // The old target was bound to a now-destroyed HWND; release it before
     // creating a new one. The visual (and everything it contains - swap
     // chain, D3D11 device/context, shaders, textures) is untouched and
-    // reused as-is.
+    // reused as-is. This method runs on this object's own render thread
+    // (queued call), so it naturally serializes with any presentFrame()
+    // call already in progress or still pending - no separate locking
+    // needed for that.
     SafeRelease(reinterpret_cast<IUnknown**>(&m_dcompTarget));
     m_hwnd = newHwnd;
 
@@ -475,22 +479,25 @@ bool D3DWallpaperRenderer::rebindToWindow(HWND newHwnd) {
     if (FAILED(hr)) {
         qWarning() << "[D3DWallpaperRenderer] rebindToWindow: CreateTargetForHwnd failed, hr=0x"
                     << Qt::hex << (unsigned)hr << "hwnd=" << reinterpret_cast<quintptr>(m_hwnd);
-        return false;
+        emit rebindFinished(false);
+        return;
     }
     hr = m_dcompTarget->SetRoot(m_dcompVisual);
     if (FAILED(hr)) {
         qWarning() << "[D3DWallpaperRenderer] rebindToWindow: SetRoot failed, hr=0x" << Qt::hex << (unsigned)hr;
-        return false;
+        emit rebindFinished(false);
+        return;
     }
     hr = m_dcompDevice->Commit();
     if (FAILED(hr)) {
         qWarning() << "[D3DWallpaperRenderer] rebindToWindow: Commit failed, hr=0x" << Qt::hex << (unsigned)hr;
-        return false;
+        emit rebindFinished(false);
+        return;
     }
 
-    qInfo() << "[Wallpaper] DirectComposition target rebound to new hwnd="
-            << reinterpret_cast<quintptr>(m_hwnd);
-    return true;
+    qInfo() << "[DComp] Composition target rebound to new hwnd=" << reinterpret_cast<quintptr>(m_hwnd)
+            << "- composition committed.";
+    emit rebindFinished(true);
 }
 
 void D3DWallpaperRenderer::shutdown() {

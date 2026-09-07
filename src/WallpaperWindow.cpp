@@ -70,6 +70,10 @@ WallpaperWindow::WallpaperWindow(VideoPlayer* player, QObject* parent)
     // render thread) live on different threads - no manual marshaling
     // needed, and this is the ONLY thing that runs at frame rate.
     connect(m_player, &VideoPlayer::frameReady, m_renderer, &D3DWallpaperRenderer::presentFrame);
+    // Delivered back via a queued connection (render thread -> GUI
+    // thread), continuing recoverFromExplorerRestart() without ever
+    // blocking either thread on the other.
+    connect(m_renderer, &D3DWallpaperRenderer::rebindFinished, this, &WallpaperWindow::onRebindFinished);
 }
 
 WallpaperWindow::~WallpaperWindow() {
@@ -126,44 +130,56 @@ void WallpaperWindow::setMonitorRect(const QRect& rect) {
     }
 }
 
-bool WallpaperWindow::recoverFromExplorerRestart() {
-    if (!IsWindow(m_hwnd)) {
-        // The common case: our old HWND was a WS_CHILD of the now-destroyed
-        // Progman, and Windows cascade-destroyed it along with its parent.
-        // The D3D device/swapchain/visual/shaders/textures inside
-        // m_renderer are untouched by any of this - only a new HWND and a
-        // new DirectComposition target are needed.
-        qInfo() << "[Wallpaper] Old wallpaper hwnd was destroyed with Explorer's desktop - creating a new one.";
-        m_hwnd = createNativeWindow();
-        if (!m_hwnd) {
-            qWarning() << "[Wallpaper] Failed to create a replacement native window.";
-            return false;
-        }
-        bool rebound = false;
-        QMetaObject::invokeMethod(m_renderer, "rebindToWindow", Qt::BlockingQueuedConnection,
-                                   Q_RETURN_ARG(bool, rebound), Q_ARG(HWND, m_hwnd));
-        if (!rebound) {
-            qWarning() << "[Wallpaper] Failed to rebind DirectComposition target to the new window.";
-            return false;
-        }
-        // Re-apply the geometry the window is supposed to have - a fresh
-        // HWND starts at the placeholder 64x64 size from createNativeWindow().
-        if (!m_monitorRect.isNull()) {
-            SetWindowPos(m_hwnd, nullptr, m_monitorRect.x(), m_monitorRect.y(),
-                         m_monitorRect.width(), m_monitorRect.height(), SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-    } else {
-        qInfo() << "[Wallpaper] Wallpaper hwnd survived Explorer's restart; just re-attaching.";
+void WallpaperWindow::recoverFromExplorerRestart() {
+    // Unconditionally destroy-and-recreate rather than branching on
+    // IsWindow(m_hwnd): a destroyed HWND's numeric value can be reused by
+    // one of the many new windows Explorer creates within the next moment
+    // during its own restart, so IsWindow() returning true here would not
+    // reliably mean "our window survived" - it could just as easily mean
+    // some unrelated Explorer-owned window now happens to hold the same
+    // value, and code that trusted it would silently reattach the wrong
+    // window while our real DirectComposition target stayed bound to a
+    // dangling reference. Explicitly destroying first removes that whole
+    // class of ambiguity.
+    if (IsWindow(m_hwnd)) {
+        DestroyWindow(m_hwnd);
+    }
+    qInfo() << "[Wallpaper] Old wallpaper hwnd invalidated by Explorer's restart - creating a new one.";
+    m_hwnd = createNativeWindow();
+    if (!m_hwnd) {
+        qWarning() << "[Wallpaper] Failed to create a replacement native window.";
+        return;
+    }
+    // Re-apply the geometry the window is supposed to have - a fresh HWND
+    // starts at the placeholder 64x64 size from createNativeWindow().
+    if (!m_monitorRect.isNull()) {
+        SetWindowPos(m_hwnd, nullptr, m_monitorRect.x(), m_monitorRect.y(),
+                     m_monitorRect.width(), m_monitorRect.height(), SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
-    // Either way, the desktop hierarchy we were parented into is gone -
-    // find and attach to the new one.
+    // Non-blocking: onRebindFinished (delivered back via a queued
+    // connection) continues the sequence. Never wait here for the render
+    // thread - it may still be finishing a presentFrame() call that was
+    // already in flight against the old (now-destroyed) target when
+    // Explorer tore it down, and blocking the GUI thread on that was
+    // confirmed by testing to freeze the whole application.
+    QMetaObject::invokeMethod(m_renderer, "rebindToWindow", Qt::QueuedConnection, Q_ARG(HWND, m_hwnd));
+}
+
+void WallpaperWindow::onRebindFinished(bool ok) {
+    if (!ok) {
+        qWarning() << "[Wallpaper] Failed to rebind DirectComposition target to the new window.";
+        return;
+    }
+    // SetParent/SetWindowPos here are plain synchronous Win32 calls on the
+    // GUI thread (as they always are for the initial attach too) - not a
+    // cross-thread call, so there is nothing here that can be blocked on
+    // the render thread.
     if (!WindowsDesktopWallpaper::AttachToDesktop(m_hwnd)) {
         qWarning() << "[Wallpaper] Re-attach after Explorer restart failed.";
-        return false;
+        return;
     }
-    qInfo() << "[Wallpaper] Wallpaper reattached after Explorer restart.";
-    return true;
+    qInfo() << "[Wallpaper] Recovery complete - wallpaper reattached after Explorer restart.";
 }
 
 void WallpaperWindow::showNative() {

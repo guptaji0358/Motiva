@@ -115,16 +115,16 @@ void WallpaperManager::onExplorerRestarted() {
     }
     // This only ever runs in response to the "TaskbarCreated" broadcast
     // (see nativeEventFilter) - i.e. a genuine, one-time Explorer restart
-    // event, never a periodic check. Each WallpaperWindow figures out for
-    // itself whether its native HWND survived (see
-    // WallpaperWindow::recoverFromExplorerRestart): the video decoder
-    // (m_player) and every window's D3D device/swapchain/visual/shaders/
-    // textures are left completely untouched either way.
-    qInfo() << "[Wallpaper] Desktop host invalidated (Explorer restarted) - recovering.";
+    // event, never a periodic check. Each WallpaperWindow recreates its
+    // native HWND and asynchronously rebinds to it (see
+    // WallpaperWindow::recoverFromExplorerRestart/onRebindFinished -
+    // deliberately non-blocking); the video decoder (m_player) and every
+    // window's D3D device/swapchain/visual/shaders/textures are left
+    // completely untouched. Failure is reported via each window's own
+    // logging as recovery proceeds asynchronously, not returned here.
+    qInfo() << "[Shell] Explorer restart detected - recovering wallpaper.";
     for (auto& w : m_windows) {
-        if (!w->recoverFromExplorerRestart()) {
-            emit errorOccurred(tr("Could not reattach the wallpaper after Explorer restarted."));
-        }
+        w->recoverFromExplorerRestart();
     }
 }
 
