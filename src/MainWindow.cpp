@@ -158,7 +158,7 @@ void MainWindow::buildTray() {
     menu->addAction(tr("Choose Wallpaper"), this, &MainWindow::onChooseVideo);
     menu->addAction(tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
     menu->addSeparator();
-    menu->addAction(tr("Exit"), qApp, &QCoreApplication::quit);
+    menu->addAction(tr("Exit"), this, &MainWindow::onExitRequested);
 
     m_tray->setContextMenu(menu);
     connect(m_tray, &QSystemTrayIcon::activated, this, &MainWindow::onTrayActivated);
@@ -356,7 +356,26 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         hide();
         event->ignore();
     } else {
-        m_manager->removeWallpaper();
+        onExitRequested();
         event->accept();
     }
+}
+
+void MainWindow::onExitRequested() {
+    // Explicit, deterministic teardown *before* the event loop stops:
+    // WallpaperManager::removeWallpaper() stops the player and destroys
+    // the native render windows, which in turn lets Qt Multimedia's
+    // FFmpeg-backed decoder pipeline release its internal worker threads
+    // while the event loop is still alive to service any async cleanup
+    // it depends on. Relying solely on destructors running *after*
+    // app.exec() returns is what left the process alive in the
+    // background (Task Manager) after "closing" the app - by then there
+    // is no running event loop left for that cleanup to complete on.
+    if (m_manager) {
+        m_manager->removeWallpaper();
+    }
+    if (m_tray) {
+        m_tray->hide();
+    }
+    qApp->quit();
 }

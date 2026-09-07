@@ -37,6 +37,7 @@ private slots:
     void onWallpaperError(const QString& message);
     void onTrayActivated(QSystemTrayIcon::ActivationReason reason);
     void onPreviewFrameReady();
+    void onExitRequested();
 
 private:
     void buildUi();

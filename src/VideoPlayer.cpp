@@ -1,6 +1,7 @@
 #include "VideoPlayer.h"
 #include <QFileInfo>
 #include <QVideoFrame>
+#include <QtConcurrent/QtConcurrentRun>
 
 VideoPlayer::VideoPlayer(QObject* parent) : QObject(parent) {
     m_player.setAudioOutput(&m_audioOutput);
@@ -12,6 +13,7 @@ VideoPlayer::VideoPlayer(QObject* parent) : QObject(parent) {
     connect(&m_player, &QMediaPlayer::mediaStatusChanged, this, &VideoPlayer::onMediaStatusChanged);
     connect(&m_player, &QMediaPlayer::errorOccurred, this, &VideoPlayer::onErrorOccurred);
     connect(&m_player, &QMediaPlayer::playbackStateChanged, this, &VideoPlayer::playbackStateChanged);
+    connect(&m_conversionWatcher, &QFutureWatcher<QImage>::finished, this, &VideoPlayer::onConversionFinished);
 }
 
 bool VideoPlayer::loadFile(const QString& path) {
@@ -23,6 +25,8 @@ bool VideoPlayer::loadFile(const QString& path) {
 
     m_player.stop();
     m_currentFrame.reset();
+    m_pendingFrame = QVideoFrame();
+    m_hasPendingFrame = false;
     m_player.setSource(QUrl::fromLocalFile(path));
     return true;
 }
@@ -63,13 +67,52 @@ void VideoPlayer::onVideoFrameChanged(const QVideoFrame& frame) {
     if (!frame.isValid()) {
         return;
     }
-    QImage img = frame.toImage();
-    if (img.isNull()) {
+    if (m_conversionInFlight) {
+        // A conversion is already running on the thread pool. Only the
+        // most recent frame matters for a live wallpaper - queuing every
+        // intermediate frame would just add growing latency under load,
+        // not smoother playback. Drop anything older still pending.
+        m_pendingFrame = frame;
+        m_hasPendingFrame = true;
         return;
     }
-    m_lastFrameSize = img.size();
-    m_currentFrame = std::make_shared<const QImage>(std::move(img));
-    emit frameReady();
+    startConversion(frame);
+}
+
+void VideoPlayer::startConversion(const QVideoFrame& frame) {
+    m_conversionInFlight = true;
+    QFuture<QImage> future = QtConcurrent::run([frame]() {
+        // frame.toImage() (pixel-format/color-space conversion) and the
+        // RGB32 normalization are real CPU work for a 1080p+ frame; doing
+        // both here, off the GUI thread, is what keeps window/keyboard
+        // input responsive while video plays. Converting to RGB32 once
+        // here (rather than per-monitor in each WallpaperWindow's paint)
+        // also avoids redundant conversion work when multiple monitors
+        // share the same frame.
+        QImage img = frame.toImage();
+        if (!img.isNull() && img.format() != QImage::Format_RGB32) {
+            img = img.convertToFormat(QImage::Format_RGB32);
+        }
+        return img;
+    });
+    m_conversionWatcher.setFuture(future);
+}
+
+void VideoPlayer::onConversionFinished() {
+    m_conversionInFlight = false;
+    QImage img = m_conversionWatcher.result();
+    if (!img.isNull()) {
+        m_lastFrameSize = img.size();
+        m_currentFrame = std::make_shared<const QImage>(std::move(img));
+        emit frameReady();
+    }
+
+    if (m_hasPendingFrame) {
+        QVideoFrame next = m_pendingFrame;
+        m_pendingFrame = QVideoFrame();
+        m_hasPendingFrame = false;
+        startConversion(next);
+    }
 }
 
 void VideoPlayer::onMediaStatusChanged(QMediaPlayer::MediaStatus status) {

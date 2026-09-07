@@ -140,10 +140,9 @@ void WallpaperWindow::handlePaint() {
 
     auto frame = m_player->currentFrame();
     if (frame && !frame->isNull() && widgetW > 0 && widgetH > 0) {
-        QImage img = *frame;
-        if (img.format() != QImage::Format_RGB32) {
-            img = img.convertToFormat(QImage::Format_RGB32);
-        }
+        // Already normalized to Format_RGB32 once in VideoPlayer (shared
+        // across every monitor window) - no per-window conversion here.
+        const QImage& img = *frame;
 
         QRect target = computeTargetRect(img.size(), QSize(widgetW, widgetH));
 
@@ -155,8 +154,12 @@ void WallpaperWindow::handlePaint() {
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
 
-        SetStretchBltMode(hdc, HALFTONE);
-        SetBrushOrgEx(hdc, 0, 0, nullptr);
+        // HALFTONE is GDI's highest-quality resample filter but is far too
+        // slow for continuous real-time video (it's meant for one-off
+        // stretches). COLORONCOLOR is a simple, fast filter appropriate
+        // for per-frame blits; the source video's own resolution/bitrate
+        // is untouched, only the on-screen scaling algorithm changes.
+        SetStretchBltMode(hdc, COLORONCOLOR);
         StretchDIBits(hdc,
                       target.x(), target.y(), target.width(), target.height(),
                       0, 0, img.width(), img.height(),

@@ -137,42 +137,82 @@ HWND WindowsDesktopWallpaper::FindOrCreateWorkerW() {
         return nullptr;
     }
 
+    HWND iconOwnerCheap = nullptr;
+    HWND cheapWorker = FindWorkerWBehindIcons(&iconOwnerCheap);
+    if (cheapWorker) {
+        return cheapWorker;
+    }
+
+    // The full discovery below sends spawn messages and busy-waits for
+    // Explorer to react (up to several seconds total). WallpaperManager's
+    // health check calls this on every reattach, and on a build where no
+    // real WorkerW is ever created (as confirmed by testing on this
+    // machine) that full sequence would otherwise re-run - and re-block
+    // the GUI thread for seconds at a time - every single health-check
+    // tick, which is what caused the app to become genuinely unresponsive
+    // ("Not Responding") rather than just occasionally re-pinning a
+    // window. Remember a negative result for a cooldown window so repeat
+    // callers get the cheap "definitely not available right now" answer
+    // instead of redoing the whole expensive dance.
+    static ULONGLONG s_lastFailedDiscovery = 0;
+    // 5 minutes: long enough that, on a machine where discovery
+    // deterministically never succeeds (confirmed by testing - this
+    // Explorer build never creates a real WorkerW), the GUI thread isn't
+    // repeatedly stalled for several seconds by a doomed retry; short
+    // enough to notice a real WorkerW appearing after an Explorer
+    // restart within a reasonable time.
+    constexpr ULONGLONG kRediscoveryCooldownMs = 5 * 60 * 1000;
+    const ULONGLONG now = GetTickCount64();
+    if (s_lastFailedDiscovery != 0 && (now - s_lastFailedDiscovery) < kRediscoveryCooldownMs) {
+        // Known-failed recently: skip straight to the same Progman
+        // fallback a full failed discovery would have ended in, without
+        // re-running the expensive probe. Returning nullptr here would be
+        // wrong - AttachToDesktop treats that as "no host available at
+        // all" and hides the window instead of falling back.
+        return progman;
+    }
+
     // Ask Explorer to spawn the WorkerW layer. Undocumented but stable
     // since Windows 7 and still functions on Windows 10/11 as of this
     // writing. Different Explorer builds have been observed to only react
-    // to one or the other of these two known wParam/lParam variants, so we
-    // try both. SendMessageTimeout avoids hanging if Explorer is busy.
-    auto sendSpawnMessages = [&] {
+    // to one or another of these known wParam/lParam variants.
+    //
+    // IMPORTANT: on at least one real Windows 11 build this message was
+    // found (by testing) to behave as a *toggle* rather than an idempotent
+    // "ensure it exists" - sending the same variant twice in a row created
+    // the WorkerW and then immediately destroyed it again, so a batch of
+    // four sends with no check in between could easily net out to "no
+    // WorkerW" even though Explorer is perfectly capable of creating one.
+    // Send one variant at a time and check for a real result after each
+    // individual send, stopping the instant one appears.
+    struct Variant { WPARAM wParam; LPARAM lParam; };
+    const Variant variants[] = { {0xD, 0x1}, {0, 0}, {0, 1} };
+
+    HWND iconOwner = iconOwnerCheap;
+    HWND worker = nullptr;
+
+    for (const auto& v : variants) {
+        if (worker) {
+            break;
+        }
         DWORD_PTR result = 0;
-        SendMessageTimeoutW(progman, 0x052C, 0xD, 0x1, SMTO_NORMAL, 1000, &result);
-        SendMessageTimeoutW(progman, 0x052C, 0xD, 0x1, SMTO_NORMAL, 1000, &result);
-        SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, &result);
-        SendMessageTimeoutW(progman, 0x052C, 0, 1, SMTO_NORMAL, 1000, &result);
-    };
-    sendSpawnMessages();
-
-    HWND iconOwner = nullptr;
-    HWND worker = FindWorkerWBehindIcons(&iconOwner);
-
-    // Some Explorer versions need a brief moment to create the window
-    // after the message is processed. Retry for up to ~1s.
-    for (int i = 0; i < 20 && !worker; ++i) {
-        Sleep(50);
-        worker = FindWorkerWBehindIcons(&iconOwner);
+        SendMessageTimeoutW(progman, 0x052C, v.wParam, v.lParam, SMTO_NORMAL, 1000, &result);
+        for (int i = 0; i < 20 && !worker; ++i) {
+            Sleep(50);
+            worker = FindWorkerWBehindIcons(&iconOwner);
+        }
     }
 
     if (worker) {
         return worker;
     }
 
-    // Some Explorer builds simply never spawn a WorkerW via the 0x052C
-    // message alone. Re-applying the current desktop wallpaper forces
+    // Still nothing: re-applying the current desktop wallpaper forces
     // Explorer to rebuild its whole desktop-rendering pipeline from
-    // scratch (this is the fix real-world video-wallpaper tools use for
-    // this exact case) - after that rebuild it reliably does create a
-    // proper, DWM-recognized WorkerW. Only worth trying once; if it
-    // doesn't help there is nothing more to nudge.
-    qWarning() << "[WindowsDesktopWallpaper] No WorkerW after spawn message; "
+    // scratch, which on some builds is what it takes to get it to create a
+    // proper, DWM-recognized WorkerW. Try the same one-at-a-time sequence
+    // again afterwards.
+    qWarning() << "[WindowsDesktopWallpaper] No WorkerW after spawn messages; "
                    "re-applying wallpaper to force Explorer to rebuild the "
                    "desktop and retrying.";
     wchar_t currentWallpaper[MAX_PATH] = {};
@@ -181,16 +221,27 @@ HWND WindowsDesktopWallpaper::FindOrCreateWorkerW() {
                                SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
     }
     Sleep(300);
-    sendSpawnMessages();
-    worker = FindWorkerWBehindIcons(&iconOwner);
-    for (int i = 0; i < 20 && !worker; ++i) {
-        Sleep(50);
-        worker = FindWorkerWBehindIcons(&iconOwner);
+    for (const auto& v : variants) {
+        if (worker) {
+            break;
+        }
+        DWORD_PTR result = 0;
+        SendMessageTimeoutW(progman, 0x052C, v.wParam, v.lParam, SMTO_NORMAL, 1000, &result);
+        for (int i = 0; i < 20 && !worker; ++i) {
+            Sleep(50);
+            worker = FindWorkerWBehindIcons(&iconOwner);
+        }
     }
 
     if (worker) {
         return worker;
     }
+
+    // Definitively failed this round - remember it so the next call
+    // (likely from the 3s health-check timer) skips straight past the
+    // expensive rediscovery until the cooldown expires, rather than
+    // repeating a multi-second, GUI-thread-blocking probe every tick.
+    s_lastFailedDiscovery = now;
 
     if (!iconOwner) {
         qWarning() << "[WindowsDesktopWallpaper] No window with a "

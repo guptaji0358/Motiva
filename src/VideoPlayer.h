@@ -6,6 +6,8 @@
 #include <QMediaPlayer>
 #include <QAudioOutput>
 #include <QVideoSink>
+#include <QVideoFrame>
+#include <QFutureWatcher>
 #include <memory>
 
 // Owns the single decode/playback pipeline for the wallpaper video.
@@ -35,7 +37,8 @@ public:
     bool isPlaying() const;
     QSize videoNativeSize() const { return m_lastFrameSize; }
 
-    // Latest decoded frame as an image, shared by all render windows.
+    // Latest decoded frame, already converted to Format_RGB32 exactly once
+    // (not per-monitor), shared by all render windows.
     std::shared_ptr<const QImage> currentFrame() const { return m_currentFrame; }
 
 signals:
@@ -45,6 +48,7 @@ signals:
 
 private slots:
     void onVideoFrameChanged(const QVideoFrame& frame);
+    void onConversionFinished();
     void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
     void onErrorOccurred(QMediaPlayer::Error error, const QString& errorString);
 
@@ -59,4 +63,17 @@ private:
 
     QSize m_lastFrameSize;
     std::shared_ptr<const QImage> m_currentFrame;
+
+    // frame.toImage() + format conversion is real CPU work (color-space
+    // conversion of a full HD+ image); doing it inline in the
+    // videoFrameChanged slot would block the GUI thread once per decoded
+    // frame. It runs on a thread pool thread instead; the watcher's
+    // finished() delivery back onto this (GUI) thread is what makes
+    // updating m_currentFrame from here safe without extra locking.
+    QFutureWatcher<QImage> m_conversionWatcher;
+    bool m_conversionInFlight = false;
+    QVideoFrame m_pendingFrame; // set only if a new frame arrives while one is still converting
+    bool m_hasPendingFrame = false;
+
+    void startConversion(const QVideoFrame& frame);
 };

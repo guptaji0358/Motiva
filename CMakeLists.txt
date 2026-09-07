@@ -11,7 +11,7 @@ if(NOT WIN32)
     message(FATAL_ERROR "VideoWallpaper only builds for Windows (uses Win32 desktop APIs).")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Concurrent)
 
 qt_standard_project_setup()
 
@@ -37,6 +37,7 @@ target_link_libraries(VideoWallpaper PRIVATE
     Qt6::Widgets
     Qt6::Multimedia
     Qt6::MultimediaWidgets
+    Qt6::Concurrent
     Dwmapi
     Shell32
     User32
