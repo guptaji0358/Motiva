@@ -32,7 +32,55 @@ during `cmake --build`:
 taskkill //F //IM VideoWallpaper.exe
 ```
 
-## Current status (2026-09-07, updated) — partially fixed, needs live re-verification
+## Current status (2026-09-07, DirectComposition rewrite)
+
+Presentation was rewritten from GDI (`WM_PAINT`/`StretchDIBits`) to
+DirectComposition + D3D11 (`D3DWallpaperRenderer`), driven by a live
+diagnostic finding: `Progman` on this machine carries
+`WS_EX_NOREDIRECTIONBITMAP`, meaning it opts out of classic DWM
+bitmap-redirection compositing - which is almost certainly why a
+geometrically-correct GDI child window (verified via `GetWindowRect`/
+`IsWindowVisible`, not just a screenshot) never actually rendered. The
+render window now carries the same extended style and presents through a
+DirectComposition visual instead.
+
+The top-level-sibling-behind-Progman fallback (from the previous session)
+was removed entirely - live diagnostics proved it placed the window
+**above** Progman/icons in the global z-order (the opposite of what was
+wanted) and required periodic z-order upkeep that caused flicker. The app
+now always attaches as a real child of Progman, positioned behind
+`SHELLDLL_DefView`, exactly once, with no further HWND manipulation during
+playback (verified via extended log observation - zero repeated
+reattach/SetWindowPos activity over 2+ minutes of runtime).
+
+A custom standalone diagnostic tool (`diag.exe`, built from
+`diag.cpp` in the session scratchpad, not part of this repo) confirmed via
+live `EnumChildWindows` that after attaching, Progman's children are
+ordered front-to-back: `SHELLDLL_DefView` (icons) → our render window →
+a genuine, full-desktop-sized, **visible** `WorkerW` that Explorer created
+as a **child of Progman** (not the traditional top-level sibling the
+existing `FindWorkerWBehindIcons` search logic looks for - a likely
+follow-up: teach that search to also check for a WorkerW nested under
+Progman, not just top-level siblings). That ordering - icons in front,
+video in the middle, backdrop WorkerW at the back - is exactly the
+layering a wallpaper needs.
+
+**What is NOT yet visually verified** (this tool session has no way to see
+the live desktop - only screenshots/Task Manager reports from the user
+establish ground truth):
+- Whether the video actually renders on screen now (the architecture and
+  z-order are right per diagnostics; DirectComposition initialization
+  logs no errors; but "renders" has been wrong before despite correct
+  structure - it must be confirmed by an actual screenshot).
+- Icon/taskbar interactivity, Win-key behavior, playback smoothness,
+  Explorer-restart recovery, multi-monitor (this machine only ever showed
+  one 1536x864 or 1920x1080 display across sessions - never tested with
+  two).
+- Clean shutdown via the tray "Exit" menu item specifically - this tool
+  session cannot click a system tray context menu; WM_CLOSE was confirmed
+  to correctly minimize-to-tray (by design), which is not the same test.
+
+## Prior status (2026-09-07, pre-DirectComposition) — partially fixed, needs live re-verification
 
 A second pass fixed several concrete, verified-in-code bugs (see git log for
 the full diagnosis/fix commit): the GUI-thread frame conversion and slow
