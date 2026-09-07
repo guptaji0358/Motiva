@@ -52,10 +52,25 @@ public:
     // presented should check this.
     bool isRendererReady() const { return m_rendererReady; }
 
+    // Called after Explorer has been detected to have restarted (see
+    // WallpaperManager's "TaskbarCreated" handling - event-driven, not
+    // polled). Explorer destroying the old Progman cascades to destroy
+    // our reparented child HWND too (documented Win32 behavior for
+    // parent/child destruction), so the common case is: create a new
+    // native HWND, rebind the existing D3D/DirectComposition pipeline to
+    // it (device/swapchain/visual/shaders/textures are all reused
+    // untouched - only the DirectComposition target is recreated), then
+    // re-attach to the new desktop hierarchy. Defensively also handles the
+    // case where the old HWND somehow survived (nothing to recreate/
+    // rebind then). Returns false if recovery failed at any step.
+    bool recoverFromExplorerRestart();
+
 public:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
+    HWND createNativeWindow();
+
     VideoPlayer* m_player;
     HWND m_hwnd = nullptr;
     ScalingMode m_scalingMode = ScalingMode::Fill;

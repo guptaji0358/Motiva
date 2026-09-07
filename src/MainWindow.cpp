@@ -47,6 +47,17 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
         onSetWallpaper();
     }
 
+    // Force the native HWND to actually exist even when starting
+    // minimized-to-tray and never shown: Qt often defers creating a
+    // widget's native window until it's shown, and WallpaperManager
+    // relies on receiving the broadcast "TaskbarCreated" message (sent to
+    // every real top-level HWND in the process) to detect Explorer
+    // restarts (see WallpaperManager::nativeEventFilter) - confirmed by
+    // testing that this message is never received at all when the only
+    // top-level widget in the process was hidden without ever having been
+    // shown, since no native window existed yet to receive it.
+    (void)winId();
+
     if (startMinimized) {
         hide();
     }

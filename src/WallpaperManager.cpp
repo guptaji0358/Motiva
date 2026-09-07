@@ -1,20 +1,35 @@
 #include "WallpaperManager.h"
 #include <QDebug>
+#include <QCoreApplication>
 
 WallpaperManager::WallpaperManager(QObject* parent)
     : QObject(parent), m_player(std::make_unique<VideoPlayer>()) {
     connect(m_player.get(), &VideoPlayer::errorOccurred, this, &WallpaperManager::onPlayerError);
 
-    // Explorer can restart (crash, "Restart Explorer" from Task Manager,
-    // shell updates). When that happens our reparented windows get
-    // destroyed along with the old WorkerW. Poll periodically and
-    // reattach automatically.
-    connect(&m_healthTimer, &QTimer::timeout, this, &WallpaperManager::checkWorkerWHealth);
-    m_healthTimer.setInterval(3000);
+    // See the class comment: "TaskbarCreated" is the standard, purely
+    // event-driven signal for "Explorer just finished restarting".
+    m_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
+    qApp->installNativeEventFilter(this);
 }
 
 WallpaperManager::~WallpaperManager() {
+    qApp->removeNativeEventFilter(this);
     removeWallpaper();
+}
+
+bool WallpaperManager::nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) {
+    Q_UNUSED(result);
+    // Native events on Windows are always MSG-shaped for both event-type
+    // strings Qt has used across versions; confirm before trusting the
+    // cast rather than assuming.
+    if (eventType != "windows_generic_MSG" && eventType != "windows_dispatcher_MSG") {
+        return false;
+    }
+    auto* msg = static_cast<MSG*>(message);
+    if (m_taskbarCreatedMessage != 0 && msg->message == m_taskbarCreatedMessage) {
+        onExplorerRestarted();
+    }
+    return false; // never swallow the message - other listeners may need it too
 }
 
 bool WallpaperManager::setWallpaper(const QString& videoPath) {
@@ -30,7 +45,6 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
     m_player->play();
     m_userPaused = false;
     m_active = true;
-    m_healthTimer.start();
     emit wallpaperActivated();
     return true;
 }
@@ -39,7 +53,6 @@ void WallpaperManager::removeWallpaper() {
     if (!m_active) {
         return;
     }
-    m_healthTimer.stop();
     m_player->stop();
     teardownWindows();
     m_active = false;
@@ -96,22 +109,22 @@ void WallpaperManager::onPlayerError(const QString& message) {
     emit errorOccurred(message);
 }
 
-void WallpaperManager::checkWorkerWHealth() {
+void WallpaperManager::onExplorerRestarted() {
     if (!m_active || m_windows.empty()) {
         return;
     }
-    // The ONLY condition that should ever cause us to touch the window
-    // hierarchy again after the initial attach is Explorer having
-    // genuinely restarted (crash, "Restart Explorer", shell update).
-    // Previous versions of this check also reattached on any perceived
-    // z-order drift (GW_HWNDPREV no longer being Progman) - but ordinary
-    // desktop use (opening a window, Start Menu, etc.) constantly shuffles
-    // top-level z-order, so that fired far too often and was the actual
-    // cause of visible flicker: SetParent/SetWindowPos/ShowWindow being
-    // re-run during normal use instead of "attach once, leave alone".
-    if (WindowsDesktopWallpaper::NeedsReattach()) {
-        qWarning() << "Explorer restart detected - reattaching wallpaper";
-        attachAllWindows();
+    // This only ever runs in response to the "TaskbarCreated" broadcast
+    // (see nativeEventFilter) - i.e. a genuine, one-time Explorer restart
+    // event, never a periodic check. Each WallpaperWindow figures out for
+    // itself whether its native HWND survived (see
+    // WallpaperWindow::recoverFromExplorerRestart): the video decoder
+    // (m_player) and every window's D3D device/swapchain/visual/shaders/
+    // textures are left completely untouched either way.
+    qInfo() << "[Wallpaper] Desktop host invalidated (Explorer restarted) - recovering.";
+    for (auto& w : m_windows) {
+        if (!w->recoverFromExplorerRestart()) {
+            emit errorOccurred(tr("Could not reattach the wallpaper after Explorer restarted."));
+        }
     }
 }
 

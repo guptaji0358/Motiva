@@ -60,6 +60,15 @@ public slots:
     // created them).
     void shutdown();
 
+    // Explorer restarting destroys the old Progman, which (per documented
+    // Win32 behavior) cascades to destroy our reparented child HWND too -
+    // the DirectComposition target bound to that now-destroyed HWND is
+    // left dangling. Call this after WallpaperWindow has created a *new*
+    // native HWND to rebind the existing device/swap chain/visual/shaders/
+    // textures to it, without recreating any of them. Returns false (with
+    // a logged HRESULT) if rebinding fails.
+    bool rebindToWindow(HWND newHwnd);
+
 private:
     bool createDeviceAndSwapChain(int width, int height);
     bool createShaderPipeline();

@@ -1,5 +1,6 @@
 #include "WallpaperWindow.h"
 #include "D3DWallpaperRenderer.h"
+#include "WindowsDesktopWallpaper.h"
 #include <QDebug>
 #include <QMetaObject>
 
@@ -35,8 +36,7 @@ LRESULT CALLBACK WallpaperWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-WallpaperWindow::WallpaperWindow(VideoPlayer* player, QObject* parent)
-    : QObject(parent), m_player(player) {
+HWND WallpaperWindow::createNativeWindow() {
     EnsureClassRegistered();
 
     // Created as an ordinary hidden top-level popup window; WallpaperManager
@@ -47,10 +47,15 @@ WallpaperWindow::WallpaperWindow(VideoPlayer* player, QObject* parent)
     // never via classic WM_PAINT/GDI, and diagnostics on this machine
     // found Progman itself carries this same extended style - see the
     // detailed rationale in WindowsDesktopWallpaper.cpp::AttachToDesktop.
-    m_hwnd = CreateWindowExW(
+    return CreateWindowExW(
         WS_EX_NOREDIRECTIONBITMAP, kClassName, L"Video Wallpaper Render Surface", WS_POPUP,
         0, 0, 64, 64,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
+WallpaperWindow::WallpaperWindow(VideoPlayer* player, QObject* parent)
+    : QObject(parent), m_player(player) {
+    m_hwnd = createNativeWindow();
 
     // The renderer must have no parent when moved to another thread (Qt
     // requirement for moveToThread), and must live on its own thread so
@@ -119,6 +124,46 @@ void WallpaperWindow::setMonitorRect(const QRect& rect) {
         QMetaObject::invokeMethod(m_renderer, "resize", Qt::QueuedConnection,
                                    Q_ARG(int, rect.width()), Q_ARG(int, rect.height()));
     }
+}
+
+bool WallpaperWindow::recoverFromExplorerRestart() {
+    if (!IsWindow(m_hwnd)) {
+        // The common case: our old HWND was a WS_CHILD of the now-destroyed
+        // Progman, and Windows cascade-destroyed it along with its parent.
+        // The D3D device/swapchain/visual/shaders/textures inside
+        // m_renderer are untouched by any of this - only a new HWND and a
+        // new DirectComposition target are needed.
+        qInfo() << "[Wallpaper] Old wallpaper hwnd was destroyed with Explorer's desktop - creating a new one.";
+        m_hwnd = createNativeWindow();
+        if (!m_hwnd) {
+            qWarning() << "[Wallpaper] Failed to create a replacement native window.";
+            return false;
+        }
+        bool rebound = false;
+        QMetaObject::invokeMethod(m_renderer, "rebindToWindow", Qt::BlockingQueuedConnection,
+                                   Q_RETURN_ARG(bool, rebound), Q_ARG(HWND, m_hwnd));
+        if (!rebound) {
+            qWarning() << "[Wallpaper] Failed to rebind DirectComposition target to the new window.";
+            return false;
+        }
+        // Re-apply the geometry the window is supposed to have - a fresh
+        // HWND starts at the placeholder 64x64 size from createNativeWindow().
+        if (!m_monitorRect.isNull()) {
+            SetWindowPos(m_hwnd, nullptr, m_monitorRect.x(), m_monitorRect.y(),
+                         m_monitorRect.width(), m_monitorRect.height(), SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    } else {
+        qInfo() << "[Wallpaper] Wallpaper hwnd survived Explorer's restart; just re-attaching.";
+    }
+
+    // Either way, the desktop hierarchy we were parented into is gone -
+    // find and attach to the new one.
+    if (!WindowsDesktopWallpaper::AttachToDesktop(m_hwnd)) {
+        qWarning() << "[Wallpaper] Re-attach after Explorer restart failed.";
+        return false;
+    }
+    qInfo() << "[Wallpaper] Wallpaper reattached after Explorer restart.";
+    return true;
 }
 
 void WallpaperWindow::showNative() {
