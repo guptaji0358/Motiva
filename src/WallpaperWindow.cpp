@@ -3,6 +3,7 @@
 #include "WindowsDesktopWallpaper.h"
 #include <QDebug>
 #include <QMetaObject>
+#include <QElapsedTimer>
 
 namespace {
 constexpr const wchar_t* kClassName = L"VideoWallpaperRenderWindowClass";
@@ -111,10 +112,14 @@ void WallpaperWindow::setMonitorRect(const QRect& rect) {
                  SWP_NOZORDER | SWP_NOACTIVATE);
 
     if (!m_rendererReady) {
+        QElapsedTimer t;
+        t.start();
         bool ok = false;
         QMetaObject::invokeMethod(m_renderer, "initialize", Qt::BlockingQueuedConnection,
                                    Q_RETURN_ARG(bool, ok),
                                    Q_ARG(int, rect.width()), Q_ARG(int, rect.height()));
+        qInfo() << "[DComp] D3D/DirectComposition initialize() took" << t.elapsed()
+                << "ms, ok=" << ok;
         m_rendererReady = ok;
         if (!ok) {
             qWarning() << "[WallpaperWindow] D3D renderer failed to initialize - "

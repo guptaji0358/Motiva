@@ -3,6 +3,9 @@
 #include <QObject>
 #include <QAbstractNativeEventFilter>
 #include <QRect>
+#include <QTimer>
+#include <QElapsedTimer>
+#include <QFutureWatcher>
 #include <memory>
 #include <vector>
 #include "VideoPlayer.h"
@@ -65,13 +68,57 @@ private slots:
 
 private:
     void rebuildWindows();
+    // Kicks off attachment of every not-yet-attached window on a
+    // background thread (see m_attachWatcher) if one isn't already in
+    // flight. Never blocks the calling (GUI) thread.
     void attachAllWindows();
+    void onAttachAttemptFinished();
     void teardownWindows();
     void onExplorerRestarted();
+    void onAttachRetryTick();
 
     std::unique_ptr<VideoPlayer> m_player;
     std::vector<std::unique_ptr<WallpaperWindow>> m_windows;
     UINT m_taskbarCreatedMessage = 0;
+
+    // WindowsDesktopWallpaper::AttachToDesktop() performs undocumented
+    // Progman/WorkerW discovery: SendMessageTimeoutW round-trips to
+    // Explorer plus short Sleep-based waits for it to react. On a machine
+    // where Explorer never creates a standalone icon-less WorkerW
+    // (confirmed on this dev machine - see CLAUDE.md), that full sequence
+    // runs on every attach attempt and was measured to take 7+ seconds by
+    // itself under light load; under real boot-time CPU/disk contention
+    // (antivirus scanning, other startup apps, Explorer's own shell
+    // extensions loading) the same fixed sequence of waits can stretch to
+    // well over a minute. Previously this ran synchronously on the GUI
+    // thread - inside MainWindow's constructor, before the Qt event loop
+    // even started - which is what actually produced the ~2 minute
+    // "frozen"-looking startup/recovery delay: the whole process
+    // (including the message pump needed to receive Explorer's
+    // TaskbarCreated broadcast) was blocked for as long as discovery took.
+    // Running it via QtConcurrent on a worker thread and only marshaling
+    // the boolean result back removes that block entirely; the app stays
+    // responsive and reattaches as soon as discovery actually finishes,
+    // however long that takes on a given machine/boot.
+    QFutureWatcher<bool> m_attachWatcher;
+    bool m_attachInFlight = false;
+    QElapsedTimer m_attachAttemptElapsed;
+
+    // The Explorer desktop hierarchy (Progman -> SHELLDLL_DefView) is not
+    // always present the instant this app starts (observed on boot: this
+    // app can start before Explorer has finished building the desktop
+    // icon layer). There is no OS notification for "the desktop icon
+    // layer just became ready", so once an attach attempt fails we poll
+    // for it at a short, fixed interval (not a long arbitrary timeout)
+    // and stop the instant it succeeds - this is a bounded "wait for a
+    // condition" loop, not a periodic health-check/reattach loop (which
+    // was previously the source of z-order flicker; see
+    // WindowsDesktopWallpaper.cpp's NeedsReattach comment). Also used as
+    // a safety net after TaskbarCreated if the icon layer isn't back yet
+    // at that exact moment. Each tick just (re)starts the background
+    // attach attempt above - it never blocks itself.
+    QTimer m_attachRetryTimer;
+    QElapsedTimer m_attachRetryElapsed;
 
     bool m_active = false;
     QString m_currentPath;

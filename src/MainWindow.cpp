@@ -15,6 +15,7 @@
 
 MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
+    qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
     setWindowTitle("Video Wallpaper");
     resize(480, 560);
 
@@ -44,6 +45,7 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     // Restore previous wallpaper if the app was auto-started or the user
     // had one active when they last closed the app to tray.
     if ((startMinimized || m_settings.wasWallpaperActive()) && !m_selectedVideoPath.isEmpty()) {
+        qInfo() << "[Lifecycle] Auto-restoring previous wallpaper on startup.";
         onSetWallpaper();
     }
 
@@ -61,6 +63,7 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     if (startMinimized) {
         hide();
     }
+    qInfo() << "[Lifecycle] MainWindow construction complete.";
 }
 
 MainWindow::~MainWindow() = default;

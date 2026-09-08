@@ -1,5 +1,6 @@
 #include "WindowsDesktopWallpaper.h"
 #include <QDebug>
+#include <QElapsedTimer>
 
 namespace {
 
@@ -138,17 +139,37 @@ std::vector<MonitorInfoData> WindowsDesktopWallpaper::EnumerateMonitors() {
 }
 
 HWND WindowsDesktopWallpaper::FindOrCreateWorkerW() {
+    QElapsedTimer stageTimer;
+    stageTimer.start();
     HWND progman = FindWindowW(L"Progman", nullptr);
     if (!progman) {
-        qWarning() << "[WindowsDesktopWallpaper] Progman window not found - "
-                       "no Explorer desktop shell is active in this session.";
+        qWarning() << "[Discover] Progman window not found - "
+                       "no Explorer desktop shell is active in this session yet.";
         return nullptr;
     }
+    qInfo() << "[Discover] Progman found, hwnd=" << reinterpret_cast<quintptr>(progman);
 
     HWND iconOwnerCheap = nullptr;
     HWND cheapWorker = FindWorkerWBehindIcons(&iconOwnerCheap);
+    qInfo() << "[Discover] Cheap WorkerW/SHELLDLL_DefView probe took" << stageTimer.elapsed()
+            << "ms, iconOwner=" << reinterpret_cast<quintptr>(iconOwnerCheap)
+            << "worker=" << reinterpret_cast<quintptr>(cheapWorker);
     if (cheapWorker) {
         return cheapWorker;
+    }
+    if (!iconOwnerCheap) {
+        // SHELLDLL_DefView (the desktop icon layer) does not exist under
+        // ANY top-level window yet. This is the state observed right after
+        // boot, before Explorer has finished building the desktop - the
+        // 0x052C spawn-message dance below is pointless until this exists,
+        // since it only asks Explorer to create a WorkerW *alongside* an
+        // icon layer that isn't there yet. Bail out immediately (no
+        // Sleep-based busy-wait) and let the caller's short-interval retry
+        // timer check again shortly, instead of burning several seconds
+        // here on a doomed discovery sequence.
+        qInfo() << "[Discover] No SHELLDLL_DefView anywhere yet - desktop icon layer "
+                    "not built by Explorer yet. Skipping spawn-message probe this round.";
+        return nullptr;
     }
 
     // The full discovery below sends spawn messages and busy-waits for
@@ -273,10 +294,14 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
     if (!hwnd) {
         return false;
     }
+    QElapsedTimer attachTimer;
+    attachTimer.start();
 
     HWND worker = FindOrCreateWorkerW();
+    qInfo() << "[Discover] FindOrCreateWorkerW took" << attachTimer.elapsed()
+            << "ms, result=" << reinterpret_cast<quintptr>(worker);
     if (!worker) {
-        qWarning() << "[WindowsDesktopWallpaper] AttachToDesktop: no WorkerW/Progman host available.";
+        qWarning() << "[WindowsDesktopWallpaper] AttachToDesktop: no WorkerW/Progman host available yet.";
         return false;
     }
 
@@ -366,6 +391,8 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
     g_attachedHost = worker;
     g_attachedProgman = progman;
     g_hasAttached = true;
+    qInfo() << "[Wallpaper] AttachToDesktop succeeded for hwnd=" << reinterpret_cast<quintptr>(hwnd)
+            << "total time" << attachTimer.elapsed() << "ms.";
     return true;
 }
 

@@ -28,7 +28,7 @@ void fileLogHandler(QtMsgType type, const QMessageLogContext&, const QString& ms
     else if (type == QtFatalMsg) level = "FATAL";
 
     QTextStream stream(&logFile);
-    stream << QDateTime::currentDateTime().toString(Qt::ISODate) << " [" << level << "] " << msg << '\n';
+    stream << QDateTime::currentDateTime().toString("yyyy-MM-ddTHH:mm:ss.zzz") << " [" << level << "] " << msg << '\n';
     stream.flush();
 }
 

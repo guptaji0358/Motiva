@@ -32,7 +32,72 @@ during `cmake --build`:
 taskkill //F //IM VideoWallpaper.exe
 ```
 
-## Current status (2026-09-08, Explorer-recovery deadlock fix)
+## Current status (2026-09-08, startup/recovery ~2min delay fix)
+
+Root cause found and fixed (do not reintroduce): `WindowsDesktopWallpaper::
+AttachToDesktop()` (Progman/WorkerW discovery: `SendMessageTimeoutW` +
+`Sleep`-based waits for Explorer to react, doubled by the "re-apply
+wallpaper and retry" fallback) was being called **synchronously on the GUI
+thread** - from `WallpaperManager::attachAllWindows()`, itself called
+directly out of `MainWindow`'s constructor for startup and out of
+`onExplorerRestarted()`/the render-thread rebind callback for recovery.
+On this dev machine (Explorer here never creates a real icon-less
+WorkerW - confirmed by testing) that full discovery sequence measured
+**7.4s** by itself even under light load, run entirely before
+`MainWindow`'s constructor even returned (i.e. before `app.exec()`
+started the Qt event loop). Under real boot-time contention (antivirus
+scanning the fresh EXE, other startup apps, Explorer's own shell
+extensions loading) the exact same fixed sequence of waits is what
+stretches into the ~2 minute delay the user reported both after a cold
+boot and after killing/restarting `explorer.exe` - not a hardcoded 2min
+constant anywhere in the code, but this synchronous discovery having no
+upper bound and blocking the one thread needed to keep the app itself
+responsive (and, during that window, to receive Explorer's own
+`TaskbarCreated` broadcast).
+
+Fix: `WallpaperManager::attachAllWindows()` now runs
+`WindowsDesktopWallpaper::AttachToDesktop()` via `QtConcurrent::run` on a
+worker thread (`m_attachWatcher`/`m_attachInFlight` in
+`WallpaperManager.h`) and only marshals the boolean result back to the
+GUI thread - no blocking wait anywhere on the GUI/render threads. A
+short (300ms), self-terminating poll (`m_attachRetryTimer`) re-kicks the
+(non-blocking) attach attempt if the desktop hierarchy wasn't ready yet,
+stopping the instant it succeeds; this is a bounded "wait for a
+condition" loop, not a periodic reattach/health-check loop (that pattern
+was previously removed as a z-order/flicker cause - see
+`WindowsDesktopWallpaper::NeedsReattach`'s comment, and it's still dead
+code / never called). No arbitrary 30/60/120s timeouts were added, no
+`HWND_TOPMOST`, no continuous recreate/reparent, and the DirectComposition/
+D3D11 renderer and video decoder were not touched.
+
+Verified via this tool session's own build+run (see git log for the exact
+diff): `MainWindow` construction dropped from **7.4s** to **~106ms**
+wall-clock (log timestamps: `MainWindow construction complete` now logs
+almost immediately, while `[Discover]`/`[Shell] AttachToDesktop ... took
+6546 ms` continues in the background afterward) - i.e. startup is no
+longer blocked on Explorer discovery at all, whatever it ends up taking.
+Killing and restarting `explorer.exe` was measured recovering in
+**~318ms** (`[Shell] Desktop hierarchy became ready after 318 ms`), with
+the `VideoWallpaper.exe` process's PID unchanged throughout (never froze,
+never needed End Task, never needed relaunch). Timestamped diagnostic
+logging (millisecond precision) was added across the full chain -
+`MainWindow`/`WallpaperManager` lifecycle, `FindOrCreateWorkerW` discovery
+stages, `AttachToDesktop`, DirectComposition `initialize()`/`rebindToWindow`
+- to make any future regression visible directly in
+`%TEMP%\VideoWallpaper.log` without needing to re-instrument.
+
+**Not fixed / out of scope for this pass:** the underlying
+`FindOrCreateWorkerW()` discovery sequence itself can still take multiple
+seconds *of wall-clock time* (now off the GUI thread, so this no longer
+freezes the app, but the wallpaper still visibly takes that long to
+appear) on machines/builds where Explorer never creates a real icon-less
+WorkerW. Shortening that sequence itself (fewer `0x052C` variants, less
+`Sleep`-based polling) was out of scope here per explicit instruction not
+to touch retry-interval constants beyond fixing the actual GUI-thread
+block; worth revisiting only with fresh live measurements if the
+background-thread version is still perceived as slow to appear.
+
+## Prior status (2026-09-08, Explorer-recovery deadlock fix)
 
 The DirectComposition rewrite below works, but the Explorer-restart
 recovery it shipped with had a real deadlock: recovery used
