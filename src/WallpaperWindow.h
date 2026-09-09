@@ -64,8 +64,34 @@ public:
     // onRebindFinished), so this never waits on that thread.
     void recoverFromExplorerRestart();
 
+    // Best-effort "is video actually still flowing" signal, read from the
+    // GUI thread while the renderer itself lives on its own thread - see
+    // D3DWallpaperRenderer::presentedFrameCount (atomic, no marshaling
+    // needed for a plain counter read).
+    quint64 presentedFrames() const;
+
+    // Tells the renderer this window has just been (re)parented into the
+    // desktop hierarchy, so it can re-commit the DirectComposition target
+    // post-reparent - see D3DWallpaperRenderer::recommitAfterReparent.
+    // Non-blocking (queued call to the render thread).
+    void notifyAttachedToDesktop();
+
 public:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+signals:
+    // Emitted once the native HWND has been recreated and the DComp
+    // target rebound to it after Explorer restarted - i.e. this window is
+    // now ready to be (re)parented into the new desktop hierarchy.
+    // Deliberately does NOT call WindowsDesktopWallpaper::AttachToDesktop
+    // itself: that call is centralized in WallpaperManager's async attach
+    // path (see m_attachWatcher there) so there is only ever ONE place
+    // that touches the shared Progman/WorkerW discovery state - calling
+    // it from here too (as an earlier version did) raced with that
+    // background attach attempt on the same static state, which is
+    // exactly the kind of undefined behavior that can crash the whole
+    // process, not just this window.
+    void readyForReattach(bool ok);
 
 private slots:
     void onRebindFinished(bool ok);

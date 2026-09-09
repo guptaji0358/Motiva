@@ -1,6 +1,24 @@
 #include "WindowsDesktopWallpaper.h"
 #include <QDebug>
 #include <QElapsedTimer>
+#include <mutex>
+
+namespace {
+
+// Every entry point below (FindOrCreateWorkerW/AttachToDesktop/
+// DetachFromDesktop) reads or writes the module-level g_attached*/
+// s_lastFailedDiscovery state further down. WallpaperManager calls
+// AttachToDesktop from a background (QtConcurrent) thread, while
+// teardownWindows()/DetachFromDesktop can still run on the GUI thread at
+// the same time (e.g. the user disables the wallpaper while a reattach
+// attempt is in flight) - without a lock that is a data race on plain
+// globals, which is undefined behavior and a plausible cause of the
+// process dying outright during an Explorer restart rather than just
+// failing to attach. Everything in this file that touches that state now
+// holds this lock for its whole duration.
+std::mutex g_desktopStateMutex;
+
+} // namespace
 
 namespace {
 
@@ -294,6 +312,14 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
     if (!hwnd) {
         return false;
     }
+    // See the g_desktopStateMutex comment above: this can run on a
+    // background thread (WallpaperManager's async attach) concurrently
+    // with DetachFromDesktop on the GUI thread. Held for the whole
+    // discovery+reparent sequence, not just the state writes at the end,
+    // so a concurrent Detach can't yank g_attachedHost/g_hasAttached out
+    // from under a reparent that's still in progress.
+    std::lock_guard<std::mutex> lock(g_desktopStateMutex);
+
     QElapsedTimer attachTimer;
     attachTimer.start();
 
@@ -397,6 +423,7 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
 }
 
 void WindowsDesktopWallpaper::DetachFromDesktop(HWND hwnd) {
+    std::lock_guard<std::mutex> lock(g_desktopStateMutex);
     if (!hwnd || !IsWindow(hwnd)) {
         return;
     }
@@ -430,6 +457,63 @@ bool WindowsDesktopWallpaper::NeedsReattach() {
         return true; // our host window was destroyed
     }
     return false;
+}
+
+void WindowsDesktopWallpaper::DumpDesktopState(HWND wallpaperHwnd, const char* context) {
+    HWND progman = FindWindowW(L"Progman", nullptr);
+    DWORD progmanPid = 0;
+    if (progman) {
+        GetWindowThreadProcessId(progman, &progmanPid);
+    }
+    HWND iconOwner = nullptr;
+    EnumWindows(
+        [](HWND hwnd, LPARAM lParam) -> BOOL {
+            if (FindWindowExW(hwnd, nullptr, L"SHELLDLL_DefView", nullptr)) {
+                *reinterpret_cast<HWND*>(lParam) = hwnd;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&iconOwner));
+    HWND shellDefView = iconOwner ? FindWindowExW(iconOwner, nullptr, L"SHELLDLL_DefView", nullptr) : nullptr;
+
+    qInfo() << "[Diag]" << context << "Explorer PID(via Progman)=" << progmanPid
+            << "Progman=" << reinterpret_cast<quintptr>(progman)
+            << "valid=" << (progman && IsWindow(progman))
+            << "| SHELLDLL_DefView owner=" << reinterpret_cast<quintptr>(iconOwner)
+            << "SHELLDLL_DefView=" << reinterpret_cast<quintptr>(shellDefView);
+
+    HWND w = nullptr;
+    int i = 0;
+    while ((w = FindWindowExW(nullptr, w, L"WorkerW", nullptr)) != nullptr) {
+        RECT r{};
+        GetWindowRect(w, &r);
+        bool hasShellView = FindWindowExW(w, nullptr, L"SHELLDLL_DefView", nullptr) != nullptr;
+        qInfo() << "[Diag]" << context << "WorkerW[" << i << "] hwnd=" << reinterpret_cast<quintptr>(w)
+                << "visible=" << (bool)IsWindowVisible(w) << "size=" << (r.right - r.left) << "x"
+                << (r.bottom - r.top) << "hasShellView=" << hasShellView;
+        ++i;
+    }
+    if (i == 0) {
+        qInfo() << "[Diag]" << context << "No top-level WorkerW windows exist right now.";
+    }
+
+    if (wallpaperHwnd) {
+        const bool isValid = IsWindow(wallpaperHwnd);
+        HWND parent = isValid ? GetParent(wallpaperHwnd) : nullptr;
+        LONG_PTR style = isValid ? GetWindowLongPtrW(wallpaperHwnd, GWL_STYLE) : 0;
+        LONG_PTR exStyle = isValid ? GetWindowLongPtrW(wallpaperHwnd, GWL_EXSTYLE) : 0;
+        RECT r{};
+        if (isValid) {
+            GetWindowRect(wallpaperHwnd, &r);
+        }
+        qInfo() << "[Diag]" << context << "wallpaperHwnd=" << reinterpret_cast<quintptr>(wallpaperHwnd)
+                << "IsWindow=" << isValid << "GetParent=" << reinterpret_cast<quintptr>(parent)
+                << "parentIsProgman=" << (parent == progman) << "parentIsWorkerW=" << (parent != progman && parent != nullptr)
+                << "IsWindowVisible=" << (bool)IsWindowVisible(wallpaperHwnd)
+                << "style=0x" << Qt::hex << (unsigned long)style << "exStyle=0x" << (unsigned long)exStyle << Qt::dec
+                << "rect=" << r.left << r.top << r.right << r.bottom;
+    }
 }
 
 RECT WindowsDesktopWallpaper::GetVirtualDesktopRect() {

@@ -174,17 +174,26 @@ void WallpaperWindow::recoverFromExplorerRestart() {
 void WallpaperWindow::onRebindFinished(bool ok) {
     if (!ok) {
         qWarning() << "[Wallpaper] Failed to rebind DirectComposition target to the new window.";
+        emit readyForReattach(false);
         return;
     }
-    // SetParent/SetWindowPos here are plain synchronous Win32 calls on the
-    // GUI thread (as they always are for the initial attach too) - not a
-    // cross-thread call, so there is nothing here that can be blocked on
-    // the render thread.
-    if (!WindowsDesktopWallpaper::AttachToDesktop(m_hwnd)) {
-        qWarning() << "[Wallpaper] Re-attach after Explorer restart failed.";
-        return;
+    qInfo() << "[Wallpaper] DComp target rebound - native side ready; "
+                "handing off to WallpaperManager's async attach.";
+    // Actually reparenting into the new desktop hierarchy (SetParent into
+    // Progman/WorkerW) is NOT done here - see the readyForReattach comment
+    // in the header. WallpaperManager owns the one and only path that
+    // calls WindowsDesktopWallpaper::AttachToDesktop().
+    emit readyForReattach(true);
+}
+
+quint64 WallpaperWindow::presentedFrames() const {
+    return m_renderer ? m_renderer->presentedFrameCount.load(std::memory_order_relaxed) : 0;
+}
+
+void WallpaperWindow::notifyAttachedToDesktop() {
+    if (m_renderer) {
+        QMetaObject::invokeMethod(m_renderer, "recommitAfterReparent", Qt::QueuedConnection);
     }
-    qInfo() << "[Wallpaper] Recovery complete - wallpaper reattached after Explorer restart.";
 }
 
 void WallpaperWindow::showNative() {

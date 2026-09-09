@@ -65,6 +65,7 @@ signals:
 
 private slots:
     void onPlayerError(const QString& message);
+    void onWindowReadyForReattach(bool ok);
 
 private:
     void rebuildWindows();
@@ -103,6 +104,24 @@ private:
     QFutureWatcher<bool> m_attachWatcher;
     bool m_attachInFlight = false;
     QElapsedTimer m_attachAttemptElapsed;
+    // Bumped every time the set of windows/HWNDs being attached changes
+    // (a fresh attachAllWindows() call, or Explorer restarting mid-attempt
+    // and recreating HWNDs out from under an in-flight one). The
+    // in-flight attempt captures the generation it was started with; if
+    // that no longer matches m_attachGeneration by the time it finishes,
+    // its result refers to HWNDs/state that no longer exist and MUST be
+    // discarded rather than applied - see onAttachAttemptFinished.
+    quint64 m_attachGeneration = 0;
+    // The generation m_attachGeneration held when the currently/most-
+    // recently in-flight job was launched - compared against the live
+    // m_attachGeneration in onAttachAttemptFinished to detect staleness.
+    quint64 m_attachJobGeneration = 0;
+    // Set in the destructor before tearing anything down, so a
+    // just-finishing background attempt's completion handler (which can
+    // still fire after ~this runs, since QFutureWatcher::finished is a
+    // queued signal) knows not to touch already-destroyed WallpaperWindow
+    // objects.
+    bool m_shuttingDown = false;
 
     // The Explorer desktop hierarchy (Progman -> SHELLDLL_DefView) is not
     // always present the instant this app starts (observed on boot: this

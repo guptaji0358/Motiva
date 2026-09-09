@@ -58,4 +58,15 @@ public:
 
     // Full virtual desktop bounding rect (union of all monitors), physical px.
     static RECT GetVirtualDesktopRect();
+
+    // Diagnostic-only: logs (qInfo) the full current desktop-shell
+    // hierarchy as this module sees it right now - Progman HWND/validity,
+    // whichever top-level window currently owns SHELLDLL_DefView, every
+    // WorkerW candidate and whether it's plausibly desktop-sized, plus (if
+    // wallpaperHwnd is non-null) that window's own GetParent/IsWindow/
+    // IsWindowVisible/style state. Always re-derived from live Win32
+    // queries - never from this module's own cached g_attached* state -
+    // so it answers "what does Explorer's shell actually look like right
+    // now" regardless of what we think we last attached to.
+    static void DumpDesktopState(HWND wallpaperHwnd = nullptr, const char* context = "");
 };

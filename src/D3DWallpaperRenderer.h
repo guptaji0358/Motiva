@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QSize>
 #include <memory>
+#include <atomic>
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -78,8 +79,32 @@ public slots:
     // Qt delivers back to the caller's thread as a normal queued signal.
     void rebindToWindow(HWND newHwnd);
 
+    // Explorer's SetParent (in WindowsDesktopWallpaper::AttachToDesktop)
+    // happens on a background thread, strictly after rebindToWindow's own
+    // CreateTargetForHwnd/SetRoot/Commit sequence completed - i.e. after
+    // this object already committed a composition target for the window
+    // while it was still a top-level, unparented popup. That matches the
+    // FIRST-ever attach at app startup exactly... except that at startup
+    // no frames have been presented yet, whereas during Explorer-restart
+    // recovery the video was actively playing right up until the old
+    // window was destroyed. Re-committing once more here, after the
+    // reparent into the new desktop hierarchy has actually happened,
+    // costs nothing and rules out (or fixes, if it turns out to matter)
+    // any DWM-side composition-tree state that specifically depends on
+    // being committed post-reparent rather than only pre-reparent.
+    void recommitAfterReparent();
+
 signals:
     void rebindFinished(bool ok);
+
+public:
+    // Incremented once per successfully presented frame (Present()
+    // returned S_OK or DXGI_STATUS_OCCLUDED). Atomic because it's written
+    // on this object's render thread but read from the GUI thread (see
+    // WallpaperWindow::presentedFrames()) purely as a "is video actually
+    // still flowing" signal after Explorer-restart recovery - not for
+    // synchronization of any other state.
+    std::atomic<quint64> presentedFrameCount{0};
 
 private:
     bool createDeviceAndSwapChain(int width, int height);

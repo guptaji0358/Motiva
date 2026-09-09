@@ -455,7 +455,9 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
     hr = m_swapChain->Present(1, 0);
     if (FAILED(hr) && hr != DXGI_STATUS_OCCLUDED) {
         qWarning() << "[D3DWallpaperRenderer] Present failed, hr=0x" << Qt::hex << (unsigned)hr;
+        return;
     }
+    presentedFrameCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void D3DWallpaperRenderer::rebindToWindow(HWND newHwnd) {
@@ -498,6 +500,16 @@ void D3DWallpaperRenderer::rebindToWindow(HWND newHwnd) {
     qInfo() << "[DComp] Composition target rebound to new hwnd=" << reinterpret_cast<quintptr>(m_hwnd)
             << "- composition committed.";
     emit rebindFinished(true);
+}
+
+void D3DWallpaperRenderer::recommitAfterReparent() {
+    if (!m_dcompDevice) {
+        qWarning() << "[DComp] recommitAfterReparent: no DComp device - nothing to commit.";
+        return;
+    }
+    HRESULT hr = m_dcompDevice->Commit();
+    qInfo() << "[DComp] recommitAfterReparent: Commit() after SetParent into desktop hierarchy, hr=0x"
+            << Qt::hex << (unsigned)hr << Qt::dec << "presentedFrameCount=" << presentedFrameCount.load();
 }
 
 void D3DWallpaperRenderer::shutdown() {
