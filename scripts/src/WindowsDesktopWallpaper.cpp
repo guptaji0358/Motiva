@@ -219,6 +219,26 @@ HWND g_attachedHost = nullptr;
 HWND g_attachedProgman = nullptr;
 bool g_hasAttached = false;
 
+// Guards the bounded one-shot 0x052C spawn message in FindOrCreateWorkerW
+// so it fires at most once per attach generation, not on every call.
+// WallpaperManager's 300ms retry timer re-enters FindOrCreateWorkerW on
+// every tick for as long as attach hasn't been verified (e.g. indefinitely
+// on a machine where no standalone WorkerW is ever created - see
+// CLAUDE.md), and without this guard every one of those ticks resent the
+// spawn message to Explorer's Progman, asking it to recreate/rehost the
+// desktop icon layer's WorkerW up to ~3x/second, unbounded, for as long as
+// our wallpaper mode stayed active - a continuous, unthrottled mutation of
+// Explorer's OWN desktop shell hierarchy. That is the confirmed root cause
+// of Explorer's unrelated "Set as desktop background" occasionally
+// breaking while this app was running - see CLAUDE.md's 2026-09-11 "Set as
+// wallpaper interference" entry. A fresh generation (Explorer restart, or
+// a new attach cycle after teardown) always gets its own one-shot attempt,
+// exactly matching FindOrCreateWorkerW's own header documentation for this
+// parameter, which promised generation-scoped throttling that had
+// regressed to Q_UNUSED.
+quint64 s_lastSpawnAttemptGeneration = 0;
+bool s_hasAttemptedSpawnForGeneration = false;
+
 } // namespace
 
 std::vector<MonitorInfoData> WindowsDesktopWallpaper::EnumerateMonitors() {
@@ -228,11 +248,6 @@ std::vector<MonitorInfoData> WindowsDesktopWallpaper::EnumerateMonitors() {
 }
 
 HWND WindowsDesktopWallpaper::FindOrCreateWorkerW(uint64_t generation) {
-    // No longer used for a discovery cooldown - see the comment further
-    // down where the old expensive spawn-message dance used to be. Kept as
-    // a parameter (rather than changing every call site again) in case a
-    // future investigation reintroduces generation-scoped state here.
-    Q_UNUSED(generation);
     QElapsedTimer stageTimer;
     stageTimer.start();
     StartupDiagnostics::instance().mark("desktopDiscoveryStart");
@@ -295,6 +310,27 @@ HWND WindowsDesktopWallpaper::FindOrCreateWorkerW(uint64_t generation) {
     // produce a real WorkerW, we fall straight back to the Progman
     // fallback exactly as before - this is strictly additive, not a
     // dependency the fallback needs.
+    //
+    // "Bounded" and "one-shot" only hold if this is actually throttled:
+    // this function is re-entered on every one of WallpaperManager's
+    // 300ms retry-timer ticks while attach keeps failing/isn't yet
+    // verified, so without a per-generation guard the spawn message below
+    // was actually being resent to Explorer roughly 3x/second, unbounded,
+    // for as long as that retry loop ran - see s_hasAttemptedSpawnForGeneration's
+    // comment for why that is the confirmed root cause of Explorer's own
+    // "Set as desktop background" occasionally breaking while this app is
+    // running. Skip straight to the Progman fallback if this generation
+    // already had its one attempt.
+    if (s_hasAttemptedSpawnForGeneration && s_lastSpawnAttemptGeneration == generation) {
+        qInfo() << "[Discover] Already made this attach generation's one-shot spawn attempt - "
+                    "not resending 0x052C to Explorer again; falling back to Progman hwnd="
+                << reinterpret_cast<quintptr>(progman) << ".";
+        StartupDiagnostics::instance().mark("requiredShellWindowFound");
+        return progman;
+    }
+    s_hasAttemptedSpawnForGeneration = true;
+    s_lastSpawnAttemptGeneration = generation;
+
     DWORD_PTR spawnResult = 0;
     SendMessageTimeoutW(progman, 0x052C, 0xD, 0x1, SMTO_NORMAL, 200, &spawnResult);
     Sleep(100); // single bounded settle wait, not a retry loop - see comment above
@@ -450,6 +486,39 @@ void WindowsDesktopWallpaper::DetachFromDesktop(HWND hwnd) {
     g_hasAttached = false;
     g_attachedHost = nullptr;
     g_attachedProgman = nullptr;
+}
+
+std::wstring WindowsDesktopWallpaper::GetCurrentWallpaperPath() {
+    wchar_t currentWallpaper[MAX_PATH] = {};
+    if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, currentWallpaper, 0)) {
+        qWarning() << "[Wallpaper] GetCurrentWallpaperPath: SPI_GETDESKWALLPAPER failed, GetLastError="
+                   << GetLastError();
+        return std::wstring();
+    }
+    return std::wstring(currentWallpaper);
+}
+
+void WindowsDesktopWallpaper::RefreshDesktopBackground() {
+    // Not under g_desktopStateMutex - this touches none of that shared
+    // attach state, only Explorer's own SPI wallpaper mechanism.
+    const std::wstring currentWallpaper = GetCurrentWallpaperPath();
+    if (currentWallpaper.empty()) {
+        qWarning() << "[Wallpaper] RefreshDesktopBackground: could not read the current wallpaper - "
+                       "skipping the redraw nudge.";
+        return;
+    }
+    // Re-applying the SAME path the user already has configured - this is
+    // strictly a "redraw yourself" nudge to Explorer, never a wallpaper
+    // change of our own. SPIF_SENDCHANGE broadcasts WM_SETTINGCHANGE so
+    // Explorer picks it up immediately rather than only on next login.
+    if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, const_cast<wchar_t*>(currentWallpaper.c_str()),
+                                SPIF_UPDATEINIFILE | SPIF_SENDCHANGE)) {
+        qWarning() << "[Wallpaper] RefreshDesktopBackground: SPI_SETDESKWALLPAPER (redraw nudge) failed, "
+                       "GetLastError=" << GetLastError();
+        return;
+    }
+    qInfo() << "[Wallpaper] RefreshDesktopBackground: re-applied Explorer's own current wallpaper "
+                "to force it to reclaim/redraw the desktop background layer after we detached.";
 }
 
 bool WindowsDesktopWallpaper::IsWorkerWStillValid(HWND workerW) {

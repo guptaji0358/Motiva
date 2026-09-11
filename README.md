@@ -15,7 +15,8 @@ touching `WindowsDesktopWallpaper.cpp`.
 ## How the desktop integration works
 
 All of the Win32-specific logic lives in
-[`src/WindowsDesktopWallpaper.h/.cpp`](src/WindowsDesktopWallpaper.cpp) and
+[`scripts/include/WindowsDesktopWallpaper.h`](scripts/include/WindowsDesktopWallpaper.h)/
+[`scripts/src/WindowsDesktopWallpaper.cpp`](scripts/src/WindowsDesktopWallpaper.cpp) and
 nowhere else in the codebase.
 
 ### Finding the right window to attach to
@@ -107,15 +108,20 @@ multiple times for multi-monitor "All monitors" mode.
 ## Project layout
 
 ```
-VideoWallpaper/
-├── src/
-│   ├── main.cpp                     - entry point, tray/autostart flag handling
-│   ├── MainWindow.{h,cpp}           - UI + in-app preview
-│   ├── VideoPlayer.{h,cpp}          - QMediaPlayer/QVideoSink decode pipeline
-│   ├── WallpaperWindow.{h,cpp}      - plain native Win32 render window (one per monitor)
-│   ├── WallpaperManager.{h,cpp}     - orchestrates player + windows + Win32 attach
-│   ├── WindowsDesktopWallpaper.{h,cpp} - ALL raw Win32 desktop integration
-│   └── SettingsManager.{h,cpp}      - QSettings (registry) persistence
+Motiva/
+├── scripts/
+│   ├── main/
+│   │   └── main.cpp                 - entry point, tray/autostart flag handling
+│   ├── src/
+│   │   ├── MainWindow.cpp           - UI + in-app preview
+│   │   ├── SettingsDialog.cpp       - settings window
+│   │   ├── VideoPlayer.cpp          - QMediaPlayer/QVideoSink decode pipeline
+│   │   ├── WallpaperWindow.cpp      - plain native Win32 render window (one per monitor)
+│   │   ├── WallpaperManager.cpp     - orchestrates player + windows + Win32 attach
+│   │   ├── WindowsDesktopWallpaper.cpp - ALL raw Win32 desktop integration
+│   │   └── SettingsManager.cpp      - QSettings (registry) persistence
+│   └── include/
+│       └── *.h                      - one header per implementation file above
 ├── resources/
 │   ├── app.manifest                 - per-monitor DPI awareness
 │   └── app.rc

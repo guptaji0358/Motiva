@@ -19,30 +19,40 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Concur
 
 qt_standard_project_setup()
 
-set(SOURCES
-    src/main.cpp
-    src/MainWindow.cpp
-    src/MainWindow.h
-    src/VideoPlayer.cpp
-    src/VideoPlayer.h
-    src/WallpaperWindow.cpp
-    src/WallpaperWindow.h
-    src/D3DWallpaperRenderer.cpp
-    src/D3DWallpaperRenderer.h
-    src/WallpaperManager.cpp
-    src/WallpaperManager.h
-    src/WindowsDesktopWallpaper.cpp
-    src/WindowsDesktopWallpaper.h
-    src/SettingsManager.cpp
-    src/SettingsManager.h
-    src/RecoveryState.cpp
-    src/RecoveryState.h
-    src/StartupDiagnostics.h
-    src/InstanceIpc.cpp
-    src/InstanceIpc.h
+# Implementation files (scripts/src/) and their corresponding headers
+# (scripts/include/) are listed separately from the executable entry point
+# (scripts/main/main.cpp) - see CLAUDE.md's source-layout notes. Headers
+# are listed alongside their .cpp here (as before the move) purely so they
+# show up in IDE project trees; they compile via #include, not directly.
+set(IMPLEMENTATION_SOURCES
+    scripts/src/MainWindow.cpp
+    scripts/include/MainWindow.h
+    scripts/src/SettingsDialog.cpp
+    scripts/include/SettingsDialog.h
+    scripts/src/VideoPlayer.cpp
+    scripts/include/VideoPlayer.h
+    scripts/src/WallpaperWindow.cpp
+    scripts/include/WallpaperWindow.h
+    scripts/src/D3DWallpaperRenderer.cpp
+    scripts/include/D3DWallpaperRenderer.h
+    scripts/src/WallpaperManager.cpp
+    scripts/include/WallpaperManager.h
+    scripts/src/WindowsDesktopWallpaper.cpp
+    scripts/include/WindowsDesktopWallpaper.h
+    scripts/src/SettingsManager.cpp
+    scripts/include/SettingsManager.h
+    scripts/src/RecoveryState.cpp
+    scripts/include/RecoveryState.h
+    scripts/include/StartupDiagnostics.h
+    scripts/src/InstanceIpc.cpp
+    scripts/include/InstanceIpc.h
 )
 
-qt_add_executable(Motiva WIN32 ${SOURCES} resources/app.rc)
+set(ENTRY_POINT_SOURCES
+    scripts/main/main.cpp
+)
+
+qt_add_executable(Motiva WIN32 ${ENTRY_POINT_SOURCES} ${IMPLEMENTATION_SOURCES} resources/app.rc)
 
 target_link_libraries(Motiva PRIVATE
     Qt6::Widgets
@@ -60,7 +70,7 @@ target_link_libraries(Motiva PRIVATE
     d3dcompiler
 )
 
-target_include_directories(Motiva PRIVATE src)
+target_include_directories(Motiva PRIVATE scripts/include)
 
 set_target_properties(Motiva PROPERTIES
     WIN32_EXECUTABLE TRUE

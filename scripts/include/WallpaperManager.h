@@ -75,14 +75,33 @@ public:
 
 signals:
     void errorOccurred(const QString& message);
+    // Emitted as soon as setWallpaper() begins attaching - i.e. attach
+    // REQUESTED/in-progress, not yet visually confirmed. UI code must not
+    // treat this alone as "the wallpaper is active" - see wallpaperVerified.
     void wallpaperActivated();
     void wallpaperRemoved();
+    // Emitted only once the existing post-attach verification (see
+    // onAttachAttemptFinished's presentedFrameCount check) has confirmed
+    // frames are actually advancing through to the desktop - this is the
+    // one signal that corresponds to genuine "Active" state, distinct from
+    // wallpaperActivated (attach merely requested). Added purely to let UI
+    // code observe an existing internal checkpoint; the verification logic
+    // itself is unchanged.
+    void wallpaperVerified();
 
 private slots:
     void onPlayerError(const QString& message);
     void onWindowReadyForReattach(bool ok);
 
 private:
+    // Checks whether Windows' own static-wallpaper path has changed since
+    // m_wallpaperBaselineAtAttach was captured (see setWallpaper) - called
+    // on every WM_SETTINGCHANGE while m_active, purely event-driven (no
+    // polling). If it changed, the user picked a new wallpaper via
+    // Explorer/Settings while our video was active, so we detach to let
+    // their choice actually be visible instead of staying on top of it.
+    void onPossibleExternalWallpaperChange();
+
     void rebuildWindows();
     // Kicks off attachment of every not-yet-attached window on a
     // background thread (see m_attachWatcher) if one isn't already in
@@ -156,6 +175,9 @@ private:
 
     bool m_active = false;
     QString m_currentPath;
+    // Windows' own static-wallpaper path (SPI_GETDESKWALLPAPER), captured
+    // right before we attach - see onPossibleExternalWallpaperChange.
+    std::wstring m_wallpaperBaselineAtAttach;
     ScalingMode m_scalingMode = ScalingMode::Fill;
     MonitorSelection m_monitorSelection = MonitorSelection::All;
     int m_specificMonitorIndex = -1;

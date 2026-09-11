@@ -2,6 +2,211 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-09-12b, "Set as wallpaper" interference - live/runtime case)
+
+Follow-up to the 2026-09-12 entry below: user clarified the report was
+about RUNTIME, not restart/reboot - while our video wallpaper is actively
+attached right now, picking a `.jpg`/`.png` via Explorer's "Set as
+desktop background" doesn't visibly take over, because our window is
+still sitting on top of the (correctly-changed, per the entry below's own
+proof) result.
+
+**Fix**: `WallpaperManager` now detects a live external wallpaper change
+and steps aside automatically. Purely event-driven, no polling:
+- `setWallpaper()` snapshots Windows' own static-wallpaper path
+  (`WindowsDesktopWallpaper::GetCurrentWallpaperPath()`, new - extracted
+  from `RefreshDesktopBackground`) into `m_wallpaperBaselineAtAttach`
+  right before attaching. This app never writes that value itself while
+  a video wallpaper is active (confirmed by grep: the only
+  `SPI_SETDESKWALLPAPER` call anywhere is `RefreshDesktopBackground`'s own
+  "re-apply the same value" nudge), so any later difference can only mean
+  an external change (Explorer, Settings app, etc).
+- `WallpaperManager::nativeEventFilter` (already existed for
+  `TaskbarCreated`) now also reacts to `WM_SETTINGCHANGE` - broadcast to
+  every top-level window whenever `SystemParametersInfo` is called with
+  `SPIF_SENDCHANGE`, which Explorer's own "Set as desktop background"
+  uses. On receipt, `onPossibleExternalWallpaperChange()` (new) re-reads
+  the current path and, if it differs from the baseline while
+  `m_active`, calls `removeWallpaper()` - detaching our window so the
+  user's newly-picked wallpaper is actually visible, without requiring
+  them to click "Remove Wallpaper" in our own UI first.
+
+**A real bug found and fixed while verifying this live**: the first
+version of this fix caused an infinite feedback loop, reproduced directly
+(rapid `RefreshDesktopBackground` log spam, one call roughly every
+250ms) - `removeWallpaper()` called `RefreshDesktopBackground()` (which
+itself broadcasts `WM_SETTINGCHANGE` via `SPIF_SENDCHANGE`) BEFORE
+setting `m_active = false`, so our own resultant broadcast looked like
+"the user changed the wallpaper again" to
+`onPossibleExternalWallpaperChange`'s `m_active` guard and re-triggered
+`removeWallpaper()` repeatedly. Fixed by reordering `removeWallpaper()`
+to set `m_active = false` (and emit the recovery-state update) BEFORE
+calling `RefreshDesktopBackground()` - now that guard correctly ignores
+our own broadcast.
+
+**Verified live this session** (not just reasoned through): used the
+existing second-instance IPC recovery path (launch the exe twice - the
+second launch's `InstanceIpc` hand-off calls
+`MainWindow::recoverOrActivate()` → `onSetWallpaper()`) to get a real,
+verified-`Active` video wallpaper attached without any UI automation.
+Then, via a PowerShell one-off calling `SystemParametersInfoW(
+SPI_SETDESKWALLPAPER, ...)` directly (the same API Explorer's own
+"Set as desktop background" uses) to simulate the user picking a new
+image: the log showed `Detected Windows' own wallpaper changed... -
+stepping aside`, immediate clean D3D/DComp shutdown (`shutdown complete,
+all D3D/DComp resources released`), exactly one `RefreshDesktopBackground`
+afterward (no loop), the process stayed alive/responsive, and
+`HKCU\Control Panel\Desktop\Wallpaper` held the test image I'd set,
+unmodified by any of this - the exact end-to-end behavior the bug asked
+for.
+
+**Not verified this session**: Explorer's actual right-click UI menu
+itself (only the underlying `SystemParametersInfo`/`WM_SETTINGCHANGE`
+mechanism it uses was exercised directly) and this app's own "Set as
+Wallpaper" button click (exercised indirectly via the IPC recovery path
+instead, which reaches the same `WallpaperManager::setWallpaper()` call).
+
+## Current status (2026-09-12, "Set as wallpaper" interference - actual root cause + fix)
+
+Follow-up to the 2026-09-11 entry below: the user reported the bug still
+reproduced after that fix. Investigation continued and found the REAL
+mechanism, which is different from (and supersedes) yesterday's theory.
+
+**Directly tested and disproved yesterday's theory**: with the video
+wallpaper live/attached, manually called `SystemParametersInfoW(
+SPI_SETDESKWALLPAPER, ...)` from a PowerShell one-off (the exact API
+Explorer's own "Set as desktop background" uses internally) - it
+**succeeded** (`returned 1`) and the registry's
+`HKCU\Control Panel\Desktop\Wallpaper` value updated correctly, even
+while our window was attached. This proves Explorer's own wallpaper-set
+API was never actually blocked, at any point - not by unthrottled 0x052C
+spam (yesterday's fix), not by anything else. The real problem is purely
+**visual occlusion**: our opaque DirectComposition window sits in front
+of wherever Explorer paints the background, so the OS wallpaper genuinely
+changes underneath, the user just can't see it for as long as our window
+stays attached.
+
+**The actual root cause**: `MainWindow`'s constructor auto-reattached the
+video wallpaper on EVERY fresh process launch (including Start-with-
+Windows autostart) whenever `SettingsManager::wasWallpaperActive()` was
+true from a previous session - confirmed live: a cold launch's own log
+showed `[Lifecycle] Restoring previously-active wallpaper on startup`
+firing with no user action that session, followed by a full attach+verify
+cycle reaching `Wallpaper recovery COMPLETE`. This directly contradicts
+this bug's core rule - "only the explicit Set as Wallpaper action should
+activate our wallpaper behavior" - and is exactly what a user perceives
+as "the EXE merely running/autostarted permanently blocks Explorer's
+wallpaper": the app was silently re-taking the wallpaper on every
+relaunch/reboot with no fresh click, covering whatever the user set via
+Explorer afterward for as long as that process ran. This was itself a
+previously-built, explicitly-requested feature (auto-restore across
+Explorer restarts and reboots) - the user confirmed via AskUserQuestion
+that it should be removed for cold process starts specifically.
+
+**Fix**: `MainWindow.cpp`'s constructor no longer calls `onSetWallpaper()`
+based on `wasWallpaperActive()` - a fresh launch always stops at Ready/
+NoVideo and waits for an explicit click, full stop. `wasWallpaperActive`
+itself is untouched/still persisted (still used by
+`onExitRequested()`/`onRemoveWallpaper()`'s bookkeeping) - only this one
+read site was removed. Mid-session recovery is intentionally NOT
+affected: `WallpaperManager::onExplorerRestarted()` and
+`MainWindow::recoverOrActivate()` (second-instance IPC) both only ever
+act while `m_manager->isActive()` is already true, i.e. only continue a
+wallpaper THIS running process already explicitly activated - neither
+reads `wasWallpaperActive()` or revives state from a past process.
+
+**Also added** (`WindowsDesktopWallpaper::RefreshDesktopBackground()`,
+new): re-applies whatever wallpaper Explorer already has configured
+(`SPI_GETDESKWALLPAPER` then the same value back via
+`SPI_SETDESKWALLPAPER`) - a pure "redraw yourself" nudge, never changes
+what the user's wallpaper actually is. Called once from
+`WallpaperManager::removeWallpaper()` after detaching (so Explorer
+immediately repaints whatever real wallpaper was configured all along)
+and once from `MainWindow`'s constructor whenever nothing is being
+attached this launch (covering the case where a previous run ended
+uncleanly, e.g. `taskkill`, before ever reaching its own detach path).
+Verified live: after cold-launching with a previously-attached session's
+`wallpaperWasAttached=true` on disk, the log showed zero `[Discover]`/
+`[Shell]`/`AttachToDesktop` lines (no attach happened at all) and the
+`RefreshDesktopBackground` nudge fired; the registry wallpaper value
+(separately set via the PowerShell test above) was confirmed unchanged
+by any of this - proving both "no silent re-attach" and "no interference
+with whatever Explorer wallpaper is configured."
+
+**Yesterday's fix is still kept** (`FindOrCreateWorkerW`'s per-generation
+one-shot spawn-message throttle) - it's a real, independently-justified
+fix for a genuine unthrottled-message bug (still worth having even though
+it turned out not to be this particular symptom's cause), and is
+unrelated to/does not conflict with today's fix.
+
+**Not verified this session** (no way to drive Explorer's right-click
+"Set as desktop background" UI or click through this app's own UI from
+this tool session): the full end-to-end validation checklist from the bug
+report (steps 1-11) on the actual reporting machine - what WAS verified
+is the underlying mechanism directly (the SPI call itself, the registry
+value, and the log-proven absence of any auto-attach on cold start),
+which is what the UI-level symptom was reducible to.
+
+## Current status (2026-09-11, "Set as wallpaper" interference fix)
+
+**Bug**: while this app's wallpaper mode was active (whether by a manual
+click this session or auto-restored on startup via `wasWallpaperActive`),
+Windows Explorer's own unrelated "Set as desktop background" (right-click
+an image → Set as desktop background) could stop working correctly.
+
+**Root cause**: `WindowsDesktopWallpaper::FindOrCreateWorkerW()` sends an
+undocumented `0x052C` message to Explorer's `Progman` window, asking it to
+spawn/recreate the WorkerW that hosts the desktop icon layer, whenever no
+standalone WorkerW is already found (the common case on machines where
+Explorer never creates one - see the entries below). This function is
+re-entered on every one of `WallpaperManager`'s 300ms attach-retry-timer
+ticks for as long as attach hasn't been verified - which, on such a
+machine, can be indefinitely. With no throttling, that meant the spawn
+message was being resent to Explorer roughly 3x/second, unbounded, for as
+long as wallpaper mode stayed active - a continuous, unthrottled mutation
+of Explorer's own desktop shell hierarchy, not merely our own rendering.
+That churn is what corrupted Explorer's own Progman/WorkerW bookkeeping
+badly enough to break its unrelated wallpaper-apply codepath, which
+depends on that same hierarchy. Confirmed structurally: this function's
+own header comment (`WindowsDesktopWallpaper.h`) already documented a
+"negative-discovery cooldown...keyed off this [generation parameter]"
+that had regressed to `Q_UNUSED(generation)` in the .cpp during the
+2026-09-09 startup-delay fix, then the spawn message itself was
+reintroduced in the following "wallpaper visibility investigation" session
+without restoring that guard.
+
+**Fix**: `WindowsDesktopWallpaper.cpp` now throttles the spawn attempt to
+at most once per attach generation (`s_hasAttemptedSpawnForGeneration`/
+`s_lastSpawnAttemptGeneration`, module-level state alongside the existing
+`g_attached*` globals) - a fresh generation (new "Set as Wallpaper" click,
+teardown/reconfigure, or Explorer restart, all of which already bump
+`WallpaperManager::m_attachGeneration`) always gets its own one-shot
+attempt; repeated retry-timer ticks within the same still-failing
+generation now skip straight to the Progman fallback instead of resending
+the message. No SPI_SETDESKWALLPAPER/registry wallpaper call exists
+anywhere in this codebase (re-confirmed by grep) - the app never overrides
+Explorer's actual wallpaper setting, it was Explorer's own shell state
+being disturbed.
+
+**Left unchanged**: the retry timer itself (still a legitimate bounded
+"wait for desktop hierarchy" loop, unrelated to this bug), all
+SetParent/SetWindowPos reattachment logic, DirectComposition/D3D11
+rendering, the Progman-fallback z-order logic, Explorer-restart recovery,
+and everything else in `WindowsDesktopWallpaper.cpp`/`WallpaperManager.cpp`
+not directly involved in the spawn-message call site.
+
+**Verified this session**: clean rebuild; confirmed via
+`%TEMP%\Motiva.log` that with wallpaper mode never activated (no
+persisted intent, no click), zero `[Discover]`/`[Shell]` log lines appear
+at all - no Progman/WorkerW interaction happens while merely running,
+which was already true architecturally and remains true. **Not verified
+this session** (no way to drive Explorer's right-click "Set as desktop
+background" or click through this app's own UI from this tool session):
+the actual before/after interference with a `.jpg`/`.png` Set-as-wallpaper
+while this app's wallpaper mode is active and stuck retrying - the fix
+directly addresses the confirmed unthrottled-message defect, but a live
+repro/confirm pass on the reporting user's machine is the real test.
+
 ## Product name
 
 **Motiva** — the finished/shipping product name (executable `Motiva.exe`,
@@ -23,11 +228,89 @@ fullscreen overlay.
 ## Planned work
 
 **Motiva UI Redesign** (previously tracked as "VideoWallpaper UI
-Redesign" before the 2026-09-11 product rename below) — upcoming UI work,
-not yet started (no design/scope decisions made yet). Use this exact name
+Redesign" before the 2026-09-11 product rename above) — a first pass
+landed 2026-09-11, see the status entry below. Use this exact name
 consistently in session notes, handoffs, and any future documentation
 that refers to this effort, so it stays a single identifiable thread
-across sessions rather than getting renamed each time.
+across sessions rather than getting renamed each time. Remaining/possible
+follow-ups: an actual app icon (none exists yet - the tray still uses a
+Qt standard icon), and this session's own "not verified" items below
+(interactive click-through, dark/light Windows theme, resize behavior).
+
+## Current status (2026-09-11, Motiva UI Redesign - first pass)
+
+Redesigned `MainWindow`'s layout and introduced an explicit UI-only state
+machine (`MainWindow::WallpaperUiState`: NoVideo / Ready / Applying /
+Active / Error) so the status text and the one primary button always
+reflect **verified** wallpaper state, not merely "a video loaded" or
+"attach requested" - see the functional requirement in the redesign
+task. This required one small, additive backend change: `WallpaperManager`
+gained a `wallpaperVerified()` signal, emitted from the *existing*
+post-attach `presentedFrameCount` verification checkpoint in
+`onAttachAttemptFinished()` (the same check that already decided
+COMPLETE/STALLED) - no attach/recovery/rendering logic was touched, only
+a signal emission added at an already-existing checkpoint. The existing
+`wallpaperActivated()` signal (fired the instant `setWallpaper()` is
+called, well before attach is confirmed) now drives the UI's "Applying…"
+state instead of "Active" - previously the status label read "Wallpaper
+active." immediately on click, which was itself a latent instance of the
+exact bug this task's functional rule warns against.
+
+**Layout**: header (app name + a "⚙ Settings" button) → video preview
+(now the dominant, expanding element via a stretch factor, was previously
+a fixed `minimumHeight` box competing with a long settings form below
+it) → a compact video-info row (filename, plus resolution/duration/format
+on a second line, populated from two small new read-only getters -
+`VideoPlayer::durationMs()` - and the existing `videoNativeSize()`) with
+Play/Pause and Open Video as secondary buttons → a status line → one
+primary button that is *either* "Set as Wallpaper" or "Remove Wallpaper"
+depending on state (never both shown as competing equals, per the
+redesign task's explicit instruction) with a distinct disabled "Applying…"
+state in between so it can't be double-clicked mid-attach.
+
+**Settings extracted**: scaling, monitor selection, volume, mute, loop,
+and start-with-Windows moved out of the main window into a new
+`SettingsDialog` (`src/SettingsDialog.{h,cpp}`), reachable via the header
+button and the tray menu. It owns its own wiring to `WallpaperManager`/
+`SettingsManager` directly; `MainWindow` only opens it and mirrors mute
+state back to the tray's checkable "Mute" action via a small
+`mutedChanged` signal - no functionality was removed, only relocated.
+
+**Not touched, per the redesign task's explicit protection list**:
+`D3DWallpaperRenderer`, `WindowsDesktopWallpaper` (Progman/WorkerW attach,
+z-order, discovery), `WallpaperManager`'s attach/verify/Explorer-restart/
+generation logic (only the one additive signal above), `RecoveryState`,
+`StartupDiagnostics`, `InstanceIpc`, single-instance locking, and the
+2026-09-11 lifecycle fixes above (startup auto-apply gating, Exit state
+clearing) - all read and reused as-is, not reimplemented.
+
+**No pre-existing theme system was found** (no `.qss`, no theme class, no
+light/dark toggle anywhere in the repo before this session) - there was
+nothing to preserve. The redesign leaves the app following the OS window
+palette by default and only fixes a small number of colors intentionally
+(status-text accent colors for Ready/Applying/Active/Error, and the video
+preview's dark surface, which is a deliberate, fixed-dark convention like
+other media-preview apps use regardless of app theme, not a theme break).
+These are called out with a comment in `MainWindow.cpp` as the one place
+that would need updating if a real theme system is added later.
+
+**Verified this session**: clean Release build (`cmake --build build`,
+zero errors); `windeployqt` bundled runtime; the app launches and runs
+stably under its own log (`%TEMP%\Motiva.log` shows normal startup,
+process stays alive, no crash) with the new layout, `SettingsDialog`, and
+`WallpaperManager::wallpaperVerified` wiring all constructed successfully.
+
+**Not verified this session** (no way to drive a native Win32 window's
+mouse/keyboard from this tool session - the same limitation noted
+throughout this file's history, e.g. the 2026-09-07 entry): actually
+clicking through Open Video → Set as Wallpaper → Active → Remove
+Wallpaper end-to-end; visual confirmation of spacing/alignment/typography
+against the "polished, modern" bar the task set; window resize behavior
+at multiple sizes; light vs. dark Windows theme rendering; Explorer-restart
+recovery still driving the new `wallpaperVerified`-based "Active" status
+correctly in practice (the code path is unchanged and was reasoned
+through, but not re-run live). **A real click-through pass on the actual
+machine, plus a screenshot, is needed before calling this redesign done.**
 
 ## Build
 
@@ -629,29 +912,61 @@ tool session cannot see the interactive desktop directly (`FindWindow`
 returns null from this shell's session), so screenshots from the user are
 the only way to visually verify rendering.
 
+## Source layout (2026-09-12 reorganization)
+
+Source now lives under `scripts/`, split by role rather than all in one
+`src/` folder:
+- `scripts/src/*.cpp` — implementation files.
+- `scripts/include/*.h` — headers (declarations only, no `.cpp` needed for
+  header-only ones like `StartupDiagnostics.h`).
+- `scripts/main/main.cpp` — the ONLY executable entry point (`int main`) in
+  the whole project; everything else, even files only the exe uses, is an
+  implementation file and stays in `scripts/src/`, not here.
+
+This was a pure file-organization move - `CMakeLists.txt`'s
+`target_include_directories(Motiva PRIVATE scripts/include)` is the only
+reason plain `#include "Foo.h"` still resolves from every `.cpp`; no
+source file's `#include` lines needed to change (none used a path prefix
+before or after). No class, behavior, or build flag changed. Old paths in
+the dated status entries below (e.g. `src/WindowsDesktopWallpaper.cpp`)
+are historical and were left as-is; this Code map section is the
+up-to-date reference.
+
 ## Code map
 
-- `src/WindowsDesktopWallpaper.{h,cpp}` — ALL raw Win32 desktop-attach logic
-  (Progman/WorkerW lookup, SetParent, z-order). Nothing else should call
-  these Win32 APIs directly.
-- `src/WallpaperManager.{h,cpp}` — orchestrates the video player + one
-  `WallpaperWindow` per monitor + the attach/health-check loop.
-- `src/WallpaperWindow.{h,cpp}` — plain native Win32 window (own `WndProc`),
-  deliberately **not** a `QWidget` — a reparented `QWidget`'s `paintEvent`
-  was confirmed to never fire after `SetParent` (Qt's QPA doesn't know about
-  the reparent). Raw GDI `StretchDIBits` in `handlePaint()`.
-- `src/VideoPlayer.{h,cpp}` — `QMediaPlayer`/`QVideoSink` decode pipeline,
-  shared (one decode) across all monitor windows via `std::shared_ptr<QImage>`.
-- `src/MainWindow.{h,cpp}` — UI + tray + in-app preview (normal QWidget, no
-  reparenting, not subject to the paintEvent issue above).
-- `src/SettingsManager.{h,cpp}` — `QSettings` (registry, `HKCU\Software\VideoWallpaper`)
-  for user-facing preferences (video path, volume, scaling, etc).
-- `src/RecoveryState.{h,cpp}` — small persistent JSON diagnostic/recovery
-  state, separate from SettingsManager (per-user AppData file, not
-  registry) - see the 2026-09-09 entry above. Never authoritative for live
-  attach state.
-- `src/StartupDiagnostics.h` — header-only process-wide startup checkpoint
-  timeline singleton.
-- `src/InstanceIpc.{h,cpp}` — second-instance recovery hand-off
-  (message-only window + `WM_COPYDATA`), separate from the `QSharedMemory`
-  single-instance lock in `main.cpp`.
+- `scripts/include/WindowsDesktopWallpaper.h` / `scripts/src/WindowsDesktopWallpaper.cpp`
+  — ALL raw Win32 desktop-attach logic (Progman/WorkerW lookup, SetParent,
+  z-order). Nothing else should call these Win32 APIs directly.
+- `scripts/include/WallpaperManager.h` / `scripts/src/WallpaperManager.cpp`
+  — orchestrates the video player + one `WallpaperWindow` per monitor +
+  the attach/health-check loop.
+- `scripts/include/WallpaperWindow.h` / `scripts/src/WallpaperWindow.cpp`
+  — plain native Win32 window (own `WndProc`), deliberately **not** a
+  `QWidget` — a reparented `QWidget`'s `paintEvent` was confirmed to never
+  fire after `SetParent` (Qt's QPA doesn't know about the reparent). Raw
+  GDI `StretchDIBits` in `handlePaint()`.
+- `scripts/include/VideoPlayer.h` / `scripts/src/VideoPlayer.cpp` —
+  `QMediaPlayer`/`QVideoSink` decode pipeline, shared (one decode) across
+  all monitor windows via `std::shared_ptr<QImage>`.
+- `scripts/include/MainWindow.h` / `scripts/src/MainWindow.cpp` — UI +
+  tray + in-app preview (normal QWidget, no reparenting, not subject to
+  the paintEvent issue above).
+- `scripts/include/SettingsDialog.h` / `scripts/src/SettingsDialog.cpp` —
+  the settings window (scaling/monitor/volume/mute/loop/start-with-
+  Windows), split out of `MainWindow` during the UI redesign.
+- `scripts/include/SettingsManager.h` / `scripts/src/SettingsManager.cpp`
+  — `QSettings` (registry, `HKCU\Software\Motiva`) for user-facing
+  preferences (video path, volume, scaling, etc).
+- `scripts/include/RecoveryState.h` / `scripts/src/RecoveryState.cpp` —
+  small persistent JSON diagnostic/recovery state, separate from
+  SettingsManager (per-user AppData file, not registry) - see the
+  2026-09-09 entry above. Never authoritative for live attach state.
+- `scripts/include/StartupDiagnostics.h` — header-only process-wide
+  startup checkpoint timeline singleton.
+- `scripts/include/InstanceIpc.h` / `scripts/src/InstanceIpc.cpp` —
+  second-instance recovery hand-off (message-only window + `WM_COPYDATA`),
+  separate from the `QSharedMemory` single-instance lock in
+  `scripts/main/main.cpp`.
+- `scripts/main/main.cpp` — the executable entry point (`int main`):
+  logging setup, single-instance lock, autostart flag handling,
+  `MainWindow` construction.

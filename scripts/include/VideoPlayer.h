@@ -38,6 +38,10 @@ public:
 
     bool isPlaying() const;
     QSize videoNativeSize() const { return m_lastFrameSize; }
+    // Passthrough to the underlying QMediaPlayer - for UI display only
+    // (e.g. showing the loaded video's length), not used by any playback
+    // or wallpaper-lifecycle decision.
+    qint64 durationMs() const { return m_player.duration(); }
 
     // Latest decoded frame, already converted to Format_RGB32 exactly once
     // (not per-monitor), shared by all render windows.

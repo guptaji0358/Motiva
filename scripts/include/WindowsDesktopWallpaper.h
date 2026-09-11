@@ -51,6 +51,31 @@ public:
     // "Remove Wallpaper" / error recovery). Does not destroy the window.
     static void DetachFromDesktop(HWND hwnd);
 
+    // Forces Explorer to fully reclaim and redraw the desktop background
+    // layer by re-applying the user's own currently-configured wallpaper
+    // (read via SPI_GETDESKWALLPAPER, then written back unchanged via
+    // SPI_SETDESKWALLPAPER) - this does NOT change what wallpaper the user
+    // has set, it only makes Explorer redo the internal work of painting
+    // it. Call once after detaching every window (not authoritative "we
+    // were never here" state - just a nudge). See DetachFromDesktop's
+    // caller in WallpaperManager::removeWallpaper for why this exists:
+    // reparenting a foreign window into Progman/WorkerW and back out can
+    // leave Explorer's own desktop-background redraw in a state where its
+    // own "Set as desktop background" stops visibly working until
+    // something forces a redraw - this is that forced redraw.
+    static void RefreshDesktopBackground();
+
+    // Reads Windows' currently-configured static wallpaper path via
+    // SPI_GETDESKWALLPAPER (HKCU\Control Panel\Desktop\Wallpaper under the
+    // hood). Returns an empty wstring on failure. This app never writes
+    // this value itself when activating a video wallpaper (confirmed: no
+    // SPI_SETDESKWALLPAPER call exists anywhere outside
+    // RefreshDesktopBackground, which only ever re-applies the SAME
+    // value), so a change here while our own wallpaper is active can only
+    // mean the user (or something else) changed it - see WallpaperManager's
+    // WM_SETTINGCHANGE handling.
+    static std::wstring GetCurrentWallpaperPath();
+
     // Returns true if the previously-found WorkerW handle is still a valid
     // window. Explorer restarts destroy/recreate WorkerW, invalidating any
     // handle we cached — callers should poll this and reattach if false.

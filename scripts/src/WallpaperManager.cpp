@@ -58,7 +58,37 @@ bool WallpaperManager::nativeEventFilter(const QByteArray& eventType, void* mess
                 << "msgId=" << m_taskbarCreatedMessage << ").";
         onExplorerRestarted();
     }
+    // WM_SETTINGCHANGE is broadcast to every top-level window whenever
+    // SystemParametersInfo is called with SPIF_SENDCHANGE - including by
+    // Explorer's own "Set as desktop background" (confirmed by testing:
+    // SPI_SETDESKWALLPAPER succeeds and updates the registry even while
+    // our video wallpaper is attached - our window was only ever visually
+    // covering the result, never blocking the underlying OS call). This
+    // app never calls SPI_SETDESKWALLPAPER itself except
+    // RefreshDesktopBackground's own no-op "re-apply the same value"
+    // nudge (which can't trigger a real change - see
+    // onPossibleExternalWallpaperChange), so while our wallpaper is
+    // active, any OTHER change to that value can only mean the user (or
+    // something else) just picked a new one via Explorer/Settings - purely
+    // event-driven, no polling.
+    if (msg->message == WM_SETTINGCHANGE) {
+        onPossibleExternalWallpaperChange();
+    }
     return false; // never swallow the message - other listeners may need it too
+}
+
+void WallpaperManager::onPossibleExternalWallpaperChange() {
+    if (!m_active) {
+        return;
+    }
+    const std::wstring current = WindowsDesktopWallpaper::GetCurrentWallpaperPath();
+    if (current.empty() || current == m_wallpaperBaselineAtAttach) {
+        return;
+    }
+    qInfo() << "[Wallpaper] Detected Windows' own wallpaper changed while our video wallpaper was "
+                "active (likely the user picked a new one via Explorer/Settings) - stepping aside so "
+                "their choice is visible instead of staying on top of it.";
+    removeWallpaper();
 }
 
 bool WallpaperManager::setWallpaper(const QString& videoPath) {
@@ -73,6 +103,12 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
         m_recoveryState->setVideoPath(videoPath);
         m_recoveryState->setWallpaperAttached(true); // intent, not yet-verified fact
     }
+
+    // Snapshot Windows' own static-wallpaper path now, before we ever
+    // attach - see onPossibleExternalWallpaperChange. We never write this
+    // value ourselves while active, so any later difference from this
+    // baseline can only mean the user changed it via Explorer/Settings.
+    m_wallpaperBaselineAtAttach = WindowsDesktopWallpaper::GetCurrentWallpaperPath();
 
     rebuildWindows();
     attachAllWindows();
@@ -93,10 +129,28 @@ void WallpaperManager::removeWallpaper() {
     m_attachRetryTimer.stop();
     m_player->stop();
     teardownWindows();
+    // m_active MUST be false before calling RefreshDesktopBackground()
+    // below: that call's own SPIF_SENDCHANGE broadcasts WM_SETTINGCHANGE
+    // to every top-level window in this process, which our own
+    // nativeEventFilter reacts to via onPossibleExternalWallpaperChange -
+    // if m_active were still true at that point, our own redraw nudge
+    // would look like "the user changed the wallpaper again" and
+    // re-trigger removeWallpaper() recursively/repeatedly (reproduced
+    // live this session as a rapid RefreshDesktopBackground log-spam loop
+    // before this ordering fix). Setting it false first makes that guard
+    // ignore our own resultant broadcast, as intended.
     m_active = false;
     if (m_recoveryState) {
         m_recoveryState->setWallpaperAttached(false);
     }
+    // Once per removeWallpaper() call (not per-window, inside
+    // teardownWindows()'s per-HWND DetachFromDesktop loop) - detaching our
+    // own window(s) alone does not reliably make Explorer's "Set as
+    // desktop background" work again afterward; this nudges Explorer to
+    // fully redraw/reclaim the desktop background layer. See
+    // WindowsDesktopWallpaper::RefreshDesktopBackground's comment and
+    // CLAUDE.md's 2026-09-11/12 "Set as wallpaper interference" entries.
+    WindowsDesktopWallpaper::RefreshDesktopBackground();
     emit wallpaperRemoved();
 }
 
@@ -440,6 +494,12 @@ void WallpaperManager::onAttachAttemptFinished() {
                     // RecoveryState/StartupDiagnostics).
                     m_recoveryState->setStartupDiagnostics(StartupDiagnostics::instance().toJsonAndLogDeltas());
                 }
+                // This is the genuine "Active" checkpoint - see the
+                // wallpaperVerified header comment. Fires here (and again
+                // after every successful Explorer-restart recovery, since
+                // that re-enters this same verification path) rather than
+                // at attach-request time in setWallpaper().
+                emit wallpaperVerified();
             } else {
                 if (m_recoveryState) {
                     m_recoveryState->recordFailure("attach succeeded but frames not advancing (STALLED)");
