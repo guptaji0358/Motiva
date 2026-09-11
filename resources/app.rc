@@ -6,11 +6,11 @@
 // The application's own icon (Explorer file icon, taskbar, Alt-Tab).
 // Resource ID 1 is also what QIcon(":/...")-free Qt apps commonly assume
 // for the "default" icon, but this app sets its window/tray icon
-// explicitly in code (MainWindow.cpp) via Assets/icons/motiva.ico rather
-// than relying on resource-ID lookup, so this entry only governs the
-// .exe file's own icon as seen in Explorer/taskbar - see CLAUDE.md's
+// explicitly in code (MainWindow.cpp) via Assets/application/motiva.ico
+// rather than relying on resource-ID lookup, so this entry only governs
+// the .exe file's own icon as seen in Explorer/taskbar - see CLAUDE.md's
 // "Assets folder" entry.
-1 ICON "../Assets/icons/motiva.ico"
+1 ICON "../Assets/application/motiva.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 1,0,0,0

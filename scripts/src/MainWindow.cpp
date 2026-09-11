@@ -25,12 +25,12 @@
 #include <QUrl>
 
 namespace {
-// Embedded via resources/app.qrc (Assets/icons/motiva.ico and
-// Assets/icons/settings.ico) - loading via the Qt resource path keeps
-// this independent of the process's working directory, unlike a relative
-// filesystem path.
-constexpr const char* kAppIconResourcePath = ":/icons/motiva.ico";
-constexpr const char* kSettingsIconResourcePath = ":/icons/settings.ico";
+// Embedded via resources/app.qrc (Assets/application/motiva.ico and
+// Assets/settings-icon/settings.ico) - loading via the Qt resource path
+// keeps this independent of the process's working directory, unlike a
+// relative filesystem path.
+constexpr const char* kAppIconResourcePath = ":/application/motiva.ico";
+constexpr const char* kSettingsIconResourcePath = ":/settings-icon/settings.ico";
 
 // This app has no app-level light/dark theme toggle of its own (see
 // CLAUDE.md) - it simply follows the OS window palette everywhere except

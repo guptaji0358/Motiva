@@ -2,6 +2,47 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Assets folder layout (2026-09-12e, reorganized by feature)
+
+`Assets/` is organized by feature/component, NOT by generic file-type
+folders (no `icons/`/`images/`/`gifs/` - that was the previous, now
+explicitly rejected, structure):
+- `Assets/application/` — app identity: `motiva.ico` (+ per-size source
+  PNGs) is the exe/window/tray icon; `motiva_logo.png` is a 256px
+  branding copy. Anything that represents the app itself, not a specific
+  feature, belongs here.
+- `Assets/settings-icon/` — `settings.ico` (+ per-size source PNGs), the
+  gear icon used by the header Settings button, tray menu entry, and
+  `SettingsDialog`'s window icon.
+
+No other feature (wallpaper controls, play/pause, status indicator) has
+an actual asset FILE as of this reorganization - play/pause use plain
+Unicode glyphs ("▶"/"⏸") and the status indicator uses a CSS-colored "●"
+character, both directly in `MainWindow.cpp`, not image files. Do not
+create empty placeholder folders (e.g. `Assets/wallpaper/`,
+`Assets/video/`) for those until a real asset file exists for them -
+this repo's own history briefly had exactly that anti-pattern (an empty
+`Assets/gifs/.gitkeep`) and it was removed rather than migrated.
+
+**Qt resource aliases match the folder layout**: `resources/app.qrc`
+exposes these as `:/application/motiva.ico` and
+`:/settings-icon/settings.ico` (previously `:/icons/...` - renamed
+alongside the folder move for consistency, not left mismatched). Referenced
+from `scripts/main/main.cpp`, `scripts/src/MainWindow.cpp`
+(`kAppIconResourcePath`/`kSettingsIconResourcePath`), and
+`scripts/src/SettingsDialog.cpp`. `resources/app.rc`'s `ICON` resource
+(the .exe's own Explorer/taskbar icon) points directly at
+`../Assets/application/motiva.ico` on disk, independent of the `.qrc`
+embedding.
+
+**When adding a new feature that needs its own asset**: create
+`Assets/<feature-name>/` (lowercase, hyphenated, matching `settings-icon`'s
+style) only once a real file exists for it, add it to `resources/app.qrc`
+with an alias mirroring the folder path (e.g. `<feature-name>/foo.svg`),
+and reference it via that same `:/<feature-name>/foo.svg` path in code -
+never a raw filesystem path (keeps icon loading independent of the
+process's working directory).
+
 ## Current status (2026-09-12d, Settings icon + MP4/URL drag & drop)
 
 **Settings icon**: `Assets/icons/settings.ico` (+ per-size source PNGs),

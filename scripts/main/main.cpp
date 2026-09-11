@@ -78,7 +78,7 @@ int main(int argc, char* argv[]) {
     // "no system tray" QMessageBox below) still show Motiva's own icon
     // rather than a generic one. MainWindow/its tray icon set the same
     // resource explicitly too - see MainWindow.cpp's kAppIconResourcePath.
-    app.setWindowIcon(QIcon(":/icons/motiva.ico"));
+    app.setWindowIcon(QIcon(":/application/motiva.ico"));
 
     // Two instances would each attach their own competing render window to
     // the desktop (fighting over z-order every health-check tick), so only
