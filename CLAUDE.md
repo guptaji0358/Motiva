@@ -2,6 +2,72 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-09-12d, Settings icon + MP4/URL drag & drop)
+
+**Settings icon**: `Assets/icons/settings.ico` (+ per-size source PNGs),
+a simple gray gear glyph on a transparent background, same neutral tone
+family as the status-text colors in `MainWindow.cpp`. Embedded via
+`resources/app.qrc` as `:/icons/settings.ico`, used by the header
+Settings button, the tray menu's "Settings" entry, and `SettingsDialog`'s
+own window icon - replaces the previous unicode "⚙" glyph. Verified
+genuinely loaded (not null, not a stale duplicate) by compiling a tiny
+standalone test against the real generated `qrc_app.cpp` resource blob:
+`settings.ico isNull=false availableSizes=5`.
+
+**Drag & drop**: implemented on `MainWindow` (`dragEnterEvent`/
+`dragMoveEvent`/`dragLeaveEvent`/`dropEvent`), feeding into a new shared
+`loadVideoSource()` - refactored out of `onChooseVideo()`'s body, so
+drag & drop and the Open Video button share one load path (no second
+video-loading pipeline). `extractDroppedVideoSource()` inspects
+`QMimeData`: `hasUrls()` covers both Explorer file drops (`file://`) and
+most browser link/video drags in one check; a local candidate must exist
+on disk and end in `.mp4` (matching the Open Video dialog's own existing
+filter - not widened without a reason to); a web candidate must be a
+valid `http`/`https` URL whose path (query string excluded) ends in
+`.mp4`. A `hasText()` fallback exists ONLY for a strictly-parsed absolute
+http(s) URL - arbitrary dropped text is never interpreted as a local
+path (the exact case the task's security section called out). No
+playlist/queue exists anywhere in this app (`WallpaperManager` holds
+exactly one current video - confirmed by inspection before writing any
+of this), so multiple dropped files keep only the first valid one; extra
+candidates are reported via `m_statusLabel`'s tooltip rather than
+guessed at or silently merged.
+
+**Web video playback reuses the existing pipeline, not a new one**:
+`VideoPlayer::loadFile()` now recognizes an http(s) URL passed in as the
+"path" string and passes it straight to `QMediaPlayer::setSource()` as a
+network `QUrl` instead of `QUrl::fromLocalFile()` - `QMediaPlayer`
+(FFmpeg-backed on this project) already natively streams from a network
+source, so no networking/download code was added anywhere.
+`isUsableVideoSource()` (new, used by startup restore, IPC recovery, and
+`onSetWallpaper`'s existence check - replacing their old bare
+`QFileInfo::exists()` calls) accepts either an existing local file or a
+recognized web video URL, so a URL-sourced video can be set as the
+actual wallpaper through the same `WallpaperManager::setWallpaper()`
+path a local file uses - not a parallel one.
+
+**Verified this session**: QUrl/QMimeData mechanics the drag&drop logic
+depends on were checked directly against a standalone compiled test
+(not just read/assumed) - confirmed `file://` URLs round-trip to the
+right Windows path with `isLocalFile()`/`toLocalFile()`, a query-string
+URL's `.path()` correctly excludes the query for extension matching, a
+non-video webpage URL's path has no matching suffix (correctly
+rejected), and arbitrary non-URL text fails `QUrl::fromUserInput`
+validity (correctly rejected). Full rebuild succeeded; existing behavior
+re-verified unaffected - normal startup (no unwanted auto-attach),
+`RefreshDesktopBackground` nudge, and Set-as-Wallpaper reaching verified
+`COMPLETE`/`Active` all still work exactly as before, all via the same
+second-instance-IPC-recovery trick used to verify prior sessions' fixes.
+
+**Not verified this session** (no way to perform an actual OS-level drag
+gesture, drag from a real Explorer window, or drag a link out of a real
+browser from this tool session - same limitation noted throughout this
+file's history): an actual end-to-end drag-and-drop of a real file or
+browser link onto the running window. The MIME-handling logic itself was
+verified against real Qt behavior as described above, but a live
+click/drag-through pass on the actual machine is still the real test
+before calling this feature done.
+
 ## Current status (2026-09-12c, Assets folder + real app icon)
 
 `Assets/{icons,images,gifs}/` created at the project root (updates the
