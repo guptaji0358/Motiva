@@ -17,18 +17,36 @@ VideoPlayer::VideoPlayer(QObject* parent) : QObject(parent) {
     connect(&m_conversionWatcher, &QFutureWatcher<QImage>::finished, this, &VideoPlayer::onConversionFinished);
 }
 
-bool VideoPlayer::loadFile(const QString& path) {
-    QFileInfo fi(path);
-    if (!fi.exists() || !fi.isFile()) {
-        emit errorOccurred(tr("Wallpaper video could not be found."));
-        return false;
+bool VideoPlayer::loadFile(const QString& pathOrUrl) {
+    // QMediaPlayer already natively supports a network QUrl as its
+    // source (same FFmpeg-backed decode pipeline, no separate networking
+    // code needed) - the only thing this function needs to do
+    // differently for a web video is skip the local-existence check and
+    // pass the URL straight through instead of QUrl::fromLocalFile. See
+    // MainWindow::isUsableVideoSource for the matching web-URL
+    // recognition used before a source ever reaches here.
+    const QUrl asUrl(pathOrUrl);
+    const bool isRemote = asUrl.isValid() &&
+        (asUrl.scheme().compare(QLatin1String("http"), Qt::CaseInsensitive) == 0 ||
+         asUrl.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) == 0);
+
+    QUrl source;
+    if (isRemote) {
+        source = asUrl;
+    } else {
+        QFileInfo fi(pathOrUrl);
+        if (!fi.exists() || !fi.isFile()) {
+            emit errorOccurred(tr("Wallpaper video could not be found."));
+            return false;
+        }
+        source = QUrl::fromLocalFile(pathOrUrl);
     }
 
     m_player.stop();
     m_currentFrame.reset();
     m_pendingFrame = QVideoFrame();
     m_hasPendingFrame = false;
-    m_player.setSource(QUrl::fromLocalFile(path));
+    m_player.setSource(source);
     StartupDiagnostics::instance().mark("videoFileOpened");
     return true;
 }

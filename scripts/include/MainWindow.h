@@ -14,6 +14,11 @@
 
 class QVideoWidget;
 class SettingsDialog;
+class QDragEnterEvent;
+class QDragMoveEvent;
+class QDragLeaveEvent;
+class QDropEvent;
+class QMimeData;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -23,6 +28,15 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    // Drag & drop entry points - accepts a local video file or a web
+    // video URL dropped anywhere on the window, with the video preview
+    // area as the visual target (see dragEnterEvent's hint text). Feeds
+    // into the same loadVideoSource() the Open Video button uses - no
+    // second video-loading path.
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     // The UI must distinguish "a video is loaded/previewable" from
@@ -62,6 +76,26 @@ private:
     void updateStatusUi();
     void updatePrimaryButtonUi();
 
+    // Shared by the Open Video button and drag & drop: source is either a
+    // local filesystem path or an http(s) video URL - see
+    // isUsableVideoSource. Centralizes the "load + persist + update UI"
+    // sequence so drag & drop is strictly an additional input method into
+    // the existing pipeline, not a parallel one.
+    void loadVideoSource(const QString& source);
+    // True if source is either an existing local file or a syntactically
+    // valid http(s) URL - the same check used to decide whether a
+    // drag-and-dropped or persisted/recovered source is still usable.
+    // Deliberately does NOT accept arbitrary text that merely looks like
+    // a path - see MainWindow.cpp's dropEvent comment.
+    static bool isUsableVideoSource(const QString& source);
+    // Inspects dropped MIME data for a single best local-file or web-URL
+    // video candidate (first supported one wins - see MainWindow.cpp).
+    // If more than one candidate was present, extraCandidateCount is set
+    // so the caller can inform the user without guessing which one they
+    // "meant".
+    static QString extractDroppedVideoSource(const QMimeData* mimeData, int* extraCandidateCount);
+    void setDragHintActive(bool active);
+
     std::unique_ptr<WallpaperManager> m_manager;
     SettingsManager m_settings;
     RecoveryState m_recoveryState;
@@ -72,6 +106,7 @@ private:
     WallpaperUiState m_uiState = WallpaperUiState::NoVideo;
     QString m_lastErrorMessage;
 
+    bool m_dragHintActive = false;
     QLabel* m_previewLabel = nullptr;
     QLabel* m_fileNameLabel = nullptr;
     QLabel* m_fileDetailsLabel = nullptr;

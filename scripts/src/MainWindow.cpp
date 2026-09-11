@@ -17,12 +17,20 @@
 #include <QFont>
 #include <QSizePolicy>
 #include <QIcon>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
 
 namespace {
-// Embedded via resources/app.qrc (Assets/icons/motiva.ico) - loading via
-// the Qt resource path keeps this independent of the process's working
-// directory, unlike a relative filesystem path.
+// Embedded via resources/app.qrc (Assets/icons/motiva.ico and
+// Assets/icons/settings.ico) - loading via the Qt resource path keeps
+// this independent of the process's working directory, unlike a relative
+// filesystem path.
 constexpr const char* kAppIconResourcePath = ":/icons/motiva.ico";
+constexpr const char* kSettingsIconResourcePath = ":/icons/settings.ico";
 
 // This app has no app-level light/dark theme toggle of its own (see
 // CLAUDE.md) - it simply follows the OS window palette everywhere except
@@ -40,6 +48,32 @@ constexpr const char* kStatusErrorColor = "#d64545";
 // surrounding app theme, the same convention most media/player apps use.
 constexpr const char* kPreviewSurfaceStyle =
     "background-color: #161616; border-radius: 6px; color: #8a8a8a;";
+
+// Matches the existing Open Video dialog's own filter ("MP4 Video
+// (*.mp4)") - drag & drop deliberately doesn't accept a broader set than
+// what's already exposed through that dialog, even though the underlying
+// FFmpeg backend can technically decode more. Extend both together if
+// that scope ever changes.
+bool hasSupportedVideoExtension(const QString& fileNameOrPath) {
+    return fileNameOrPath.endsWith(QLatin1String(".mp4"), Qt::CaseInsensitive);
+}
+
+bool isWebVideoUrl(const QUrl& url) {
+    if (!url.isValid() || url.isLocalFile()) {
+        return false;
+    }
+    const QString scheme = url.scheme();
+    if (scheme.compare(QLatin1String("http"), Qt::CaseInsensitive) != 0 &&
+        scheme.compare(QLatin1String("https"), Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    // The URL path (excludes query string) needs to look like a video
+    // file - accepting any http(s) URL unconditionally would mean
+    // "blindly accept arbitrary dropped content" (e.g. a webpage link),
+    // which the redesign task's security section explicitly warns
+    // against.
+    return hasSupportedVideoExtension(url.path());
+}
 } // namespace
 
 MainWindow::MainWindow(bool startMinimized, QWidget* parent)
@@ -49,6 +83,10 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     setWindowIcon(QIcon(kAppIconResourcePath));
     resize(560, 680);
     setMinimumSize(420, 480);
+    // Whole-window drop target (see dragEnterEvent/dropEvent) - the
+    // preview area is the visual focus of the drag hint, but the actual
+    // Qt drop target is the window so a drop anywhere on it still works.
+    setAcceptDrops(true);
 
     buildUi();
     buildTray();
@@ -79,7 +117,7 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
 
     // Load (but don't attach to the desktop) whatever video was previously
     // selected, purely so the in-app preview has something to show.
-    if (!m_selectedVideoPath.isEmpty() && QFileInfo::exists(m_selectedVideoPath)) {
+    if (isUsableVideoSource(m_selectedVideoPath)) {
         m_manager->player()->loadFile(m_selectedVideoPath);
         m_manager->player()->play();
         setUiState(WallpaperUiState::Ready);
@@ -153,7 +191,9 @@ void MainWindow::buildUi() {
     header->addStretch();
 
     m_settingsButton = new QToolButton(central);
-    m_settingsButton->setText(tr("⚙ Settings"));
+    m_settingsButton->setIcon(QIcon(kSettingsIconResourcePath));
+    m_settingsButton->setText(tr("Settings"));
+    m_settingsButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_settingsButton->setToolTip(tr("Open settings"));
     m_settingsButton->setAutoRaise(true);
     connect(m_settingsButton, &QToolButton::clicked, this, &MainWindow::openSettings);
@@ -171,6 +211,11 @@ void MainWindow::buildUi() {
     m_previewLabel->setAlignment(Qt::AlignCenter);
     m_previewLabel->setStyleSheet(kPreviewSurfaceStyle);
     m_previewLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // Empty-state text also advertises drag & drop - restored here by
+    // setDragHintActive(false) once a drag leaves without dropping, and
+    // overwritten either by a real frame (once a video is loaded) or the
+    // "Release to load video" hint text during a valid drag-over.
+    m_previewLabel->setText(tr("No video selected\nDrag & drop a video, or click Open Video"));
     root->addWidget(m_previewLabel, /*stretch=*/1);
 
     // --- Video info + secondary actions ---
@@ -240,7 +285,7 @@ void MainWindow::buildTray() {
     });
 
     menu->addSeparator();
-    menu->addAction(tr("Settings"), this, &MainWindow::openSettings);
+    menu->addAction(QIcon(kSettingsIconResourcePath), tr("Settings"), this, &MainWindow::openSettings);
     menu->addAction(tr("Open Video"), this, &MainWindow::onChooseVideo);
     menu->addAction(tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
     menu->addSeparator();
@@ -266,10 +311,24 @@ void MainWindow::applyVideoInfoUi() {
         return;
     }
 
-    QFileInfo fi(m_selectedVideoPath);
-    m_fileNameLabel->setText(fi.fileName());
+    const QUrl asUrl(m_selectedVideoPath);
+    const bool isWebSource = isWebVideoUrl(asUrl);
+    QString suffix;
+    if (isWebSource) {
+        // A URL's own QFileInfo() split is misleading (no real
+        // filesystem semantics), so show the URL itself as the name.
+        m_fileNameLabel->setText(m_selectedVideoPath);
+        suffix = QFileInfo(asUrl.path()).suffix().toUpper();
+    } else {
+        QFileInfo fi(m_selectedVideoPath);
+        m_fileNameLabel->setText(fi.fileName());
+        suffix = fi.suffix().toUpper();
+    }
 
     QStringList parts;
+    if (isWebSource) {
+        parts << tr("Web video");
+    }
     const QSize size = m_manager->player()->videoNativeSize();
     if (size.isValid() && !size.isEmpty()) {
         parts << QStringLiteral("%1×%2").arg(size.width()).arg(size.height());
@@ -279,7 +338,6 @@ void MainWindow::applyVideoInfoUi() {
         const qint64 totalSeconds = durationMs / 1000;
         parts << QStringLiteral("%1:%2").arg(totalSeconds / 60).arg(totalSeconds % 60, 2, 10, QChar('0'));
     }
-    const QString suffix = fi.suffix().toUpper();
     if (!suffix.isEmpty()) {
         parts << suffix;
     }
@@ -360,15 +418,32 @@ void MainWindow::onChooseVideo() {
     if (path.isEmpty()) {
         return;
     }
-    m_selectedVideoPath = path;
-    m_settings.setVideoPath(path);
+    loadVideoSource(path);
+}
+
+bool MainWindow::isUsableVideoSource(const QString& source) {
+    if (source.isEmpty()) {
+        return false;
+    }
+    const QUrl asUrl(source);
+    if (isWebVideoUrl(asUrl)) {
+        return true;
+    }
+    return QFileInfo::exists(source);
+}
+
+void MainWindow::loadVideoSource(const QString& source) {
+    m_selectedVideoPath = source;
+    m_settings.setVideoPath(source);
     m_lastVideoDetailsText.clear();
     applyVideoInfoUi();
 
     // Start decoding immediately so the in-app preview box shows the video
-    // right away, even before the user clicks "Set as Wallpaper".
+    // right away, even before the user clicks "Set as Wallpaper". Works
+    // identically for a local path or a web URL - VideoPlayer::loadFile
+    // already handles both via the same QMediaPlayer pipeline.
     m_previewLabel->setText(QString());
-    if (m_manager->player()->loadFile(path)) {
+    if (m_manager->player()->loadFile(source)) {
         m_manager->player()->play();
     }
 
@@ -382,12 +457,132 @@ void MainWindow::onChooseVideo() {
     }
 }
 
+QString MainWindow::extractDroppedVideoSource(const QMimeData* mimeData, int* extraCandidateCount) {
+    if (extraCandidateCount) {
+        *extraCandidateCount = 0;
+    }
+    if (!mimeData) {
+        return QString();
+    }
+
+    // hasUrls() covers BOTH local files dragged from Explorer (each a
+    // file:// QUrl) and most browser drag payloads for a link/video
+    // (text/uri-list, which Qt also surfaces via urls()) - one MIME check
+    // handles both of the task's two input paths. First VALID candidate
+    // wins; this app has no playlist/queue (see WallpaperManager - one
+    // current video only), so multiple dropped files predictably keep
+    // just the first, matching Explorer's own drag-multiple-files
+    // left-to-right/selection-order convention, rather than guessing an
+    // ordering or silently merging them.
+    QString firstMatch;
+    int extras = 0;
+    if (mimeData->hasUrls()) {
+        for (const QUrl& url : mimeData->urls()) {
+            QString candidate;
+            if (url.isLocalFile()) {
+                const QString localPath = url.toLocalFile();
+                if (QFileInfo::exists(localPath) && hasSupportedVideoExtension(localPath)) {
+                    candidate = localPath;
+                }
+            } else if (isWebVideoUrl(url)) {
+                candidate = url.toString();
+            }
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            if (firstMatch.isEmpty()) {
+                firstMatch = candidate;
+            } else {
+                ++extras;
+            }
+        }
+    }
+
+    // Deliberately no plain-text fallback: interpreting arbitrary
+    // dropped text as a local file path is exactly the "text that merely
+    // happens to look like a path" the redesign task's security section
+    // warns against. A URL dragged as plain text (some non-browser
+    // sources do this) is still accepted, but ONLY if it strictly parses
+    // as an absolute http(s) URL - never as a filesystem path.
+    if (firstMatch.isEmpty() && mimeData->hasText()) {
+        const QUrl asUrl = QUrl::fromUserInput(mimeData->text().trimmed());
+        if (isWebVideoUrl(asUrl)) {
+            firstMatch = asUrl.toString();
+        }
+    }
+
+    if (extraCandidateCount) {
+        *extraCandidateCount = extras;
+    }
+    return firstMatch;
+}
+
+void MainWindow::setDragHintActive(bool active) {
+    if (m_dragHintActive == active) {
+        return;
+    }
+    m_dragHintActive = active;
+    if (active) {
+        // Temporarily overlays the preview's current content (pixmap or
+        // empty-state text) with the drag hint - restored on drop/leave
+        // by simply letting the next decoded frame (or the empty-state
+        // text) repaint over it, same as the existing "clear while
+        // loading" transient state in loadVideoSource.
+        m_previewLabel->setText(tr("Release to load video"));
+    } else if (m_selectedVideoPath.isEmpty()) {
+        m_previewLabel->setText(tr("No video selected\nDrag & drop a video, or click Open Video"));
+    } else {
+        m_previewLabel->setText(QString());
+    }
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (!extractDroppedVideoSource(event->mimeData(), nullptr).isEmpty()) {
+        event->acceptProposedAction();
+        setDragHintActive(true);
+    } else {
+        event->ignore();
+    }
+}
+
+void MainWindow::dragMoveEvent(QDragMoveEvent* event) {
+    if (!extractDroppedVideoSource(event->mimeData(), nullptr).isEmpty()) {
+        event->acceptProposedAction();
+    } else {
+        event->ignore();
+    }
+}
+
+void MainWindow::dragLeaveEvent(QDragLeaveEvent* /*event*/) {
+    setDragHintActive(false);
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    setDragHintActive(false);
+    int extraCandidates = 0;
+    const QString source = extractDroppedVideoSource(event->mimeData(), &extraCandidates);
+    if (source.isEmpty()) {
+        event->ignore();
+        qInfo() << "[DragDrop] Drop rejected - no supported local video or web video URL found in the "
+                    "dropped data.";
+        return;
+    }
+    event->acceptProposedAction();
+    qInfo() << "[DragDrop] Loading dropped video source:" << source
+            << (extraCandidates > 0 ? QString(" (%1 additional dropped file(s) ignored)").arg(extraCandidates) : QString());
+    loadVideoSource(source);
+    if (extraCandidates > 0) {
+        m_statusLabel->setToolTip(tr("%1 additional dropped file(s) were ignored - only one video can be "
+                                      "loaded at a time.").arg(extraCandidates));
+    }
+}
+
 void MainWindow::onSetWallpaper() {
     if (m_selectedVideoPath.isEmpty()) {
         QMessageBox::information(this, tr("Choose a video"), tr("Please open a video first."));
         return;
     }
-    if (!QFileInfo::exists(m_selectedVideoPath)) {
+    if (!isUsableVideoSource(m_selectedVideoPath)) {
         QMessageBox::warning(this, tr("Video not found"),
             tr("Wallpaper video could not be found.\n\nPlease choose another video."));
         return;
@@ -507,7 +702,7 @@ void MainWindow::recoverOrActivate() {
     qInfo() << "[IPC] Handling recovery request from a second launch attempt.";
     if (m_manager->isActive()) {
         m_manager->recoverOrActivate();
-    } else if (!m_selectedVideoPath.isEmpty() && QFileInfo::exists(m_selectedVideoPath)) {
+    } else if (isUsableVideoSource(m_selectedVideoPath)) {
         qInfo() << "[IPC] No wallpaper was active - attaching the last-configured video.";
         onSetWallpaper();
     } else {
