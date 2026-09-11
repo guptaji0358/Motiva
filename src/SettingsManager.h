@@ -4,7 +4,7 @@
 #include <QString>
 
 // Thin wrapper around QSettings (stored in the registry under
-// HKCU\Software\VideoWallpaper via the default Windows QSettings backend).
+// HKCU\Software\Motiva via the default Windows QSettings backend).
 // No cloud/account/internet dependency.
 class SettingsManager {
 public:

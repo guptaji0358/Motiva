@@ -1,12 +1,13 @@
 #include "WallpaperWindow.h"
 #include "D3DWallpaperRenderer.h"
 #include "WindowsDesktopWallpaper.h"
+#include "StartupDiagnostics.h"
 #include <QDebug>
 #include <QMetaObject>
 #include <QElapsedTimer>
 
 namespace {
-constexpr const wchar_t* kClassName = L"VideoWallpaperRenderWindowClass";
+constexpr const wchar_t* kClassName = L"MotivaRenderWindowClass";
 ATOM g_classAtom = 0;
 
 void EnsureClassRegistered() {
@@ -48,10 +49,14 @@ HWND WallpaperWindow::createNativeWindow() {
     // never via classic WM_PAINT/GDI, and diagnostics on this machine
     // found Progman itself carries this same extended style - see the
     // detailed rationale in WindowsDesktopWallpaper.cpp::AttachToDesktop.
-    return CreateWindowExW(
-        WS_EX_NOREDIRECTIONBITMAP, kClassName, L"Video Wallpaper Render Surface", WS_POPUP,
+    HWND hwnd = CreateWindowExW(
+        WS_EX_NOREDIRECTIONBITMAP, kClassName, L"Motiva Render Surface", WS_POPUP,
         0, 0, 64, 64,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (hwnd) {
+        StartupDiagnostics::instance().mark("wallpaperHwndCreated");
+    }
+    return hwnd;
 }
 
 WallpaperWindow::WallpaperWindow(VideoPlayer* player, QObject* parent)
@@ -188,6 +193,14 @@ void WallpaperWindow::onRebindFinished(bool ok) {
 
 quint64 WallpaperWindow::presentedFrames() const {
     return m_renderer ? m_renderer->presentedFrameCount.load(std::memory_order_relaxed) : 0;
+}
+
+bool WallpaperWindow::rendererHasValidDCompState() const {
+    return m_renderer && m_renderer->hasValidDCompState();
+}
+
+bool WallpaperWindow::rendererHasValidDevice() const {
+    return m_renderer && m_renderer->hasValidDevice();
 }
 
 void WallpaperWindow::notifyAttachedToDesktop() {

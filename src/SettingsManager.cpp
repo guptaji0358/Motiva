@@ -6,11 +6,11 @@
 
 namespace {
 constexpr const char* kRunKeyPath = R"(Software\Microsoft\Windows\CurrentVersion\Run)";
-constexpr const wchar_t* kRunValueName = L"VideoWallpaper";
+constexpr const wchar_t* kRunValueName = L"Motiva";
 }
 
 SettingsManager::SettingsManager()
-    : m_settings(QSettings::NativeFormat, QSettings::UserScope, "VideoWallpaper", "VideoWallpaper") {
+    : m_settings(QSettings::NativeFormat, QSettings::UserScope, "Motiva", "Motiva") {
 }
 
 QString SettingsManager::videoPath() const {

@@ -106,6 +106,16 @@ public:
     // synchronization of any other state.
     std::atomic<quint64> presentedFrameCount{0};
 
+    // Diagnostics-only. Reads plain pointers that are only ever reassigned
+    // on the render thread (initialize/shutdown/rebindToWindow) while this
+    // may be called from the GUI thread for a one-off log line - a benign
+    // race (worst case: a momentarily stale null/non-null read in a log
+    // message), never used for any actual synchronization or control flow,
+    // which is why it's fine to skip the queued-invoke machinery every
+    // other cross-thread call in this class uses.
+    bool hasValidDCompState() const { return m_dcompTarget != nullptr && m_dcompVisual != nullptr; }
+    bool hasValidDevice() const;
+
 private:
     bool createDeviceAndSwapChain(int width, int height);
     bool createShaderPipeline();

@@ -1,4 +1,5 @@
 #include "VideoPlayer.h"
+#include "StartupDiagnostics.h"
 #include <QFileInfo>
 #include <QVideoFrame>
 #include <QtConcurrent/QtConcurrentRun>
@@ -28,6 +29,7 @@ bool VideoPlayer::loadFile(const QString& path) {
     m_pendingFrame = QVideoFrame();
     m_hasPendingFrame = false;
     m_player.setSource(QUrl::fromLocalFile(path));
+    StartupDiagnostics::instance().mark("videoFileOpened");
     return true;
 }
 
@@ -67,6 +69,7 @@ void VideoPlayer::onVideoFrameChanged(const QVideoFrame& frame) {
     if (!frame.isValid()) {
         return;
     }
+    StartupDiagnostics::instance().mark("firstFrameDecoded");
     if (m_conversionInFlight) {
         // A conversion is already running on the thread pool. Only the
         // most recent frame matters for a live wallpaper - queuing every
@@ -116,6 +119,9 @@ void VideoPlayer::onConversionFinished() {
 }
 
 void VideoPlayer::onMediaStatusChanged(QMediaPlayer::MediaStatus status) {
+    if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia) {
+        StartupDiagnostics::instance().mark("decoderReady");
+    }
     if (status == QMediaPlayer::InvalidMedia) {
         emit errorOccurred(tr("Unable to play this video. The file may be corrupted or unsupported."));
     } else if (status == QMediaPlayer::EndOfMedia && !m_looping) {

@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "StartupDiagnostics.h"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -16,11 +17,18 @@
 MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
     qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
-    setWindowTitle("Video Wallpaper");
+    setWindowTitle("Motiva");
     resize(480, 560);
 
     buildUi();
     buildTray();
+
+    m_manager->setRecoveryState(&m_recoveryState);
+    // The single-instance winner (only instance that ever reaches this
+    // constructor - see main.cpp) starts listening for recovery requests
+    // from any later launch attempt.
+    m_ipc.startListening();
+    connect(&m_ipc, &InstanceIpc::recoverRequested, this, &MainWindow::recoverOrActivate);
 
     connect(m_manager.get(), &WallpaperManager::errorOccurred, this, &MainWindow::onWallpaperError);
     connect(m_manager.get(), &WallpaperManager::wallpaperActivated, this, [this] {
@@ -42,10 +50,20 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
         m_manager->player()->play();
     }
 
-    // Restore previous wallpaper if the app was auto-started or the user
-    // had one active when they last closed the app to tray.
-    if ((startMinimized || m_settings.wasWallpaperActive()) && !m_selectedVideoPath.isEmpty()) {
-        qInfo() << "[Lifecycle] Auto-restoring previous wallpaper on startup.";
+    // Restore the wallpaper ONLY if it was manually applied (via "Set as
+    // Wallpaper") and still active when the app last closed -
+    // m_settings.wasWallpaperActive() is set true exclusively by
+    // onSetWallpaper() succeeding and false by onRemoveWallpaper(), never
+    // merely by loading/selecting a video (see those two functions). A
+    // video being loaded, or the app being autostarted, is NOT itself
+    // user intent to apply the wallpaper - startMinimized must not be
+    // treated as an implicit "restore" signal on its own, or a plain
+    // autostart launch would auto-apply a wallpaper the user never asked
+    // for. Normal startup therefore stops at VideoReady/WaitingForUser;
+    // only this prior-manual-intent case reaches setWallpaper() before any
+    // click.
+    if (m_settings.wasWallpaperActive() && !m_selectedVideoPath.isEmpty()) {
+        qInfo() << "[Lifecycle] Restoring previously-active wallpaper on startup (was manually applied last session).";
         onSetWallpaper();
     }
 
@@ -63,6 +81,7 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     if (startMinimized) {
         hide();
     }
+    StartupDiagnostics::instance().mark("mainWindowReady");
     qInfo() << "[Lifecycle] MainWindow construction complete.";
 }
 
@@ -158,7 +177,7 @@ void MainWindow::buildUi() {
 void MainWindow::buildTray() {
     m_tray = new QSystemTrayIcon(this);
     m_tray->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-    m_tray->setToolTip(tr("Video Wallpaper"));
+    m_tray->setToolTip(tr("Motiva"));
 
     auto* menu = new QMenu();
     m_trayPlayAction = menu->addAction(tr("▶ Play"), this, [this] { m_manager->play(); updatePlayPauseLabel(); });
@@ -325,12 +344,12 @@ void MainWindow::onStartWithWindowsToggled(bool checked) {
 void MainWindow::onWallpaperError(const QString& message) {
     m_statusLabel->setText(message);
     const QString logPath = QDir::toNativeSeparators(
-        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/VideoWallpaper.log");
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/Motiva.log");
     const QString detailed = message + tr("\n\nDetails were written to:\n%1").arg(logPath);
     if (isVisible()) {
-        QMessageBox::warning(this, tr("Video Wallpaper"), detailed);
+        QMessageBox::warning(this, tr("Motiva"), detailed);
     } else if (m_tray) {
-        m_tray->showMessage(tr("Video Wallpaper"), message, QSystemTrayIcon::Warning, 5000);
+        m_tray->showMessage(tr("Motiva"), message, QSystemTrayIcon::Warning, 5000);
     }
 }
 
@@ -375,6 +394,23 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
 }
 
+void MainWindow::recoverOrActivate() {
+    qInfo() << "[IPC] Handling recovery request from a second launch attempt.";
+    if (m_manager->isActive()) {
+        m_manager->recoverOrActivate();
+    } else if (!m_selectedVideoPath.isEmpty() && QFileInfo::exists(m_selectedVideoPath)) {
+        qInfo() << "[IPC] No wallpaper was active - attaching the last-configured video.";
+        onSetWallpaper();
+    } else {
+        qInfo() << "[IPC] No wallpaper configured yet - nothing to recover, just bringing the UI forward.";
+    }
+    // Give the user visible confirmation that double-clicking the EXE did
+    // something, instead of the previous silent no-op that forced End Task.
+    showNormal();
+    raise();
+    activateWindow();
+}
+
 void MainWindow::onExitRequested() {
     // Explicit, deterministic teardown *before* the event loop stops:
     // WallpaperManager::removeWallpaper() stops the player and destroys
@@ -388,8 +424,22 @@ void MainWindow::onExitRequested() {
     if (m_manager) {
         m_manager->removeWallpaper();
     }
+    // Mirror onRemoveWallpaper()'s bookkeeping: removeWallpaper() above
+    // already cleared RecoveryState's wallpaperWasAttached, but this path
+    // bypasses onRemoveWallpaper() itself, which is the only other place
+    // that clears SettingsManager's registry-persisted wasWallpaperActive.
+    // Left uncleared, a deliberate Exit would detach the wallpaper visually
+    // right now yet still leave "was active" on disk, so the startup
+    // restore check (see the constructor) would silently reapply it on the
+    // next launch even though the user explicitly asked to stop - exactly
+    // the "wallpaper keeps coming back" symptom this fixes. An unclean
+    // kill/crash never reaches this function at all, so the flag is left
+    // untouched in that case - that's the correct, distinct "legitimate
+    // recovery" path (RecoveryState.cleanExit also stays false for it).
+    m_settings.setWasWallpaperActive(false);
     if (m_tray) {
         m_tray->hide();
     }
+    m_recoveryState.setCleanExit(true);
     qApp->quit();
 }

@@ -1,4 +1,5 @@
 #include "WallpaperManager.h"
+#include "StartupDiagnostics.h"
 #include <QDebug>
 #include <QCoreApplication>
 #include <QTimer>
@@ -68,6 +69,11 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
     m_currentPath = videoPath;
     m_player->setLooping(m_player->isLooping());
 
+    if (m_recoveryState) {
+        m_recoveryState->setVideoPath(videoPath);
+        m_recoveryState->setWallpaperAttached(true); // intent, not yet-verified fact
+    }
+
     rebuildWindows();
     attachAllWindows();
 
@@ -88,6 +94,9 @@ void WallpaperManager::removeWallpaper() {
     m_player->stop();
     teardownWindows();
     m_active = false;
+    if (m_recoveryState) {
+        m_recoveryState->setWallpaperAttached(false);
+    }
     emit wallpaperRemoved();
 }
 
@@ -145,11 +154,32 @@ void WallpaperManager::onExplorerRestarted() {
     if (!m_active || m_windows.empty()) {
         return;
     }
-    qInfo() << "[Shell] Explorer restart detected - recovering wallpaper. VideoWallpaper.exe PID="
-            << GetCurrentProcessId() << "(process, video decoder and D3D/DComp device/swapchain "
-                                          "are NOT touched by this).";
+
+    // Old/new Explorer PID and per-restart D3D/DComp/frame-counter state,
+    // so each restart's full picture is self-contained in the log (see
+    // CLAUDE.md item 4 - diagnosing why recovery eventually stops working
+    // after repeated restarts).
+    const DWORD oldExplorerPid = m_lastKnownExplorerPid;
+    HWND newProgman = FindWindowW(L"Progman", nullptr);
+    DWORD newExplorerPid = 0;
+    if (newProgman) {
+        GetWindowThreadProcessId(newProgman, &newExplorerPid);
+    }
+    m_lastKnownExplorerPid = newExplorerPid;
+
+    qInfo() << "[Shell] Explorer restart detected - recovering wallpaper. Motiva.exe PID="
+            << GetCurrentProcessId() << "oldExplorerPid=" << oldExplorerPid
+            << "newExplorerPid=" << newExplorerPid << "currentAttachGeneration=" << m_attachGeneration
+            << "(process, video decoder and D3D/DComp device/swapchain are NOT touched by this).";
+    if (m_recoveryState) {
+        m_recoveryState->incrementExplorerRecoveryCount();
+        m_recoveryState->setExplorerPid(static_cast<qint64>(newExplorerPid));
+    }
     for (auto& w : m_windows) {
         WindowsDesktopWallpaper::DumpDesktopState(w->handle(), "[pre-recovery]");
+        qInfo() << "[Diag] [pre-recovery] renderer hasValidDCompState=" << w->rendererHasValidDCompState()
+                << "hasValidDevice=" << w->rendererHasValidDevice()
+                << "presentedFrameCount=" << w->presentedFrames();
     }
 
     // Bump the generation FIRST, before touching any window: any attach
@@ -162,6 +192,9 @@ void WallpaperManager::onExplorerRestarted() {
     // checks this and discards stale results instead of e.g. hiding a
     // brand-new window because an old, unrelated attach attempt failed.
     ++m_attachGeneration;
+    if (m_recoveryState) {
+        m_recoveryState->setAttachGeneration(m_attachGeneration);
+    }
 
     // Each WallpaperWindow recreates its native HWND and asynchronously
     // rebinds to it (see WallpaperWindow::recoverFromExplorerRestart /
@@ -298,7 +331,7 @@ void WallpaperManager::attachAllWindows() {
         for (HWND hwnd : hwnds) {
             QElapsedTimer t;
             t.start();
-            const bool ok = WindowsDesktopWallpaper::AttachToDesktop(hwnd);
+            const bool ok = WindowsDesktopWallpaper::AttachToDesktop(hwnd, jobGeneration);
             qInfo() << "[Shell] (gen" << jobGeneration << ") AttachToDesktop hwnd="
                     << reinterpret_cast<quintptr>(hwnd) << "result=" << ok << "took" << t.elapsed() << "ms";
             if (!ok) {
@@ -359,6 +392,9 @@ void WallpaperManager::onAttachAttemptFinished() {
         for (auto& w : m_windows) {
             w->notifyAttachedToDesktop();
             WindowsDesktopWallpaper::DumpDesktopState(w->handle(), "[post-attach]");
+            qInfo() << "[Diag] [post-attach] renderer hasValidDCompState=" << w->rendererHasValidDCompState()
+                    << "hasValidDevice=" << w->rendererHasValidDevice()
+                    << "presentedFrameCount=" << w->presentedFrames();
             framesBefore.push_back(w->presentedFrames());
         }
 
@@ -384,7 +420,30 @@ void WallpaperManager::onAttachAttemptFinished() {
             qInfo() << "[Lifecycle] Wallpaper recovery" << (allPresenting ? "COMPLETE" : "INCOMPLETE")
                     << "- DComp=OK Renderer=RUNNING Video=" << (allPresenting ? "PLAYING" : "NOT ADVANCING")
                     << "Present=" << (allPresenting ? "ACTIVE" : "STALLED");
-            if (!allPresenting) {
+            // Full hierarchy dump exactly at the moment "Active"/COMPLETE is
+            // declared (or not) - this is the evidence needed to answer
+            // "the app says Active, so which exact HWND/surface is actually
+            // visible to the user?" rather than trusting AttachToDesktop()'s
+            // return value alone. Deliberately unconditional (both branches)
+            // so a STALLED case is equally diagnosable.
+            for (auto& w : m_windows) {
+                WindowsDesktopWallpaper::DumpFullHierarchy(w->handle(), "[active-check]");
+            }
+            if (allPresenting) {
+                if (m_recoveryState) {
+                    m_recoveryState->markVideoPresenting(StartupDiagnostics::instance().elapsedFor("firstFramePresented"));
+                    m_recoveryState->setWallpaperAttached(true);
+                    // First time this fires, the full startup timeline is
+                    // known - persist it so a single, non-repeatable
+                    // Windows restart leaves enough evidence on disk for
+                    // the next launch's "previous session" summary (see
+                    // RecoveryState/StartupDiagnostics).
+                    m_recoveryState->setStartupDiagnostics(StartupDiagnostics::instance().toJsonAndLogDeltas());
+                }
+            } else {
+                if (m_recoveryState) {
+                    m_recoveryState->recordFailure("attach succeeded but frames not advancing (STALLED)");
+                }
                 // Reparented successfully but frames aren't actually
                 // flowing through to the desktop - treat this the same as
                 // a failed attach so the readiness poll keeps retrying
@@ -409,6 +468,9 @@ void WallpaperManager::onAttachAttemptFinished() {
     if (!m_attachRetryTimer.isActive()) {
         qInfo() << "[Shell] Desktop hierarchy not fully ready yet - "
                     "will keep checking at a short interval until it is.";
+        if (m_recoveryState) {
+            m_recoveryState->recordFailure("AttachToDesktop failed (desktop hierarchy not ready)");
+        }
         emit errorOccurred(tr("Could not attach the wallpaper window to the desktop."));
         m_attachRetryElapsed.start();
         m_attachRetryTimer.start();
@@ -418,6 +480,38 @@ void WallpaperManager::onAttachAttemptFinished() {
         qInfo() << "[Shell] Still waiting for desktop hierarchy... elapsed="
                 << m_attachRetryElapsed.elapsed() << "ms";
     }
+}
+
+void WallpaperManager::recoverOrActivate() {
+    if (!m_active || m_windows.empty()) {
+        qInfo() << "[IPC] Recovery requested but no wallpaper is currently configured - nothing to recover here"
+                    " (MainWindow handles the never-yet-attached case).";
+        return;
+    }
+
+    quint64 framesNow = 0;
+    for (auto& w : m_windows) {
+        framesNow += w->presentedFrames();
+    }
+    qInfo() << "[IPC] Recovery requested. Current lifecycle state: active=" << m_active
+            << "windows=" << m_windows.size() << "attachGeneration=" << m_attachGeneration
+            << "attachInFlight=" << m_attachInFlight << "totalPresentedFrames=" << framesNow;
+
+    // Defensively resume playback (a second launch attempt is a reasonable
+    // signal the user wants their wallpaper back, even if it was paused)
+    // and re-drive the same attach+verify pipeline used for Explorer-
+    // restart recovery. attachAllWindows() is single-flight and generation-
+    // guarded (see its own comment) so calling it here is always safe,
+    // whether the wallpaper is already healthy (a harmless no-op re-attach
+    // + verification), not yet attached (attaches it), or attached but
+    // stalled (recommits + re-verifies, same as onAttachAttemptFinished's
+    // STALLED path).
+    if (m_userPaused) {
+        m_userPaused = false;
+    }
+    m_player->play();
+    qInfo() << "[IPC] Recovery started - re-driving attach/verify pipeline.";
+    attachAllWindows();
 }
 
 void WallpaperManager::teardownWindows() {

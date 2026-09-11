@@ -70,6 +70,12 @@ public:
     // needed for a plain counter read).
     quint64 presentedFrames() const;
 
+    // Diagnostics-only passthroughs to the renderer, used by
+    // WallpaperManager's per-Explorer-restart state dump - see
+    // D3DWallpaperRenderer::hasValidDCompState()/hasValidDevice().
+    bool rendererHasValidDCompState() const;
+    bool rendererHasValidDevice() const;
+
     // Tells the renderer this window has just been (re)parented into the
     // desktop hierarchy, so it can re-commit the DirectComposition target
     // post-reparent - see D3DWallpaperRenderer::recommitAfterReparent.

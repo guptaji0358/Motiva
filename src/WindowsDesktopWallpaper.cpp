@@ -1,7 +1,9 @@
 #include "WindowsDesktopWallpaper.h"
+#include "StartupDiagnostics.h"
 #include <QDebug>
 #include <QElapsedTimer>
 #include <mutex>
+#include <dwmapi.h>
 
 namespace {
 
@@ -140,6 +142,75 @@ void DumpAllWorkerWWindows() {
     }
 }
 
+// One line of full detail for a single HWND - class, title, PID/TID,
+// parent, owner, visible/enabled, style/exstyle, window+client rect, and
+// DWM cloaked state (a window can be IsWindowVisible==true and still be
+// invisible to the user if DWM has cloaked it - DWMWA_CLOAKED is the only
+// way to detect that; IsWindowVisible alone reports the Win32-level
+// visibility flag regardless of DWM composition state).
+void LogWindowDetail(const char* context, const char* label, HWND hwnd) {
+    if (!hwnd) {
+        return;
+    }
+    wchar_t className[256] = {};
+    GetClassNameW(hwnd, className, 256);
+    wchar_t title[256] = {};
+    GetWindowTextW(hwnd, title, 256);
+    DWORD pid = 0;
+    DWORD tid = GetWindowThreadProcessId(hwnd, &pid);
+    HWND parent = GetParent(hwnd);
+    HWND owner = GetWindow(hwnd, GW_OWNER);
+    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    RECT wr{};
+    GetWindowRect(hwnd, &wr);
+    RECT cr{};
+    GetClientRect(hwnd, &cr);
+    DWORD cloaked = 0;
+    HRESULT cloakedHr = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+
+    qInfo() << "[Hierarchy]" << context << label << "hwnd=" << reinterpret_cast<quintptr>(hwnd)
+            << "class=" << QString::fromWCharArray(className)
+            << "title=" << QString::fromWCharArray(title)
+            << "pid=" << pid << "tid=" << tid
+            << "parent=" << reinterpret_cast<quintptr>(parent)
+            << "owner=" << reinterpret_cast<quintptr>(owner)
+            << "visible=" << (bool)IsWindowVisible(hwnd) << "enabled=" << (bool)IsWindowEnabled(hwnd)
+            << "cloaked=" << (SUCCEEDED(cloakedHr) ? QString::number(cloaked) : QStringLiteral("n/a"))
+            << "style=0x" << Qt::hex << (unsigned long)style << "exStyle=0x" << (unsigned long)exStyle << Qt::dec
+            << "windowRect=" << wr.left << wr.top << wr.right << wr.bottom
+            << "clientRect=" << cr.left << cr.top << cr.right << cr.bottom;
+}
+
+// Logs every child of `parent`, in z-order (EnumChildWindows visits
+// top-level-first-then-recurses, but for a single level it walks in
+// genuine top-to-bottom z-order), tagging our own process's windows and
+// SHELLDLL_DefView/SysListView32/FolderView specifically since those are
+// the ones item 5 of the diagnostic ask cares about.
+void LogChildren(const char* context, const char* parentLabel, HWND parent) {
+    if (!parent) {
+        return;
+    }
+    struct Ctx { const char* context; const char* parentLabel; int index; };
+    Ctx ctx{context, parentLabel, 0};
+    EnumChildWindows(
+        parent,
+        [](HWND hwnd, LPARAM lParam) -> BOOL {
+            auto* c = reinterpret_cast<Ctx*>(lParam);
+            wchar_t className[256] = {};
+            GetClassNameW(hwnd, className, 256);
+            DWORD pid = 0;
+            GetWindowThreadProcessId(hwnd, &pid);
+            const bool isOwnProcess = (pid == GetCurrentProcessId());
+            QString label = QString("child[%1] of %2%3").arg(c->index).arg(c->parentLabel)
+                                 .arg(isOwnProcess ? " OURS" : "");
+            LogWindowDetail(c->context, label.toUtf8().constData(), hwnd);
+            ++c->index;
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&ctx));
+}
+
 // Set once, on every successful AttachToDesktop() - NOT touched anywhere
 // else. NeedsReattach() only ever compares against these; nothing polls or
 // re-derives z-order state, which is what previously caused a
@@ -156,9 +227,15 @@ std::vector<MonitorInfoData> WindowsDesktopWallpaper::EnumerateMonitors() {
     return monitors;
 }
 
-HWND WindowsDesktopWallpaper::FindOrCreateWorkerW() {
+HWND WindowsDesktopWallpaper::FindOrCreateWorkerW(uint64_t generation) {
+    // No longer used for a discovery cooldown - see the comment further
+    // down where the old expensive spawn-message dance used to be. Kept as
+    // a parameter (rather than changing every call site again) in case a
+    // future investigation reintroduces generation-scoped state here.
+    Q_UNUSED(generation);
     QElapsedTimer stageTimer;
     stageTimer.start();
+    StartupDiagnostics::instance().mark("desktopDiscoveryStart");
     HWND progman = FindWindowW(L"Progman", nullptr);
     if (!progman) {
         qWarning() << "[Discover] Progman window not found - "
@@ -166,149 +243,79 @@ HWND WindowsDesktopWallpaper::FindOrCreateWorkerW() {
         return nullptr;
     }
     qInfo() << "[Discover] Progman found, hwnd=" << reinterpret_cast<quintptr>(progman);
+    StartupDiagnostics::instance().mark("explorerDetected");
 
     HWND iconOwnerCheap = nullptr;
     HWND cheapWorker = FindWorkerWBehindIcons(&iconOwnerCheap);
+    if (iconOwnerCheap) {
+        StartupDiagnostics::instance().mark("desktopHierarchyDetected");
+    }
     qInfo() << "[Discover] Cheap WorkerW/SHELLDLL_DefView probe took" << stageTimer.elapsed()
             << "ms, iconOwner=" << reinterpret_cast<quintptr>(iconOwnerCheap)
             << "worker=" << reinterpret_cast<quintptr>(cheapWorker);
     if (cheapWorker) {
+        StartupDiagnostics::instance().mark("requiredShellWindowFound");
         return cheapWorker;
     }
     if (!iconOwnerCheap) {
         // SHELLDLL_DefView (the desktop icon layer) does not exist under
         // ANY top-level window yet. This is the state observed right after
-        // boot, before Explorer has finished building the desktop - the
-        // 0x052C spawn-message dance below is pointless until this exists,
-        // since it only asks Explorer to create a WorkerW *alongside* an
-        // icon layer that isn't there yet. Bail out immediately (no
-        // Sleep-based busy-wait) and let the caller's short-interval retry
-        // timer check again shortly, instead of burning several seconds
-        // here on a doomed discovery sequence.
+        // boot, before Explorer has finished building the desktop. Bail
+        // out immediately (no Sleep-based busy-wait) and let the caller's
+        // short-interval retry timer check again shortly, instead of
+        // burning time here on a doomed discovery attempt.
         qInfo() << "[Discover] No SHELLDLL_DefView anywhere yet - desktop icon layer "
                     "not built by Explorer yet. Skipping spawn-message probe this round.";
         return nullptr;
     }
 
-    // The full discovery below sends spawn messages and busy-waits for
-    // Explorer to react (up to several seconds total). WallpaperManager's
-    // health check calls this on every reattach, and on a build where no
-    // real WorkerW is ever created (as confirmed by testing on this
-    // machine) that full sequence would otherwise re-run - and re-block
-    // the GUI thread for seconds at a time - every single health-check
-    // tick, which is what caused the app to become genuinely unresponsive
-    // ("Not Responding") rather than just occasionally re-pinning a
-    // window. Remember a negative result for a cooldown window so repeat
-    // callers get the cheap "definitely not available right now" answer
-    // instead of redoing the whole expensive dance.
-    static ULONGLONG s_lastFailedDiscovery = 0;
-    // 5 minutes: long enough that, on a machine where discovery
-    // deterministically never succeeds (confirmed by testing - this
-    // Explorer build never creates a real WorkerW), the GUI thread isn't
-    // repeatedly stalled for several seconds by a doomed retry; short
-    // enough to notice a real WorkerW appearing after an Explorer
-    // restart within a reasonable time.
-    constexpr ULONGLONG kRediscoveryCooldownMs = 5 * 60 * 1000;
-    const ULONGLONG now = GetTickCount64();
-    if (s_lastFailedDiscovery != 0 && (now - s_lastFailedDiscovery) < kRediscoveryCooldownMs) {
-        // Known-failed recently: skip straight to the same Progman
-        // fallback a full failed discovery would have ended in, without
-        // re-running the expensive probe. Returning nullptr here would be
-        // wrong - AttachToDesktop treats that as "no host available at
-        // all" and hides the window instead of falling back.
-        return progman;
-    }
-
-    // Ask Explorer to spawn the WorkerW layer. Undocumented but stable
-    // since Windows 7 and still functions on Windows 10/11 as of this
-    // writing. Different Explorer builds have been observed to only react
-    // to one or another of these known wParam/lParam variants.
+    // No standalone icon-less WorkerW exists yet. The 2026-09-09 fix
+    // removed the old multi-second discovery dance here (6 message sends
+    // across 2 rounds, each followed by up to 1s of Sleep-based polling,
+    // plus a forced wallpaper-rebuild pause) in favor of attaching directly
+    // to Progman immediately. That eliminated the startup delay, but a
+    // follow-up investigation (see CLAUDE.md "wallpaper visibility
+    // investigation") found via full desktop-hierarchy diagnostics that
+    // the Progman-direct fallback - though correctly parented, positioned,
+    // sized, and uncloaked by every Win32/DWM signal available - does not
+    // actually get composited above the OS-painted desktop wallpaper on
+    // this machine; only a genuine icon-less WorkerW does. That was never
+    // actually visually verified as working in any prior session (only
+    // inferred from AttachToDesktop()==true and presentedFrameCount
+    // advancing, neither of which proves real screen visibility).
     //
-    // IMPORTANT: on at least one real Windows 11 build this message was
-    // found (by testing) to behave as a *toggle* rather than an idempotent
-    // "ensure it exists" - sending the same variant twice in a row created
-    // the WorkerW and then immediately destroyed it again, so a batch of
-    // four sends with no check in between could easily net out to "no
-    // WorkerW" even though Explorer is perfectly capable of creating one.
-    // Send one variant at a time and check for a real result after each
-    // individual send, stopping the instant one appears.
-    struct Variant { WPARAM wParam; LPARAM lParam; };
-    const Variant variants[] = { {0xD, 0x1}, {0, 0}, {0, 1} };
-
-    HWND iconOwner = iconOwnerCheap;
-    HWND worker = nullptr;
-
-    for (const auto& v : variants) {
-        if (worker) {
-            break;
-        }
-        DWORD_PTR result = 0;
-        SendMessageTimeoutW(progman, 0x052C, v.wParam, v.lParam, SMTO_NORMAL, 1000, &result);
-        for (int i = 0; i < 20 && !worker; ++i) {
-            Sleep(50);
-            worker = FindWorkerWBehindIcons(&iconOwner);
-        }
+    // Per explicit user approval, a single BOUNDED spawn attempt is
+    // allowed here - deliberately NOT the old multi-variant/multi-round
+    // polling dance: exactly one message send (the historically most
+    // effective variant) with a bounded SendMessageTimeoutW timeout, one
+    // short fixed settle wait (not a retry loop), and one check. Worst
+    // case this adds ~150ms when no real WorkerW exists, not seconds, and
+    // never blocks the GUI thread (this whole function already only runs
+    // on WallpaperManager's background attach thread). If it doesn't
+    // produce a real WorkerW, we fall straight back to the Progman
+    // fallback exactly as before - this is strictly additive, not a
+    // dependency the fallback needs.
+    DWORD_PTR spawnResult = 0;
+    SendMessageTimeoutW(progman, 0x052C, 0xD, 0x1, SMTO_NORMAL, 200, &spawnResult);
+    Sleep(100); // single bounded settle wait, not a retry loop - see comment above
+    HWND iconOwnerAfterSpawn = iconOwnerCheap;
+    HWND spawnedWorker = FindWorkerWBehindIcons(&iconOwnerAfterSpawn);
+    if (spawnedWorker) {
+        qInfo() << "[Discover] Bounded one-shot spawn attempt succeeded - real WorkerW hwnd="
+                << reinterpret_cast<quintptr>(spawnedWorker);
+        StartupDiagnostics::instance().mark("requiredShellWindowFound");
+        return spawnedWorker;
     }
 
-    if (worker) {
-        return worker;
-    }
-
-    // Still nothing: re-applying the current desktop wallpaper forces
-    // Explorer to rebuild its whole desktop-rendering pipeline from
-    // scratch, which on some builds is what it takes to get it to create a
-    // proper, DWM-recognized WorkerW. Try the same one-at-a-time sequence
-    // again afterwards.
-    qWarning() << "[WindowsDesktopWallpaper] No WorkerW after spawn messages; "
-                   "re-applying wallpaper to force Explorer to rebuild the "
-                   "desktop and retrying.";
-    wchar_t currentWallpaper[MAX_PATH] = {};
-    if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, currentWallpaper, 0)) {
-        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, currentWallpaper,
-                               SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-    }
-    Sleep(300);
-    for (const auto& v : variants) {
-        if (worker) {
-            break;
-        }
-        DWORD_PTR result = 0;
-        SendMessageTimeoutW(progman, 0x052C, v.wParam, v.lParam, SMTO_NORMAL, 1000, &result);
-        for (int i = 0; i < 20 && !worker; ++i) {
-            Sleep(50);
-            worker = FindWorkerWBehindIcons(&iconOwner);
-        }
-    }
-
-    if (worker) {
-        return worker;
-    }
-
-    // Definitively failed this round - remember it so the next call
-    // (likely from the 3s health-check timer) skips straight past the
-    // expensive rediscovery until the cooldown expires, rather than
-    // repeating a multi-second, GUI-thread-blocking probe every tick.
-    s_lastFailedDiscovery = now;
-
-    if (!iconOwner) {
-        qWarning() << "[WindowsDesktopWallpaper] No window with a "
-                       "SHELLDLL_DefView child was found (desktop icon "
-                       "layer not located) - cannot determine where to "
-                       "attach the wallpaper window.";
-        return nullptr;
-    }
-
-    // Last-resort fallback: some minimal/locked-down desktop configurations
-    // never create a separate plain WorkerW at all. Attaching directly to
-    // Progman still places the render window behind the icon-owning
-    // window's normal paint order in most such cases, which is far better
-    // than not attaching at all.
-    qWarning() << "[WindowsDesktopWallpaper] Icon-less WorkerW sibling not "
-                   "found; falling back to attaching directly to Progman.";
+    StartupDiagnostics::instance().mark("requiredShellWindowFound");
+    qInfo() << "[Discover] No standalone WorkerW after one bounded spawn attempt - "
+                "attaching directly behind Progman instead hwnd=" << reinterpret_cast<quintptr>(progman)
+            << "(see CLAUDE.md - this fallback's actual visibility on this machine is under "
+                "investigation; this call site is unchanged either way).";
     return progman;
 }
 
-bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
+bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd, uint64_t generation) {
     if (!hwnd) {
         return false;
     }
@@ -320,10 +327,11 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
     // from under a reparent that's still in progress.
     std::lock_guard<std::mutex> lock(g_desktopStateMutex);
 
+    StartupDiagnostics::instance().mark("attachToDesktopStart");
     QElapsedTimer attachTimer;
     attachTimer.start();
 
-    HWND worker = FindOrCreateWorkerW();
+    HWND worker = FindOrCreateWorkerW(generation);
     qInfo() << "[Discover] FindOrCreateWorkerW took" << attachTimer.elapsed()
             << "ms, result=" << reinterpret_cast<quintptr>(worker);
     if (!worker) {
@@ -417,6 +425,9 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd) {
     g_attachedHost = worker;
     g_attachedProgman = progman;
     g_hasAttached = true;
+    StartupDiagnostics::instance().mark("wallpaperHostCreated");
+    StartupDiagnostics::instance().mark("wallpaperAttached");
+    StartupDiagnostics::instance().mark("attachToDesktopEnd");
     qInfo() << "[Wallpaper] AttachToDesktop succeeded for hwnd=" << reinterpret_cast<quintptr>(hwnd)
             << "total time" << attachTimer.elapsed() << "ms.";
     return true;
@@ -514,6 +525,144 @@ void WindowsDesktopWallpaper::DumpDesktopState(HWND wallpaperHwnd, const char* c
                 << "style=0x" << Qt::hex << (unsigned long)style << "exStyle=0x" << (unsigned long)exStyle << Qt::dec
                 << "rect=" << r.left << r.top << r.right << r.bottom;
     }
+}
+
+void WindowsDesktopWallpaper::DumpFullHierarchy(HWND wallpaperHwnd, const char* context) {
+    qInfo() << "[Hierarchy]" << context << "=== full desktop hierarchy dump begin ===";
+
+    HWND progman = FindWindowW(L"Progman", nullptr);
+    LogWindowDetail(context, "Progman", progman);
+    LogChildren(context, "Progman", progman);
+
+    HWND w = nullptr;
+    int workerIndex = 0;
+    while ((w = FindWindowExW(nullptr, w, L"WorkerW", nullptr)) != nullptr) {
+        QString label = QString("WorkerW[%1]").arg(workerIndex);
+        LogWindowDetail(context, label.toUtf8().constData(), w);
+        LogChildren(context, label.toUtf8().constData(), w);
+        ++workerIndex;
+    }
+    if (workerIndex == 0) {
+        qInfo() << "[Hierarchy]" << context << "No top-level WorkerW windows exist right now.";
+    }
+
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    LogWindowDetail(context, "Shell_TrayWnd", tray);
+
+    // Hypothesis check (read-only, no manipulation): does the desktop icon
+    // ListView (SysListView32/"FolderView", the SHELLDLL_DefView descendant
+    // that actually owns painting) have its own background image/color set
+    // rather than a transparent background? If it paints an opaque
+    // full-screen bitmap for its OWN background - which is a documented
+    // legacy mechanism (LVM_SETBKIMAGE / LVM_SETBKCOLOR) some Explorer
+    // configurations still use to show the classic wallpaper behind icons -
+    // that would sit directly ABOVE our window in z-order (SHELLDLL_DefView
+    // is immediately above us, confirmed by the z-order-neighbor log below)
+    // and fully occlude us even though every Win32/DWM signal for OUR
+    // window (visible, not cloaked, correct parent/z-order/size) looks
+    // completely correct. All of the messages below are standard
+    // cross-process-safe ListView queries (DWORD/COLORREF return values,
+    // no pointer marshaling) - purely informational, nothing is changed.
+    HWND listView = nullptr;
+    EnumWindows(
+        [](HWND hwnd, LPARAM lParam) -> BOOL {
+            HWND defView = FindWindowExW(hwnd, nullptr, L"SHELLDLL_DefView", nullptr);
+            if (defView) {
+                HWND lv = FindWindowExW(defView, nullptr, L"SysListView32", nullptr);
+                if (lv) {
+                    *reinterpret_cast<HWND*>(lParam) = lv;
+                    return FALSE;
+                }
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&listView));
+    if (listView) {
+        constexpr UINT kLvmFirst = 0x1000;
+        constexpr UINT kLvmGetBkColor = kLvmFirst + 0;
+        constexpr UINT kLvmGetTextBkColor = kLvmFirst + 38;
+        constexpr UINT kLvmGetExtendedListViewStyle = kLvmFirst + 55;
+        constexpr LONG_PTR kLvsExTransparentBkgnd = 0x00800000;
+        LRESULT bkColor = SendMessageW(listView, kLvmGetBkColor, 0, 0);
+        LRESULT textBkColor = SendMessageW(listView, kLvmGetTextBkColor, 0, 0);
+        LRESULT exStyle = SendMessageW(listView, kLvmGetExtendedListViewStyle, 0, 0);
+        const bool transparentBkgnd = (exStyle & kLvsExTransparentBkgnd) != 0;
+        qInfo() << "[Hierarchy]" << context << "desktop SysListView32 background probe: hwnd="
+                << reinterpret_cast<quintptr>(listView)
+                << "bkColor=0x" << Qt::hex << (unsigned long)bkColor
+                << "textBkColor=0x" << (unsigned long)textBkColor
+                << "exStyle=0x" << (unsigned long)exStyle << Qt::dec
+                << "LVS_EX_TRANSPARENTBKGND=" << transparentBkgnd
+                << "(CLR_NONE=0xFFFFFFFF means no explicit color set; "
+                    "transparentBkgnd=false + a real bkColor would mean this ListView paints "
+                    "its own opaque background, which sits directly above our window)";
+    } else {
+        qInfo() << "[Hierarchy]" << context << "Could not locate the desktop SysListView32 for the background probe.";
+    }
+
+    // Any other top-level window that plausibly participates in desktop
+    // rendering - anything covering a desktop-sized area, or owned by
+    // Explorer's PID, or belonging to our own process (should be exactly
+    // our wallpaper HWND(s), now popup-turned-child so this normally finds
+    // nothing extra - listed for completeness in case reparenting is in an
+    // unexpected state). Also specifically flags any class name containing
+    // "Wallpaper", "Xaml", "Composition", or "Desktop", in case this
+    // Windows build renders the backdrop through a distinct top-level
+    // surface neither Progman nor WorkerW.
+    DWORD explorerPid = 0;
+    if (progman) {
+        GetWindowThreadProcessId(progman, &explorerPid);
+    }
+    struct EnumCtx {
+        const char* context;
+        DWORD explorerPid;
+        DWORD ownPid;
+    };
+    EnumCtx ctx{context, explorerPid, GetCurrentProcessId()};
+    EnumWindows(
+        [](HWND hwnd, LPARAM lParam) -> BOOL {
+            auto* c = reinterpret_cast<EnumCtx*>(lParam);
+            wchar_t className[256] = {};
+            GetClassNameW(hwnd, className, 256);
+            QString cls = QString::fromWCharArray(className);
+            DWORD pid = 0;
+            GetWindowThreadProcessId(hwnd, &pid);
+            const bool interestingClass = cls.contains("Wallpaper", Qt::CaseInsensitive) ||
+                                           cls.contains("Xaml", Qt::CaseInsensitive) ||
+                                           cls.contains("Composition", Qt::CaseInsensitive) ||
+                                           cls.contains("Desktop", Qt::CaseInsensitive) ||
+                                           cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd";
+            const bool isOwnProcess = (pid == c->ownPid);
+            if (!interestingClass && !isOwnProcess) {
+                return TRUE;
+            }
+            if (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd") {
+                return TRUE; // already logged above individually
+            }
+            RECT r{};
+            GetWindowRect(hwnd, &r);
+            const bool deskSized = (r.right - r.left) > 500 && (r.bottom - r.top) > 300;
+            QString label = QString("top-level%1%2").arg(isOwnProcess ? " OURS" : "")
+                                 .arg(deskSized ? " DESKTOP-SIZED" : "");
+            LogWindowDetail(c->context, label.toUtf8().constData(), hwnd);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&ctx));
+
+    if (wallpaperHwnd) {
+        LogWindowDetail(context, "OUR wallpaperHwnd", wallpaperHwnd);
+        HWND parent = GetParent(wallpaperHwnd);
+        HWND prev = GetWindow(wallpaperHwnd, GW_HWNDPREV);
+        HWND next = GetWindow(wallpaperHwnd, GW_HWNDNEXT);
+        qInfo() << "[Hierarchy]" << context << "OUR wallpaperHwnd z-order neighbors: prev(above)="
+                << reinterpret_cast<quintptr>(prev) << "next(below)=" << reinterpret_cast<quintptr>(next)
+                << "(GW_HWNDPREV is the sibling ABOVE us in z-order, GW_HWNDNEXT is BELOW)";
+        LogWindowDetail(context, "sibling ABOVE ours (GW_HWNDPREV)", prev);
+        LogWindowDetail(context, "sibling BELOW ours (GW_HWNDNEXT)", next);
+        Q_UNUSED(parent);
+    }
+
+    qInfo() << "[Hierarchy]" << context << "=== full desktop hierarchy dump end ===";
 }
 
 RECT WindowsDesktopWallpaper::GetVirtualDesktopRect() {

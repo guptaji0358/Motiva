@@ -11,6 +11,7 @@
 #include "VideoPlayer.h"
 #include "WallpaperWindow.h"
 #include "WindowsDesktopWallpaper.h"
+#include "RecoveryState.h"
 
 enum class MonitorSelection {
     All,
@@ -54,6 +55,20 @@ public:
     std::vector<MonitorInfoData> availableMonitors() const;
 
     VideoPlayer* player() { return m_player.get(); }
+
+    // Not owned; may be null (diagnostics-only, never load-bearing for
+    // lifecycle decisions). Set once, before setWallpaper() is first
+    // called.
+    void setRecoveryState(RecoveryState* state) { m_recoveryState = state; }
+
+    // Called when a second launch attempt asked this instance to recover
+    // (see InstanceIpc): if no wallpaper is configured yet, nothing to do
+    // here (MainWindow handles the "attach for the first time" case). If
+    // one is active, re-drives the same attach+verify pipeline used for
+    // Explorer-restart recovery (idempotent/single-flight - see
+    // attachAllWindows()) rather than assuming the running instance is
+    // already healthy.
+    void recoverOrActivate();
 
     // QAbstractNativeEventFilter
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
@@ -145,4 +160,10 @@ private:
     MonitorSelection m_monitorSelection = MonitorSelection::All;
     int m_specificMonitorIndex = -1;
     bool m_userPaused = false;
+
+    RecoveryState* m_recoveryState = nullptr;
+    // Explorer's PID as of the last restart this instance observed (0 until
+    // the first restart) - purely diagnostic, logged alongside the new PID
+    // on each subsequent restart (see onExplorerRestarted).
+    DWORD m_lastKnownExplorerPid = 0;
 };

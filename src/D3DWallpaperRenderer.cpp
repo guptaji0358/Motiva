@@ -1,4 +1,5 @@
 #include "D3DWallpaperRenderer.h"
+#include "StartupDiagnostics.h"
 #include <QDebug>
 #include <d3dcompiler.h>
 
@@ -62,6 +63,7 @@ bool D3DWallpaperRenderer::initialize(int width, int height) {
     if (m_initialized) {
         return true;
     }
+    StartupDiagnostics::instance().mark("rendererInitStart");
     if (width <= 0 || height <= 0) {
         qWarning() << "[D3DWallpaperRenderer] initialize: invalid size" << width << height;
         return false;
@@ -77,8 +79,17 @@ bool D3DWallpaperRenderer::initialize(int width, int height) {
     }
 
     m_initialized = true;
+    StartupDiagnostics::instance().mark("dcompReady");
+    StartupDiagnostics::instance().mark("d3dRendererReady");
     qInfo() << "[D3DWallpaperRenderer] initialized successfully at" << width << "x" << height;
     return true;
+}
+
+bool D3DWallpaperRenderer::hasValidDevice() const {
+    if (!m_device || !m_swapChain) {
+        return false;
+    }
+    return m_device->GetDeviceRemovedReason() == S_OK;
 }
 
 bool D3DWallpaperRenderer::createDeviceAndSwapChain(int width, int height) {
@@ -411,6 +422,7 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
     if (!m_initialized || !frame || frame->isNull()) {
         return;
     }
+    StartupDiagnostics::instance().mark("firstFrameSubmitted");
 
     updateSourceTexture(*frame);
     if (!m_sourceSrv) {
@@ -457,7 +469,9 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
         qWarning() << "[D3DWallpaperRenderer] Present failed, hr=0x" << Qt::hex << (unsigned)hr;
         return;
     }
-    presentedFrameCount.fetch_add(1, std::memory_order_relaxed);
+    if (presentedFrameCount.fetch_add(1, std::memory_order_relaxed) == 0) {
+        StartupDiagnostics::instance().mark("firstFramePresented");
+    }
 }
 
 void D3DWallpaperRenderer::rebindToWindow(HWND newHwnd) {

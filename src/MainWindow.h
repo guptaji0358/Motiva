@@ -11,6 +11,8 @@
 #include <memory>
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
+#include "RecoveryState.h"
+#include "InstanceIpc.h"
 
 class QVideoWidget;
 
@@ -38,6 +40,7 @@ private slots:
     void onTrayActivated(QSystemTrayIcon::ActivationReason reason);
     void onPreviewFrameReady();
     void onExitRequested();
+    void recoverOrActivate();
 
 private:
     void buildUi();
@@ -49,6 +52,8 @@ private:
 
     std::unique_ptr<WallpaperManager> m_manager;
     SettingsManager m_settings;
+    RecoveryState m_recoveryState;
+    InstanceIpc m_ipc;
 
     QString m_selectedVideoPath;
 
