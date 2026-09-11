@@ -52,7 +52,7 @@ set(ENTRY_POINT_SOURCES
     scripts/main/main.cpp
 )
 
-qt_add_executable(Motiva WIN32 ${ENTRY_POINT_SOURCES} ${IMPLEMENTATION_SOURCES} resources/app.rc)
+qt_add_executable(Motiva WIN32 ${ENTRY_POINT_SOURCES} ${IMPLEMENTATION_SOURCES} resources/app.rc resources/app.qrc)
 
 target_link_libraries(Motiva PRIVATE
     Qt6::Widgets

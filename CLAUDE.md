@@ -2,6 +2,72 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-09-12c, Assets folder + real app icon)
+
+`Assets/{icons,images,gifs}/` created at the project root (updates the
+"Assets folder" entry below from "created empty" to populated). A full
+inspection first confirmed there were genuinely zero existing visual
+assets anywhere (no `.png`/`.jpg`/`.gif`/`.svg`/`.ico`, no `.qrc`, nothing
+embedded in source) - the only prior icon usage was
+`style()->standardIcon(QStyle::SP_MediaPlay)`, an OS fallback.
+
+**Real app icon created and wired in** (closing that long-standing
+"Planned work" gap): a simple rounded-square icon (dark surface + the same
+green accent used for the "Active" status text) generated programmatically
+via a PowerShell/System.Drawing script at 16/24/32/48/64/128/256px, packed
+into `Assets/icons/motiva.ico` (a hand-built multi-resolution ICO
+container - `.NET`'s `Icon` class confirmed it loads correctly), plus
+`Assets/images/motiva_logo.png` (256px copy, for future branding use).
+
+Wired in two ways:
+- `resources/app.rc` — `1 ICON "../Assets/icons/motiva.ico"`: this is what
+  gives `Motiva.exe` itself a real icon in Explorer/taskbar/Alt-Tab
+  (verified: extracted the running exe's associated icon via
+  `System.Drawing.Icon.ExtractAssociatedIcon` and visually confirmed it's
+  the new icon, not a blank/default one).
+- `resources/app.qrc` (new) embeds the same `.ico` into the binary via
+  Qt's resource system as `:/icons/motiva.ico` - loaded at runtime by
+  `MainWindow::MainWindow` (`setWindowIcon`), `MainWindow::buildTray`
+  (replaces the `QStyle::SP_MediaPlay` fallback), and `main()`
+  (`QApplication::setWindowIcon`, so any icon-less dialog still shows it).
+  Chosen over a relative filesystem path specifically so the icon still
+  loads regardless of the process's working directory.
+
+**A real, unrelated environment issue hit and diagnosed while rebuilding**:
+after adding the `ICON`/`.qrc` resource lines, `windres`'s RC compile
+started failing with an opaque `preprocessing failed` (its internal `gcc
+-E` preprocessing step, `cc1.exe`, produced zero output / exited 1 with
+no stderr). Bisected down to: reproducible even on the ORIGINAL,
+unmodified `app.rc` when invoked with the build directory as the working
+directory (which is how CMake/Ninja always invokes it) - i.e. unrelated
+to this session's actual content changes. Root cause: `rm -rf build`
+itself failed with `Device or resource busy` at the same time, and
+`OneDrive.exe`/`OneDrive.Sync.Service.exe` were confirmed running and
+actively syncing this project folder - this whole repo lives under
+`OneDrive\Desktop\...`, and OneDrive's cloud-sync filter driver
+intermittently locking newly-created build files is a well-known cause of
+exactly this kind of silent child-process failure. Resolved itself once
+the lock cleared (a `rm -rf build` + fresh `cmake -S/-B` succeeded
+immediately after). **Worth knowing for future sessions**: if a build
+fails with an unexplained silent tool crash (especially RC/windres, or
+any step that creates many small files quickly) and nothing about the
+source changed, suspect OneDrive sync contention on `build/` before
+assuming a real code/config bug - retry, or `rm -rf build` and
+reconfigure, before spending time bisecting source changes.
+
+**Verified this session**: clean rebuild after the OneDrive contention
+cleared (all 17 build steps succeeded, RC object included); app launches
+normally, log shows the same startup sequence as before (no attach,
+`RefreshDesktopBackground` nudge fires) - the Assets/icon work didn't
+regress any prior lifecycle fix; the built `Motiva.exe`'s own Explorer
+icon was extracted and visually confirmed to be the new icon.
+
+**Not verified this session**: the in-app window titlebar icon and tray
+icon visually (`setWindowIcon`/`QSystemTrayIcon::setIcon` calls are
+present and use the same verified-loadable `.ico` resource, but this tool
+session cannot see the live interactive desktop to confirm the rendered
+result - same limitation noted throughout this file's history).
+
 ## Current status (2026-09-12b, "Set as wallpaper" interference - live/runtime case)
 
 Follow-up to the 2026-09-12 entry below: user clarified the report was
@@ -911,6 +977,19 @@ dumping `GetWindowRect`/`GetClientRect`/`IsWindowVisible`/`GetParent` around
 tool session cannot see the interactive desktop directly (`FindWindow`
 returns null from this shell's session), so screenshots from the user are
 the only way to visually verify rendering.
+
+## Assets folder (2026-09-12, created empty)
+
+`Assets/{icons,images,gifs}/` exists at the project root for all future
+visual/branding resources. As of creation, a full inspection found **zero
+existing visual assets anywhere in the project** - no `.png`/`.jpg`/`.gif`/
+`.svg`/`.ico` files, no `.qrc`, nothing embedded in source - so nothing was
+migrated. The only icon usage today is `style()->standardIcon(
+QStyle::SP_MediaPlay)` for the tray icon in `MainWindow.cpp` (an OS-
+provided Qt fallback, not a project file) - a real app icon is still the
+open "Planned work" follow-up noted below. Each subfolder currently holds
+only a `.gitkeep` placeholder. Not yet wired into CMake/`.qrc` - do that
+once real assets actually land here.
 
 ## Source layout (2026-09-12 reorganization)
 

@@ -11,14 +11,19 @@
 #include <QMessageBox>
 #include <QCloseEvent>
 #include <QFileInfo>
-#include <QStyle>
 #include <QStandardPaths>
 #include <QDir>
 #include <QPixmap>
 #include <QFont>
 #include <QSizePolicy>
+#include <QIcon>
 
 namespace {
+// Embedded via resources/app.qrc (Assets/icons/motiva.ico) - loading via
+// the Qt resource path keeps this independent of the process's working
+// directory, unlike a relative filesystem path.
+constexpr const char* kAppIconResourcePath = ":/icons/motiva.ico";
+
 // This app has no app-level light/dark theme toggle of its own (see
 // CLAUDE.md) - it simply follows the OS window palette everywhere except
 // these few intentional accents. Medium-saturation tones were chosen so
@@ -41,6 +46,7 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
     qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
     setWindowTitle("Motiva");
+    setWindowIcon(QIcon(kAppIconResourcePath));
     resize(560, 680);
     setMinimumSize(420, 480);
 
@@ -219,7 +225,7 @@ void MainWindow::buildUi() {
 
 void MainWindow::buildTray() {
     m_tray = new QSystemTrayIcon(this);
-    m_tray->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+    m_tray->setIcon(QIcon(kAppIconResourcePath));
     m_tray->setToolTip(tr("Motiva"));
 
     auto* menu = new QMenu();

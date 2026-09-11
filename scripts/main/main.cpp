@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QSystemTrayIcon>
 #include <QMessageBox>
+#include <QIcon>
 #include <QFile>
 #include <QTextStream>
 #include <QStandardPaths>
@@ -73,6 +74,11 @@ int main(int argc, char* argv[]) {
     app.setApplicationName("Motiva");
     app.setOrganizationName("Motiva");
     app.setQuitOnLastWindowClosed(false);
+    // Process-wide default so dialogs without an explicit icon (e.g. the
+    // "no system tray" QMessageBox below) still show Motiva's own icon
+    // rather than a generic one. MainWindow/its tray icon set the same
+    // resource explicitly too - see MainWindow.cpp's kAppIconResourcePath.
+    app.setWindowIcon(QIcon(":/icons/motiva.ico"));
 
     // Two instances would each attach their own competing render window to
     // the desktop (fighting over z-order every health-check tick), so only

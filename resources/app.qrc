@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="icons/motiva.ico">../Assets/icons/motiva.ico</file>
+    </qresource>
+</RCC>
