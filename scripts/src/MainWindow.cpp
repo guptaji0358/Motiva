@@ -31,6 +31,9 @@
 #include <QDialog>
 #include <QLineEdit>
 #include <QDialogButtonBox>
+#include <QMediaFormat>
+#include <QMimeType>
+#include <QSet>
 
 namespace {
 // Embedded via resources/app.qrc - loading via the Qt resource path keeps
@@ -83,13 +86,71 @@ const QString kPreviewSurfaceStyle = QStringLiteral(
     .arg(Theme::kRadiusMedium)
     .arg(Theme::kPreviewText);
 
-// Matches the existing Open Video dialog's own filter ("MP4 Video
-// (*.mp4)") - drag & drop deliberately doesn't accept a broader set than
-// what's already exposed through that dialog, even though the underlying
-// FFmpeg backend can technically decode more. Extend both together if
-// that scope ever changes.
+// Derived from the actual installed Qt Multimedia backend's own reported
+// decode capability (QMediaFormat::supportedFileFormats), NOT a hardcoded
+// guess list - see the "Expand Motiva Media File Support" task. Filtered
+// to the video-container formats only (the enum also lists audio-only
+// containers like MP3/AAC/WAV, which aren't relevant here). Computed once
+// and cached: the installed backend doesn't change at runtime, and this
+// is called from hot paths (drag-over, every dropped file).
+const QSet<QString>& supportedVideoContainerExtensions() {
+    static const QSet<QString> cached = [] {
+        QSet<QString> exts;
+        QMediaFormat probe;
+        const QList<QMediaFormat::FileFormat> formats = probe.supportedFileFormats(QMediaFormat::Decode);
+        for (QMediaFormat::FileFormat format : formats) {
+            switch (format) {
+            case QMediaFormat::WMV:
+            case QMediaFormat::AVI:
+            case QMediaFormat::Matroska:
+            case QMediaFormat::MPEG4:
+            case QMediaFormat::Ogg:
+            case QMediaFormat::QuickTime:
+            case QMediaFormat::WebM:
+                break;
+            default:
+                continue; // audio-only container (MP3/AAC/FLAC/WAV/...) - not a video format.
+            }
+            QMediaFormat mf(format);
+#if QT_CONFIG(mimetype)
+            for (const QString& suffix : mf.mimeType().suffixes()) {
+                exts.insert(suffix.toLower());
+            }
+#endif
+        }
+        // Defensive fallback only - every backend build tested so far
+        // already reports mp4 via QMediaFormat::MPEG4's mime type, but if
+        // some future/stripped backend build ever reported zero decodable
+        // formats, this must not silently regress to "nothing works".
+        if (exts.isEmpty()) {
+            exts.insert(QStringLiteral("mp4"));
+        }
+        return exts;
+    }();
+    return cached;
+}
+
+// A GIF is never routed through QMediaFormat/QMediaPlayer (Qt Multimedia
+// doesn't treat it as a video container) - it's handled as an animated
+// image via QMovie instead (see VideoPlayer::loadFile). Kept as its own
+// explicit, named predicate rather than folded into the video-extension
+// set, since the two paths behave differently wherever that distinction
+// matters (e.g. web video URLs - see isWebVideoUrl - deliberately do NOT
+// accept .gif; GIF support here is local-file-only, no new networking/
+// download code was added for it).
+bool isGifExtension(const QString& fileNameOrPath) {
+    return QFileInfo(fileNameOrPath).suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) == 0;
+}
+
 bool hasSupportedVideoExtension(const QString& fileNameOrPath) {
-    return fileNameOrPath.endsWith(QLatin1String(".mp4"), Qt::CaseInsensitive);
+    return supportedVideoContainerExtensions().contains(QFileInfo(fileNameOrPath).suffix().toLower());
+}
+
+// Local files only: any backend-decodable video container OR a GIF. Used
+// wherever a LOCAL file's usability is being decided (drag & drop, Open
+// Video) - see isWebVideoUrl for the (deliberately narrower) URL case.
+bool isSupportedLocalMediaFile(const QString& path) {
+    return hasSupportedVideoExtension(path) || isGifExtension(path);
 }
 
 // Split out from isWebVideoUrl() so the Paste Video URL dialog can tell
@@ -312,7 +373,7 @@ void MainWindow::buildUi() {
     dropTitleLabel->setFont(dropTitleFont);
     dropTitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewTextStrong));
     dropZoneLayout->addWidget(dropTitleLabel);
-    auto* dropSubtitleLabel = new QLabel(tr("Local MP4 files"), dropZoneWrapper);
+    auto* dropSubtitleLabel = new QLabel(tr("Local video or GIF files"), dropZoneWrapper);
     dropSubtitleLabel->setAlignment(Qt::AlignCenter);
     dropSubtitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewText));
     dropZoneLayout->addWidget(dropSubtitleLabel);
@@ -572,7 +633,21 @@ void MainWindow::updatePrimaryButtonUi() {
 }
 
 void MainWindow::onChooseVideo() {
-    QString path = QFileDialog::getOpenFileName(this, tr("Open Video"), QString(), tr("MP4 Video (*.mp4)"));
+    // Built from the same backend-reported extension set drag & drop uses
+    // (supportedVideoContainerExtensions), plus GIF - never a hardcoded
+    // "*.mp4"-only filter. "All Files" is offered too since the actual
+    // backend decode attempt (VideoPlayer::loadFile, surfaced via
+    // onWallpaperError) is still the real source of truth on whether a
+    // selected file plays - this filter is a convenience, not a hard gate.
+    QStringList patterns;
+    for (const QString& ext : supportedVideoContainerExtensions()) {
+        patterns << QStringLiteral("*.%1").arg(ext);
+    }
+    patterns << QStringLiteral("*.gif");
+    patterns.sort(Qt::CaseInsensitive);
+    const QString filter = tr("Supported Video Files (%1);;All Files (*)").arg(patterns.join(QLatin1Char(' ')));
+
+    QString path = QFileDialog::getOpenFileName(this, tr("Open Video"), QString(), filter);
     if (path.isEmpty()) {
         return;
     }
@@ -670,7 +745,16 @@ bool MainWindow::isUsableVideoSource(const QString& source) {
     if (isWebVideoUrl(asUrl)) {
         return true;
     }
-    return QFileInfo::exists(source);
+    // Previously just QFileInfo::exists(source) with no extension check
+    // at all - harmless while only .mp4 could ever reach here (the only
+    // ways in were the .mp4-filtered Open Video dialog and .mp4-gated
+    // drag & drop), but a real gap once more formats were accepted:
+    // Qt Multimedia's FFmpeg backend will happily decode a single PNG/JPG
+    // as a degenerate one-frame "video" if asked (confirmed by testing) -
+    // this is what actually keeps a rejected image type rejected even via
+    // this path (startup restore / second-instance IPC recovery), not
+    // just the file-picker/drag-drop entry points.
+    return QFileInfo::exists(source) && isSupportedLocalMediaFile(source);
 }
 
 void MainWindow::loadVideoSource(const QString& source) {
@@ -722,7 +806,7 @@ QString MainWindow::extractDroppedVideoSource(const QMimeData* mimeData, int* ex
             QString candidate;
             if (url.isLocalFile()) {
                 const QString localPath = url.toLocalFile();
-                if (QFileInfo::exists(localPath) && hasSupportedVideoExtension(localPath)) {
+                if (QFileInfo::exists(localPath) && isSupportedLocalMediaFile(localPath)) {
                     candidate = localPath;
                 }
             } else if (isWebVideoUrl(url)) {
@@ -962,21 +1046,30 @@ void MainWindow::onWallpaperVerified() {
 }
 
 void MainWindow::onPreviewFrameReady() {
-    // Only bother painting the preview while the window is actually
-    // visible (main window shown, not minimized to tray) - the decode
-    // pipeline itself keeps running regardless since it's shared with the
-    // desktop wallpaper.
-    if (!isVisible() || !m_previewLabel) {
-        return;
-    }
     auto frame = m_manager->player()->currentFrame();
     if (!frame || frame->isNull()) {
+        return;
+    }
+    // The pixmap scale+paint is the real per-frame cost, worth skipping
+    // while the window isn't actually visible (main window shown, not
+    // minimized to tray) - the decode pipeline itself keeps running
+    // regardless since it's shared with the desktop wallpaper. Updating
+    // the (cheap) info labels is NOT gated on this: a single-frame
+    // source (a static GIF - see VideoPlayer's QMovie path) only ever
+    // fires this once, and main.cpp calls window.show() only AFTER
+    // MainWindow's constructor (which starts loading any previously-
+    // selected source) returns - gating this on isVisible() meant a
+    // static image whose one frame decoded during that window could
+    // permanently lose its only chance to populate the resolution/format
+    // details text, with no later frame ever coming to self-heal it the
+    // way video/animated-GIF playback does.
+    applyVideoInfoUi();
+    if (!isVisible() || !m_previewLabel) {
         return;
     }
     QPixmap pixmap = QPixmap::fromImage(*frame).scaled(
         m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
     m_previewLabel->setPixmap(pixmap);
-    applyVideoInfoUi();
 }
 
 void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
