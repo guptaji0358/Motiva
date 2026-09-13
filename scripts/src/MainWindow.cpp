@@ -42,13 +42,24 @@ namespace {
 constexpr const char* kAppIconResourcePath = ":/application/motiva.ico";
 constexpr const char* kSettingsIconResourcePath = ":/settings-icon/settings.svg";
 constexpr const char* kOpenVideoIconResourcePath = ":/video/open-video.svg";
+constexpr const char* kOpenVideoIconHoverPath = ":/video/open-video-hover.svg";
+constexpr const char* kOpenVideoIconPressedPath = ":/video/open-video-pressed.svg";
 constexpr const char* kLinkIconResourcePath = ":/video/link.svg";
+constexpr const char* kLinkIconHoverPath = ":/video/link-hover.svg";
+constexpr const char* kLinkIconPressedPath = ":/video/link-pressed.svg";
 constexpr const char* kPlayIconResourcePath = ":/playback/play.svg";
+constexpr const char* kPlayIconHoverPath = ":/playback/play-hover.svg";
 constexpr const char* kPauseIconResourcePath = ":/playback/pause.svg";
+constexpr const char* kPauseIconHoverPath = ":/playback/pause-hover.svg";
 constexpr const char* kVolumeIconResourcePath = ":/playback/volume.svg";
 constexpr const char* kVolumeMuteIconResourcePath = ":/playback/volume-mute.svg";
 constexpr const char* kSetWallpaperIconResourcePath = ":/wallpaper/set-wallpaper.svg";
+constexpr const char* kSetWallpaperIconHoverPath = ":/wallpaper/set-wallpaper-hover.svg";
+constexpr const char* kSetWallpaperIconPressedPath = ":/wallpaper/set-wallpaper-pressed.svg";
+constexpr const char* kSetWallpaperIconDisabledPath = ":/wallpaper/set-wallpaper-disabled.svg";
 constexpr const char* kRemoveWallpaperIconResourcePath = ":/wallpaper/remove-wallpaper.svg";
+constexpr const char* kRemoveWallpaperIconHoverPath = ":/wallpaper/remove-wallpaper-hover.svg";
+constexpr const char* kRemoveWallpaperIconPressedPath = ":/wallpaper/remove-wallpaper-pressed.svg";
 
 // This app has no app-level light/dark theme toggle of its own (see
 // CLAUDE.md) - it simply follows the OS window palette everywhere except
@@ -154,6 +165,21 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     connect(m_manager.get(), &WallpaperManager::wallpaperVerified, this, &MainWindow::onWallpaperVerified);
     connect(m_manager.get(), &WallpaperManager::wallpaperRemoved, this, [this] {
         setUiState(m_selectedVideoPath.isEmpty() ? WallpaperUiState::NoVideo : WallpaperUiState::Ready);
+        // Single source of truth for clearing this persisted flag,
+        // covering every path that can end our wallpaper - the explicit
+        // Remove Wallpaper button, Exit, AND WallpaperManager stepping
+        // aside on its own after detecting the user changed Windows' own
+        // wallpaper externally (see WallpaperManager::
+        // onPossibleExternalWallpaperChange). That last path previously
+        // bypassed this entirely (only onRemoveWallpaper()/
+        // onExitRequested() cleared it), leaving wasWallpaperActive
+        // stuck true after an external wallpaper change even though our
+        // video wallpaper was genuinely no longer active - stale
+        // persisted state, exactly what section 12 of the "Icon States +
+        // Wallpaper Ownership Fix" task warned against reintroducing.
+        // Harmless to also still clear it at the other two call sites -
+        // this setter is idempotent.
+        m_settings.setWasWallpaperActive(false);
     });
     connect(m_manager->player(), &VideoPlayer::frameReady, this, &MainWindow::onPreviewFrameReady);
 
@@ -308,8 +334,10 @@ void MainWindow::buildUi() {
     // so this button gets its own light-on-dark styling rather than the
     // app-wide light-surface QPushButton rule, which would be illegible
     // here regardless of the OS theme.
-    m_pasteLinkButton = new QPushButton(QIcon(kLinkIconResourcePath), tr("Paste Video URL"), dropZoneWrapper);
+    m_pasteLinkButton = new IconButton(QIcon(kLinkIconResourcePath), tr("Paste Video URL"), dropZoneWrapper);
     m_pasteLinkButton->setObjectName(QStringLiteral("pasteLinkButton"));
+    m_pasteLinkButton->setStateIcon(
+        QIcon(kLinkIconResourcePath), QIcon(kLinkIconHoverPath), QIcon(kLinkIconPressedPath));
     m_pasteLinkButton->setStyleSheet(QStringLiteral(
         "QPushButton#pasteLinkButton {"
         "  background: rgba(255,255,255,0.06); color: %1;"
@@ -340,12 +368,15 @@ void MainWindow::buildUi() {
     infoTextLayout->addWidget(m_fileDetailsLabel);
     infoRow->addLayout(infoTextLayout, /*stretch=*/1);
 
-    m_playPauseButton = new QPushButton(QIcon(kPlayIconResourcePath), tr("Play"), central);
+    m_playPauseButton = new IconButton(QIcon(kPlayIconResourcePath), tr("Play"), central);
+    m_playPauseButton->setStateIcon(QIcon(kPlayIconResourcePath), QIcon(kPlayIconHoverPath));
     m_playPauseButton->setToolTip(tr("Play or pause the preview"));
     connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::onPlayPause);
     infoRow->addWidget(m_playPauseButton);
 
-    m_openVideoButton = new QPushButton(QIcon(kOpenVideoIconResourcePath), tr("Open Video"), central);
+    m_openVideoButton = new IconButton(QIcon(kOpenVideoIconResourcePath), tr("Open Video"), central);
+    m_openVideoButton->setStateIcon(
+        QIcon(kOpenVideoIconResourcePath), QIcon(kOpenVideoIconHoverPath), QIcon(kOpenVideoIconPressedPath));
     connect(m_openVideoButton, &QPushButton::clicked, this, &MainWindow::onChooseVideo);
     infoRow->addWidget(m_openVideoButton);
 
@@ -360,7 +391,8 @@ void MainWindow::buildUi() {
     // styling (Theme::appStyleSheet's QPushButton#primaryButton rules) -
     // the one clearly primary action, every other button on this window
     // stays the default secondary button style.
-    m_primaryButton = new QPushButton(tr("Set as Wallpaper"), central);
+    m_primaryButton = new IconButton(central);
+    m_primaryButton->setText(tr("Set as Wallpaper"));
     m_primaryButton->setObjectName(QStringLiteral("primaryButton"));
     m_primaryButton->setMinimumHeight(42);
     m_primaryButton->setDefault(true);
@@ -503,20 +535,26 @@ void MainWindow::updateStatusUi() {
 }
 
 void MainWindow::updatePrimaryButtonUi() {
+    // setStateIcon() (not a plain setIcon()) so hover/pressed/disabled
+    // each keep showing their own dedicated artwork for whichever action
+    // (set vs. remove) is current - see IconButton.h.
     switch (m_uiState) {
     case WallpaperUiState::NoVideo:
-        m_primaryButton->setIcon(QIcon(kSetWallpaperIconResourcePath));
+        m_primaryButton->setStateIcon(QIcon(kSetWallpaperIconResourcePath), QIcon(kSetWallpaperIconHoverPath),
+            QIcon(kSetWallpaperIconPressedPath), QIcon(kSetWallpaperIconDisabledPath));
         m_primaryButton->setText(tr("Set as Wallpaper"));
         m_primaryButton->setEnabled(false);
         break;
     case WallpaperUiState::Ready:
     case WallpaperUiState::Error:
-        m_primaryButton->setIcon(QIcon(kSetWallpaperIconResourcePath));
+        m_primaryButton->setStateIcon(QIcon(kSetWallpaperIconResourcePath), QIcon(kSetWallpaperIconHoverPath),
+            QIcon(kSetWallpaperIconPressedPath), QIcon(kSetWallpaperIconDisabledPath));
         m_primaryButton->setText(tr("Set as Wallpaper"));
         m_primaryButton->setEnabled(true);
         break;
     case WallpaperUiState::Applying:
-        m_primaryButton->setIcon(QIcon(kSetWallpaperIconResourcePath));
+        m_primaryButton->setStateIcon(QIcon(kSetWallpaperIconResourcePath), QIcon(kSetWallpaperIconHoverPath),
+            QIcon(kSetWallpaperIconPressedPath), QIcon(kSetWallpaperIconDisabledPath));
         m_primaryButton->setText(tr("Applying…"));
         m_primaryButton->setEnabled(false);
         break;
@@ -524,7 +562,9 @@ void MainWindow::updatePrimaryButtonUi() {
         // Only one action makes sense once the wallpaper is genuinely
         // active - the button becomes "Remove Wallpaper" instead of
         // showing both actions as equally primary.
-        m_primaryButton->setIcon(QIcon(kRemoveWallpaperIconResourcePath));
+        m_primaryButton->setStateIcon(
+            QIcon(kRemoveWallpaperIconResourcePath), QIcon(kRemoveWallpaperIconHoverPath),
+            QIcon(kRemoveWallpaperIconPressedPath));
         m_primaryButton->setText(tr("Remove Wallpaper"));
         m_primaryButton->setEnabled(true);
         break;
@@ -896,7 +936,8 @@ void MainWindow::onPlayPause() {
 
 void MainWindow::updatePlayPauseLabel() {
     bool playing = m_manager->isPlaying();
-    m_playPauseButton->setIcon(QIcon(playing ? kPauseIconResourcePath : kPlayIconResourcePath));
+    m_playPauseButton->setStateIcon(QIcon(playing ? kPauseIconResourcePath : kPlayIconResourcePath),
+        QIcon(playing ? kPauseIconHoverPath : kPlayIconHoverPath));
     m_playPauseButton->setText(playing ? tr("Pause") : tr("Play"));
     m_trayPlayAction->setEnabled(!playing);
     m_trayPauseAction->setEnabled(playing);

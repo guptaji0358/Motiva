@@ -13,6 +13,7 @@
 #include "RecoveryState.h"
 #include "InstanceIpc.h"
 #include "DropZoneWidget.h"
+#include "IconButton.h"
 
 class QVideoWidget;
 class SettingsDialog;
@@ -135,10 +136,10 @@ private:
     QString m_lastVideoDetailsText;
     QLabel* m_statusLabel = nullptr;
     QToolButton* m_settingsButton = nullptr;
-    QPushButton* m_openVideoButton = nullptr;
-    QPushButton* m_pasteLinkButton = nullptr;
-    QPushButton* m_playPauseButton = nullptr;
-    QPushButton* m_primaryButton = nullptr;
+    IconButton* m_openVideoButton = nullptr;
+    IconButton* m_pasteLinkButton = nullptr;
+    IconButton* m_playPauseButton = nullptr;
+    IconButton* m_primaryButton = nullptr;
 
     QSystemTrayIcon* m_tray = nullptr;
     QAction* m_trayPlayAction = nullptr;

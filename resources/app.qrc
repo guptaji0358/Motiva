@@ -3,15 +3,26 @@
         <file alias="application/motiva.ico">../Assets/application/motiva.ico</file>
         <file alias="settings-icon/settings.svg">../Assets/settings-icon/settings.svg</file>
         <file alias="video/open-video.svg">../Assets/video/open-video.svg</file>
+        <file alias="video/open-video-hover.svg">../Assets/video/open-video-hover.svg</file>
+        <file alias="video/open-video-pressed.svg">../Assets/video/open-video-pressed.svg</file>
         <file alias="video/video-file.svg">../Assets/video/video-file.svg</file>
         <file alias="video/drop-arrow.svg">../Assets/video/drop-arrow.svg</file>
         <file alias="video/link.svg">../Assets/video/link.svg</file>
+        <file alias="video/link-hover.svg">../Assets/video/link-hover.svg</file>
+        <file alias="video/link-pressed.svg">../Assets/video/link-pressed.svg</file>
         <file alias="playback/play.svg">../Assets/playback/play.svg</file>
+        <file alias="playback/play-hover.svg">../Assets/playback/play-hover.svg</file>
         <file alias="playback/pause.svg">../Assets/playback/pause.svg</file>
+        <file alias="playback/pause-hover.svg">../Assets/playback/pause-hover.svg</file>
         <file alias="playback/volume.svg">../Assets/playback/volume.svg</file>
         <file alias="playback/volume-mute.svg">../Assets/playback/volume-mute.svg</file>
         <file alias="wallpaper/set-wallpaper.svg">../Assets/wallpaper/set-wallpaper.svg</file>
+        <file alias="wallpaper/set-wallpaper-hover.svg">../Assets/wallpaper/set-wallpaper-hover.svg</file>
+        <file alias="wallpaper/set-wallpaper-pressed.svg">../Assets/wallpaper/set-wallpaper-pressed.svg</file>
+        <file alias="wallpaper/set-wallpaper-disabled.svg">../Assets/wallpaper/set-wallpaper-disabled.svg</file>
         <file alias="wallpaper/remove-wallpaper.svg">../Assets/wallpaper/remove-wallpaper.svg</file>
+        <file alias="wallpaper/remove-wallpaper-hover.svg">../Assets/wallpaper/remove-wallpaper-hover.svg</file>
+        <file alias="wallpaper/remove-wallpaper-pressed.svg">../Assets/wallpaper/remove-wallpaper-pressed.svg</file>
         <file alias="checkbox/check.svg">../Assets/checkbox/check.svg</file>
     </qresource>
 </RCC>

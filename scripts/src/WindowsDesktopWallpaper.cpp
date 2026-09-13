@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <mutex>
 #include <dwmapi.h>
+#include <shobjidl.h>
 
 namespace {
 
@@ -489,6 +490,59 @@ void WindowsDesktopWallpaper::DetachFromDesktop(HWND hwnd) {
 }
 
 std::wstring WindowsDesktopWallpaper::GetCurrentWallpaperPath() {
+    // Prefer the modern per-monitor wallpaper API (IDesktopWallpaper,
+    // available since Windows 8) over the legacy single-string
+    // SPI_GETDESKWALLPAPER below. Windows 11's own Settings app
+    // (Personalization > Background) and, on multi-monitor setups,
+    // Explorer's own "Set as desktop background" go through this COM API
+    // rather than the legacy SPI call - SPI_GETDESKWALLPAPER was found to
+    // not always reflect a wallpaper picked that way (stale or empty),
+    // which would have silently broken the external-change detection this
+    // function feeds (see WallpaperManager::onPossibleExternalWallpaperChange -
+    // "our video keeps covering the desktop after picking a new Windows
+    // wallpaper" traces back to exactly this: the baseline/current
+    // comparison never saw a difference because this function was reading
+    // the wrong source). Falls through to the legacy SPI call if COM is
+    // unavailable for any reason, which keeps this working exactly as
+    // before on any path where the modern API doesn't apply.
+    std::wstring comResult;
+    const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool weInitializedCom = (coInit == S_OK);
+    if (SUCCEEDED(coInit) || coInit == RPC_E_CHANGED_MODE) {
+        IDesktopWallpaper* wallpaper = nullptr;
+        // CLSID_DesktopWallpaper is hosted by an out-of-process COM
+        // surrogate ("Desktop Wallpaper Factory", confirmed via its
+        // registered AppID - RunAs=Interactive User) rather than an
+        // in-proc DLL: CLSCTX_INPROC_SERVER alone fails with
+        // REGDB_E_CLASSNOTREG (confirmed by testing) since no
+        // InprocServer32 key exists for this CLSID at all, only AppID +
+        // (implicitly) LocalServer32 activation. CLSCTX_LOCAL_SERVER is
+        // required.
+        if (SUCCEEDED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_LOCAL_SERVER,
+                                        IID_PPV_ARGS(&wallpaper))) && wallpaper) {
+            // Monitor 0 is enough here - this function's only job is
+            // detecting "the user changed their wallpaper at all", not
+            // managing per-monitor images (Motiva doesn't do that).
+            LPWSTR monitorId = nullptr;
+            if (SUCCEEDED(wallpaper->GetMonitorDevicePathAt(0, &monitorId)) && monitorId) {
+                LPWSTR path = nullptr;
+                if (SUCCEEDED(wallpaper->GetWallpaper(monitorId, &path)) && path) {
+                    comResult = path;
+                    CoTaskMemFree(path);
+                }
+                CoTaskMemFree(monitorId);
+            }
+            wallpaper->Release();
+        }
+    }
+    if (weInitializedCom) {
+        CoUninitialize();
+    }
+    if (!comResult.empty()) {
+        return comResult;
+    }
+
+    // Legacy fallback - what this function exclusively did before.
     wchar_t currentWallpaper[MAX_PATH] = {};
     if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, currentWallpaper, 0)) {
         qWarning() << "[Wallpaper] GetCurrentWallpaperPath: SPI_GETDESKWALLPAPER failed, GetLastError="

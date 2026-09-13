@@ -27,6 +27,8 @@ qt_standard_project_setup()
 set(IMPLEMENTATION_SOURCES
     scripts/src/Theme.cpp
     scripts/include/Theme.h
+    scripts/src/IconButton.cpp
+    scripts/include/IconButton.h
     scripts/src/MainWindow.cpp
     scripts/include/MainWindow.h
     scripts/src/DropZoneWidget.cpp
@@ -73,6 +75,7 @@ target_link_libraries(Motiva PRIVATE
     dxgi
     dcomp
     d3dcompiler
+    ole32
 )
 
 target_include_directories(Motiva PRIVATE scripts/include)
