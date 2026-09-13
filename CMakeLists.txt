@@ -25,6 +25,8 @@ qt_standard_project_setup()
 # are listed alongside their .cpp here (as before the move) purely so they
 # show up in IDE project trees; they compile via #include, not directly.
 set(IMPLEMENTATION_SOURCES
+    scripts/src/Theme.cpp
+    scripts/include/Theme.h
     scripts/src/MainWindow.cpp
     scripts/include/MainWindow.h
     scripts/src/DropZoneWidget.cpp

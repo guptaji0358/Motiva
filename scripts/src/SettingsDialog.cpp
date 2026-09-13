@@ -29,6 +29,7 @@ void SettingsDialog::buildUi() {
     root->setSpacing(14);
 
     auto* displaySection = new QLabel(tr("Display"));
+    displaySection->setObjectName(QStringLiteral("sectionLabel"));
     QFont sectionFont = displaySection->font();
     sectionFont.setBold(true);
     displaySection->setFont(sectionFont);
@@ -36,6 +37,7 @@ void SettingsDialog::buildUi() {
 
     auto* displayForm = new QFormLayout();
     displayForm->setSpacing(10);
+    displayForm->setContentsMargins(0, 4, 0, 0);
 
     m_scalingCombo = new QComboBox(this);
     m_scalingCombo->addItems({tr("Fill"), tr("Fit"), tr("Stretch"), tr("Original")});
@@ -52,10 +54,12 @@ void SettingsDialog::buildUi() {
     root->addLayout(displayForm);
 
     auto* playbackSection = new QLabel(tr("Playback"));
+    playbackSection->setObjectName(QStringLiteral("sectionLabel"));
     playbackSection->setFont(sectionFont);
     root->addWidget(playbackSection);
 
     auto* volLayout = new QHBoxLayout();
+    volLayout->setSpacing(10);
     volLayout->addWidget(new QLabel(tr("Volume:")));
     m_volumeSlider = new QSlider(Qt::Horizontal, this);
     m_volumeSlider->setRange(0, 100);
@@ -72,6 +76,7 @@ void SettingsDialog::buildUi() {
     root->addWidget(m_loopCheck);
 
     auto* generalSection = new QLabel(tr("General"));
+    generalSection->setObjectName(QStringLiteral("sectionLabel"));
     generalSection->setFont(sectionFont);
     root->addWidget(generalSection);
 

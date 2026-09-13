@@ -2,6 +2,7 @@
 #include "SettingsDialog.h"
 #include "StartupDiagnostics.h"
 #include "WindowsDesktopWallpaper.h"
+#include "Theme.h"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -52,19 +53,24 @@ constexpr const char* kRemoveWallpaperIconResourcePath = ":/wallpaper/remove-wal
 // This app has no app-level light/dark theme toggle of its own (see
 // CLAUDE.md) - it simply follows the OS window palette everywhere except
 // these few intentional accents. Medium-saturation tones were chosen so
-// they stay legible on both a light and a dark Windows palette; if a real
-// theme system is added later, these should become theme-aware tokens
-// instead of fixed hex values.
-constexpr const char* kStatusNeutralColor = "#808080";
-constexpr const char* kStatusWarningColor = "#c98a1a";
-constexpr const char* kStatusSuccessColor = "#2e9e4f";
-constexpr const char* kStatusErrorColor = "#d64545";
+// they stay legible on both a light and a dark Windows palette. These are
+// now sourced from Theme.h's centralized token set (see the "Motiva UI
+// Styling Pass") rather than being their own separate constants.
+constexpr const char* kStatusNeutralColor = Theme::kStatusNeutral;
+constexpr const char* kStatusWarningColor = Theme::kStatusWarning;
+constexpr const char* kStatusSuccessColor = Theme::kStatusSuccess;
+constexpr const char* kStatusErrorColor = Theme::kStatusError;
 
 // Fixed dark preview surface, independent of the OS theme - a live video
 // preview reads best against a neutral dark backdrop regardless of the
 // surrounding app theme, the same convention most media/player apps use.
-constexpr const char* kPreviewSurfaceStyle =
-    "background-color: #161616; border-radius: 6px; color: #8a8a8a;";
+// Also see Theme::kRadiusMedium, the same corner radius used for every
+// other panel/card-like surface in the app.
+const QString kPreviewSurfaceStyle = QStringLiteral(
+    "background-color: %1; border: 1px solid %2; border-radius: %3px; color: %4;")
+    .arg(Theme::kPreviewSurfaceBg, Theme::kPreviewSurfaceBorder)
+    .arg(Theme::kRadiusMedium)
+    .arg(Theme::kPreviewText);
 
 // Matches the existing Open Video dialog's own filter ("MP4 Video
 // (*.mp4)") - drag & drop deliberately doesn't accept a broader set than
@@ -220,15 +226,18 @@ void MainWindow::buildUi() {
 
     // --- Header: app name + settings entry point ---
     auto* header = new QHBoxLayout();
+    header->setSpacing(8);
     auto* titleLabel = new QLabel(tr("Motiva"), central);
+    titleLabel->setObjectName(QStringLiteral("appTitle"));
     QFont titleFont = titleLabel->font();
     titleFont.setBold(true);
-    titleFont.setPointSize(titleFont.pointSize() + 3);
+    titleFont.setPointSize(titleFont.pointSize() + 4);
     titleLabel->setFont(titleFont);
     header->addWidget(titleLabel);
     header->addStretch();
 
     m_settingsButton = new QToolButton(central);
+    m_settingsButton->setObjectName(QStringLiteral("settingsButton"));
     m_settingsButton->setIcon(QIcon(kSettingsIconResourcePath));
     m_settingsButton->setText(tr("Settings"));
     m_settingsButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
@@ -238,9 +247,13 @@ void MainWindow::buildUi() {
     header->addWidget(m_settingsButton);
     root->addLayout(header);
 
+    // A flat 1px rule (styled via Theme's QFrame#headerRule rule) instead
+    // of the platform's own 3D sunken groove - a single hairline separator
+    // reads as modern/native on Windows 11, a chiseled groove does not.
     auto* headerRule = new QFrame(central);
+    headerRule->setObjectName(QStringLiteral("headerRule"));
     headerRule->setFrameShape(QFrame::HLine);
-    headerRule->setFrameShadow(QFrame::Sunken);
+    headerRule->setFrameShadow(QFrame::Plain);
     root->addWidget(headerRule);
 
     // --- Video preview: the visual focus of the window ---
@@ -271,11 +284,11 @@ void MainWindow::buildUi() {
     QFont dropTitleFont = dropTitleLabel->font();
     dropTitleFont.setBold(true);
     dropTitleLabel->setFont(dropTitleFont);
-    dropTitleLabel->setStyleSheet(QStringLiteral("color: #c9c9c9;"));
+    dropTitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewTextStrong));
     dropZoneLayout->addWidget(dropTitleLabel);
     auto* dropSubtitleLabel = new QLabel(tr("Local MP4 files"), dropZoneWrapper);
     dropSubtitleLabel->setAlignment(Qt::AlignCenter);
-    dropSubtitleLabel->setStyleSheet(QStringLiteral("color: #8a8a8a;"));
+    dropSubtitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewText));
     dropZoneLayout->addWidget(dropSubtitleLabel);
 
     // Three clearly separate input methods, not one overloaded drop zone
@@ -288,10 +301,22 @@ void MainWindow::buildUi() {
     // way. Open Video (below the preview) remains the third, unchanged.
     auto* orLabel = new QLabel(QStringLiteral("— %1 —").arg(tr("OR")), dropZoneWrapper);
     orLabel->setAlignment(Qt::AlignCenter);
-    orLabel->setStyleSheet(QStringLiteral("color: #5a5a5a;"));
+    orLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewTextFaint));
     dropZoneLayout->addWidget(orLabel);
 
+    // On the fixed-dark preview surface (see kPreviewSurfaceStyle above),
+    // so this button gets its own light-on-dark styling rather than the
+    // app-wide light-surface QPushButton rule, which would be illegible
+    // here regardless of the OS theme.
     m_pasteLinkButton = new QPushButton(QIcon(kLinkIconResourcePath), tr("Paste Video URL"), dropZoneWrapper);
+    m_pasteLinkButton->setObjectName(QStringLiteral("pasteLinkButton"));
+    m_pasteLinkButton->setStyleSheet(QStringLiteral(
+        "QPushButton#pasteLinkButton {"
+        "  background: rgba(255,255,255,0.06); color: %1;"
+        "  border: 1px solid rgba(255,255,255,0.14); border-radius: %2px; padding: 6px 14px; }"
+        "QPushButton#pasteLinkButton:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.22); }"
+        "QPushButton#pasteLinkButton:pressed { background: rgba(255,255,255,0.04); }")
+        .arg(Theme::kPreviewTextStrong).arg(Theme::kRadiusSmall));
     m_pasteLinkButton->setToolTip(tr("Load a video from a direct URL (or press Ctrl+V anywhere in this window)"));
     connect(m_pasteLinkButton, &QPushButton::clicked, this, &MainWindow::onPasteVideoLink);
     dropZoneLayout->addWidget(m_pasteLinkButton, 0, Qt::AlignHCenter);
@@ -301,6 +326,7 @@ void MainWindow::buildUi() {
 
     // --- Video info + secondary actions ---
     auto* infoRow = new QHBoxLayout();
+    infoRow->setSpacing(8);
     auto* infoTextLayout = new QVBoxLayout();
     infoTextLayout->setSpacing(2);
     m_fileNameLabel = new QLabel(tr("No file selected"), central);
@@ -309,7 +335,7 @@ void MainWindow::buildUi() {
     m_fileNameLabel->setFont(fileFont);
     infoTextLayout->addWidget(m_fileNameLabel);
     m_fileDetailsLabel = new QLabel(central);
-    m_fileDetailsLabel->setStyleSheet("color: #808080;");
+    m_fileDetailsLabel->setObjectName(QStringLiteral("fileDetailsLabel"));
     m_fileDetailsLabel->setVisible(false);
     infoTextLayout->addWidget(m_fileDetailsLabel);
     infoRow->addLayout(infoTextLayout, /*stretch=*/1);
@@ -330,9 +356,13 @@ void MainWindow::buildUi() {
     root->addWidget(m_statusLabel);
 
     // --- Primary action: the one obvious next step ---
+    // objectName "primaryButton" is what gives this its distinct accent
+    // styling (Theme::appStyleSheet's QPushButton#primaryButton rules) -
+    // the one clearly primary action, every other button on this window
+    // stays the default secondary button style.
     m_primaryButton = new QPushButton(tr("Set as Wallpaper"), central);
-    m_primaryButton->setMinimumHeight(40);
-    m_primaryButton->setStyleSheet("font-weight: 600;");
+    m_primaryButton->setObjectName(QStringLiteral("primaryButton"));
+    m_primaryButton->setMinimumHeight(42);
     m_primaryButton->setDefault(true);
     connect(m_primaryButton, &QPushButton::clicked, this, &MainWindow::onPrimaryButtonClicked);
     root->addWidget(m_primaryButton);
@@ -469,7 +499,7 @@ void MainWindow::updateStatusUi() {
         break;
     }
     m_statusLabel->setText(QStringLiteral("●  ") + text);
-    m_statusLabel->setStyleSheet(QStringLiteral("color: %1; font-weight: 600;").arg(color));
+    m_statusLabel->setStyleSheet(QStringLiteral("color: %1; font-weight: 600; padding: 2px 0;").arg(color));
 }
 
 void MainWindow::updatePrimaryButtonUi() {
@@ -513,8 +543,13 @@ void MainWindow::onPasteVideoLink() {
     QDialog dialog(this);
     dialog.setWindowTitle(tr("Paste Video URL"));
     auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(10);
 
     auto* label = new QLabel(tr("Video URL"), &dialog);
+    QFont labelFont = label->font();
+    labelFont.setBold(true);
+    label->setFont(labelFont);
     layout->addWidget(label);
 
     auto* urlEdit = new QLineEdit(&dialog);

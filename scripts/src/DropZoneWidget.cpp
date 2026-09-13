@@ -1,4 +1,5 @@
 #include "DropZoneWidget.h"
+#include "Theme.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -9,15 +10,14 @@
 #include <cmath>
 
 namespace {
-// Same neutral/status color family already used elsewhere in MainWindow
-// (kStatusNeutralColor/kStatusSuccessColor/kStatusErrorColor) - reused
-// here rather than inventing a separate palette, and deliberately fixed
-// (not theme-derived): this widget only ever lives inside the preview
-// area's own fixed-dark surface (kPreviewSurfaceStyle), which is
-// intentionally theme-independent - see MainWindow.cpp's comment on it.
-constexpr const char* kIdleIconColor = "#8a8a8a";
-constexpr const char* kDragOverColor = "#3fae5c";
-constexpr const char* kInvalidColor = "#d64545";
+// Same accent/status color tokens used everywhere else in the app (see
+// Theme.h) - reused here rather than inventing a separate palette, and
+// deliberately fixed (not theme-derived): this widget only ever lives
+// inside the preview area's own fixed-dark surface (kPreviewSurfaceStyle
+// in MainWindow.cpp), which is intentionally theme-independent.
+constexpr const char* kIdleIconColor = Theme::kPreviewText;
+constexpr const char* kDragOverColor = Theme::kAccent;
+constexpr const char* kInvalidColor = Theme::kStatusError;
 constexpr const char* kIdleBorderColor = "#3a3a3a";
 
 QColor lerp(const QColor& a, const QColor& b, qreal t) {
@@ -142,7 +142,7 @@ void DropZoneWidget::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing);
 
     const QRectF bounds = rect().adjusted(1, 1, -1, -1);
-    constexpr qreal radius = 10.0;
+    const qreal radius = Theme::kRadiusMedium;
 
     const QColor idleColor(kIdleIconColor);
     const QColor dragColor(kDragOverColor);

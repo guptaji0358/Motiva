@@ -13,6 +13,7 @@
 #include "MainWindow.h"
 #include "StartupDiagnostics.h"
 #include "InstanceIpc.h"
+#include "Theme.h"
 
 namespace {
 
@@ -79,6 +80,10 @@ int main(int argc, char* argv[]) {
     // rather than a generic one. MainWindow/its tray icon set the same
     // resource explicitly too - see MainWindow.cpp's kAppIconResourcePath.
     app.setWindowIcon(QIcon(":/application/motiva.ico"));
+    // Single centralized stylesheet for the whole app (see Theme.h) -
+    // purely visual, applied once here rather than scattered per-widget
+    // setStyleSheet() calls throughout MainWindow/SettingsDialog.
+    app.setStyleSheet(Theme::appStyleSheet());
 
     // Two instances would each attach their own competing render window to
     // the desktop (fighting over z-order every health-check tick), so only

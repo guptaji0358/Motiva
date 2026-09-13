@@ -12,5 +12,6 @@
         <file alias="playback/volume-mute.svg">../Assets/playback/volume-mute.svg</file>
         <file alias="wallpaper/set-wallpaper.svg">../Assets/wallpaper/set-wallpaper.svg</file>
         <file alias="wallpaper/remove-wallpaper.svg">../Assets/wallpaper/remove-wallpaper.svg</file>
+        <file alias="checkbox/check.svg">../Assets/checkbox/check.svg</file>
     </qresource>
 </RCC>
