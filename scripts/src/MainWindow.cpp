@@ -242,6 +242,24 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
         // this setter is idempotent.
         m_settings.setWasWallpaperActive(false);
     });
+    connect(m_manager.get(), &WallpaperManager::wallpaperSuspendedForBattery, this, [this] {
+        m_batterySuspended = true;
+        // Reaches the Active UI state even when the wallpaper was NEVER
+        // actually attached (e.g. Set as Wallpaper clicked while already
+        // on battery with the setting off - see WallpaperManager::
+        // setWallpaper's shouldStartHidden path) - otherwise
+        // wallpaperVerified() would never fire (no attach was ever
+        // attempted, so its post-attach verification checkpoint is never
+        // reached) and the UI would stay stuck on "Applying wallpaper…"
+        // forever. m_batterySuspended is already true by the time this
+        // calls updateStatusUi() (via setUiState), so the Active branch's
+        // battery-text override applies immediately.
+        setUiState(WallpaperUiState::Active);
+    });
+    connect(m_manager.get(), &WallpaperManager::wallpaperResumedFromBattery, this, [this] {
+        m_batterySuspended = false;
+        updateStatusUi();
+    });
     connect(m_manager->player(), &VideoPlayer::frameReady, this, &MainWindow::onPreviewFrameReady);
 
     restoreSettingsToUi();
@@ -295,6 +313,13 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     // top-level widget in the process was hidden without ever having been
     // shown, since no native window existed yet to receive it.
     (void)winId();
+    // Registers for the AC/battery power-source notification on this
+    // now-guaranteed-to-exist HWND - see WallpaperManager::
+    // registerPowerNotifications and the "Show video on battery" setting.
+    // Placed after the winId() force-create above for the same reason
+    // that call exists: the native HWND must be real before anything can
+    // register against it.
+    m_manager->registerPowerNotifications(reinterpret_cast<HWND>(winId()));
 
     if (startMinimized) {
         hide();
@@ -583,8 +608,18 @@ void MainWindow::updateStatusUi() {
         color = kStatusWarningColor;
         break;
     case WallpaperUiState::Active:
-        text = tr("Wallpaper Active");
-        color = kStatusSuccessColor;
+        // The wallpaper is still logically "Active" while battery-
+        // suspended (see WallpaperManager::wallpaperSuspendedForBattery)
+        // - only the status text changes, so the user understands why
+        // the desktop looks different without this reading as an error
+        // or as the wallpaper having been removed.
+        if (m_batterySuspended) {
+            text = tr("Video paused on battery");
+            color = kStatusWarningColor;
+        } else {
+            text = tr("Wallpaper Active");
+            color = kStatusSuccessColor;
+        }
         break;
     case WallpaperUiState::Error:
         text = m_lastErrorMessage.isEmpty() ? tr("Unable to apply wallpaper") : m_lastErrorMessage;
@@ -669,6 +704,10 @@ void MainWindow::onPasteVideoLink() {
 
     auto* urlEdit = new QLineEdit(&dialog);
     urlEdit->setPlaceholderText(tr("https://example.com/video.mp4"));
+    // A placeholder this long needs real room to be readable, not just
+    // whatever the dialog's overall minimum width happens to leave it -
+    // see the "Popup/Dialog Window Visibility and Sizing" task.
+    urlEdit->setMinimumWidth(320);
     // Pre-fills from the clipboard as a convenience only - the field
     // stays fully editable and nothing loads until the user explicitly
     // presses "Load Video" below. Reuses the exact same MIME-inspection
@@ -690,7 +729,17 @@ void MainWindow::onPasteVideoLink() {
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
 
-    dialog.setMinimumWidth(380);
+    // A width-only minimum previously let this dialog's actual on-screen
+    // size come out smaller/more cramped than its content really needs on
+    // some font-metrics/DPI combinations, since nothing forced the layout
+    // to be measured before the dialog first appeared - see the "Popup/
+    // Dialog Window Visibility and Sizing" task. adjustSize() explicitly
+    // sizes the window from its layout's real sizeHint (label + a proper-
+    // width input field + button row) before it's ever shown, and the
+    // minimum size is then a floor under that, not a replacement for it -
+    // still freely resizable larger.
+    dialog.setMinimumSize(420, 160);
+    dialog.adjustSize();
     // Modal - the drop-zone's own idle/float animation behind it is
     // already paused for free (DropZoneWidget::hideEvent fires once this
     // modal dialog occludes/deactivates the main window's rendering the

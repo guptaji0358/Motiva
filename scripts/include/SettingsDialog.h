@@ -49,6 +49,7 @@ private:
     void onMuteToggled(bool checked);
     void onLoopToggled(bool checked);
     void onStartWithWindowsToggled(bool checked);
+    void onShowVideoOnBatteryToggled(bool checked);
 
     WallpaperManager* m_manager;
     SettingsManager* m_settings;
@@ -59,4 +60,5 @@ private:
     QCheckBox* m_muteCheck = nullptr;
     QCheckBox* m_loopCheck = nullptr;
     QCheckBox* m_startWithWindowsCheck = nullptr;
+    QCheckBox* m_showVideoOnBatteryCheck = nullptr;
 };

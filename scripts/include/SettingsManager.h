@@ -37,6 +37,12 @@ public:
     bool wasWallpaperActive() const;
     void setWasWallpaperActive(bool active);
 
+    // Default true: preserves existing behavior for existing users - only
+    // someone who explicitly turns this off gets the battery-saving
+    // behavior (see WallpaperManager's battery suspend/resume logic).
+    bool showVideoOnBattery() const;
+    void setShowVideoOnBattery(bool enabled);
+
 private:
     QSettings m_settings;
 };

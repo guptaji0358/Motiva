@@ -19,8 +19,18 @@ SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* setti
     // - same gear icon as the header button/tray menu entry that opens
     // this dialog, for visual consistency.
     setWindowIcon(QIcon(":/settings-icon/settings.svg"));
-    setMinimumWidth(360);
     buildUi();
+    // A width-only minimum, set before the controls existed, left this
+    // dialog's actual initial height at the mercy of whatever the layout
+    // happened to compute with no floor under it - see the "Popup/Dialog
+    // Window Visibility and Sizing" task. Both dimensions now have a
+    // sensible minimum, set AFTER buildUi() so it reflects this dialog's
+    // real content (two combo rows, a volume slider, four checkboxes,
+    // three section headers, the button row), and adjustSize() sizes the
+    // window from that content's actual sizeHint before it's ever shown -
+    // still freely resizable larger, this is only a floor.
+    setMinimumSize(380, 480);
+    adjustSize();
 }
 
 void SettingsDialog::buildUi() {
@@ -84,6 +94,12 @@ void SettingsDialog::buildUi() {
     connect(m_startWithWindowsCheck, &QCheckBox::toggled, this, &SettingsDialog::onStartWithWindowsToggled);
     root->addWidget(m_startWithWindowsCheck);
 
+    m_showVideoOnBatteryCheck = new QCheckBox(tr("Show video on battery"), this);
+    m_showVideoOnBatteryCheck->setToolTip(
+        tr("Keep the video wallpaper visible when running on battery power."));
+    connect(m_showVideoOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onShowVideoOnBatteryToggled);
+    root->addWidget(m_showVideoOnBatteryCheck);
+
     root->addStretch();
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
@@ -104,6 +120,8 @@ void SettingsDialog::restoreFromSettings() {
     m_muteCheck->setChecked(m_settings->muted());
     m_loopCheck->setChecked(m_settings->loop());
     m_startWithWindowsCheck->setChecked(m_settings->startWithWindows());
+    m_showVideoOnBatteryCheck->setChecked(m_settings->showVideoOnBattery());
+    m_manager->setShowVideoOnBattery(m_settings->showVideoOnBattery());
 
     m_manager->setVolume(m_settings->volume());
     m_manager->setMuted(m_settings->muted());
@@ -181,4 +199,13 @@ void SettingsDialog::onLoopToggled(bool checked) {
 
 void SettingsDialog::onStartWithWindowsToggled(bool checked) {
     m_settings->setStartWithWindows(checked);
+}
+
+void SettingsDialog::onShowVideoOnBatteryToggled(bool checked) {
+    m_settings->setShowVideoOnBattery(checked);
+    // Takes effect immediately (matches Set as Wallpaper/Remove
+    // Wallpaper's own convention) - WallpaperManager re-evaluates and
+    // hides/restores the video right away if the current power state
+    // means this toggle actually changes anything.
+    m_manager->setShowVideoOnBattery(checked);
 }

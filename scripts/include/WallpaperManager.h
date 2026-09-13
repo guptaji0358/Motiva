@@ -73,6 +73,24 @@ public:
     // QAbstractNativeEventFilter
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
 
+    // Registers for the Windows power-source (AC/battery) notification on
+    // the given window - see the class comment's "Show video on battery"
+    // note. Call once, with a stable, long-lived HWND (MainWindow's own -
+    // see MainWindow's constructor). Purely event-driven: no polling, no
+    // timer: RegisterPowerSettingNotification delivers a WM_POWERBROADCAST
+    // to this hwnd only when the AC/battery state actually changes.
+    void registerPowerNotifications(HWND hwnd);
+
+    // Reflects SettingsManager::showVideoOnBattery() - kept in sync by
+    // SettingsDialog on every toggle (see its onShowVideoOnBatteryToggled).
+    // Re-evaluates immediately: if this flips to false while already on
+    // battery, the video hides right away; if it flips to true, an
+    // already-hidden video (from a previous false+battery combination)
+    // comes back immediately - matches Set as Wallpaper/Remove Wallpaper's
+    // own "acts immediately" convention, no restart needed.
+    void setShowVideoOnBattery(bool enabled);
+    bool isBatterySuspended() const { return m_batterySuspended; }
+
 signals:
     void errorOccurred(const QString& message);
     // Emitted as soon as setWallpaper() begins attaching - i.e. attach
@@ -88,6 +106,17 @@ signals:
     // code observe an existing internal checkpoint; the verification logic
     // itself is unchanged.
     void wallpaperVerified();
+    // Video presentation temporarily hidden because the system is on
+    // battery and "Show video on battery" is off - see suspendForBattery.
+    // Distinct from wallpaperRemoved: the wallpaper is still logically
+    // configured/active (isActive() stays true, wasWallpaperActive/
+    // RecoveryState are untouched), only its on-screen presentation is
+    // paused. UI code (MainWindow) uses this purely for status text.
+    void wallpaperSuspendedForBattery();
+    // AC power returned (or the setting was turned back on) while a
+    // previous battery suspension was active - the video is being
+    // reattached automatically, no user action needed.
+    void wallpaperResumedFromBattery();
 
 private slots:
     void onPlayerError(const QString& message);
@@ -111,6 +140,33 @@ private:
     void teardownWindows();
     void onExplorerRestarted();
     void onAttachRetryTick();
+
+    // Reads Data[0] out of a WM_POWERBROADCAST/PBT_POWERSETTINGCHANGE
+    // message's POWERBROADCAST_SETTING payload (0=AC, non-zero=battery/
+    // short-term) and, if the AC/battery state actually changed, updates
+    // m_onBattery and re-evaluates whether the video should be hidden or
+    // restored (see reevaluateBatteryPolicy).
+    void onPowerBroadcast(void* lParam);
+    // Single decision point, called after anything that could change the
+    // hide/show verdict (a power-source change, the showVideoOnBattery
+    // setting changing, or a fresh setWallpaper()): hides via
+    // suspendForBattery() if on battery with the setting off and not
+    // already hidden; restores via resumeFromBattery() if the opposite
+    // and currently hidden. A no-op otherwise.
+    void reevaluateBatteryPolicy();
+    // Detaches/hides the render window(s) from the desktop WITHOUT
+    // touching m_active, m_windows, RecoveryState, or
+    // SettingsManager::wasWallpaperActive - the wallpaper is still
+    // logically "on", only its on-screen presentation is paused (see the
+    // wallpaperSuspendedForBattery doc comment). Reuses the exact same
+    // WindowsDesktopWallpaper::DetachFromDesktop/RefreshDesktopBackground
+    // calls teardownWindows()/removeWallpaper() already use - no second
+    // wallpaper-hiding mechanism.
+    void suspendForBattery();
+    // Re-attaches the still-alive render window(s) via the existing
+    // async/verified attachAllWindows() pipeline - the same one Explorer-
+    // restart and IPC recovery already use. No new attach logic.
+    void resumeFromBattery();
 
     std::unique_ptr<VideoPlayer> m_player;
     std::vector<std::unique_ptr<WallpaperWindow>> m_windows;
@@ -188,4 +244,18 @@ private:
     // the first restart) - purely diagnostic, logged alongside the new PID
     // on each subsequent restart (see onExplorerRestarted).
     DWORD m_lastKnownExplorerPid = 0;
+
+    // --- "Show video on battery" (see registerPowerNotifications) ---
+    HPOWERNOTIFY m_powerNotifyHandle = nullptr;
+    // Starts optimistic (AC) - the first real WM_POWERBROADCAST after
+    // registration (Windows sends one immediately with the current state,
+    // per RegisterPowerSettingNotification's documented behavior) corrects
+    // this before it can ever matter; nothing reads it before then.
+    bool m_onBattery = false;
+    bool m_showVideoOnBattery = true;
+    // True while the video is hidden specifically because of the battery
+    // policy (as opposed to m_active being false because the user removed
+    // the wallpaper, or it was never set). See suspendForBattery/
+    // resumeFromBattery and the wallpaperSuspendedForBattery doc comment.
+    bool m_batterySuspended = false;
 };

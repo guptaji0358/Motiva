@@ -128,3 +128,10 @@ bool SettingsManager::wasWallpaperActive() const {
 void SettingsManager::setWasWallpaperActive(bool active) {
     m_settings.setValue("app/wasWallpaperActive", active);
 }
+
+bool SettingsManager::showVideoOnBattery() const {
+    return m_settings.value("app/showVideoOnBattery", true).toBool();
+}
+void SettingsManager::setShowVideoOnBattery(bool enabled) {
+    m_settings.setValue("app/showVideoOnBattery", enabled);
+}

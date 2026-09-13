@@ -126,6 +126,12 @@ private:
     WallpaperUiState m_uiState = WallpaperUiState::NoVideo;
     QString m_lastErrorMessage;
 
+    // True while WallpaperManager has temporarily hidden the video
+    // because the system is on battery and "Show video on battery" is
+    // off - purely a status-text concern here (see updateStatusUi); the
+    // actual show/hide decision and lifecycle live entirely in
+    // WallpaperManager.
+    bool m_batterySuspended = false;
     bool m_dragHintActive = false;
     bool m_dragInvalidActive = false;
     QStackedLayout* m_previewStack = nullptr;

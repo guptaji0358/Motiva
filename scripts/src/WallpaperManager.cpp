@@ -74,7 +74,99 @@ bool WallpaperManager::nativeEventFilter(const QByteArray& eventType, void* mess
     if (msg->message == WM_SETTINGCHANGE) {
         onPossibleExternalWallpaperChange();
     }
+    if (msg->message == WM_POWERBROADCAST && msg->wParam == PBT_POWERSETTINGCHANGE) {
+        onPowerBroadcast(reinterpret_cast<void*>(msg->lParam));
+    }
     return false; // never swallow the message - other listeners may need it too
+}
+
+void WallpaperManager::registerPowerNotifications(HWND hwnd) {
+    if (m_powerNotifyHandle || !hwnd) {
+        return;
+    }
+    // DEVICE_NOTIFY_WINDOW_HANDLE (0) - deliver as a WM_POWERBROADCAST to
+    // this HWND rather than a service-control callback. Windows sends one
+    // notification immediately with the current AC/battery state right
+    // after a successful registration (documented behavior), so
+    // m_onBattery is corrected from its optimistic default without any
+    // extra query call here.
+    m_powerNotifyHandle = RegisterPowerSettingNotification(hwnd, &GUID_ACDC_POWER_SOURCE, DEVICE_NOTIFY_WINDOW_HANDLE);
+    if (!m_powerNotifyHandle) {
+        qWarning() << "[Battery] RegisterPowerSettingNotification failed, GetLastError=" << GetLastError()
+                   << "- \"Show video on battery\" will have no effect on this system.";
+    }
+}
+
+void WallpaperManager::onPowerBroadcast(void* lParam) {
+    auto* setting = static_cast<POWERBROADCAST_SETTING*>(lParam);
+    if (!setting || setting->PowerSetting != GUID_ACDC_POWER_SOURCE || setting->DataLength < sizeof(DWORD)) {
+        return;
+    }
+    // 0 = AC/plugged in, 1 = battery, 2 = "short term" (UPS) - treated the
+    // same as battery here, since it means mains power is not currently
+    // available either way.
+    const DWORD source = *reinterpret_cast<const DWORD*>(setting->Data);
+    const bool nowOnBattery = (source != 0);
+    if (nowOnBattery == m_onBattery) {
+        return;
+    }
+    m_onBattery = nowOnBattery;
+    qInfo() << "[Battery] Power source changed:" << (m_onBattery ? "on battery" : "AC/plugged in");
+    reevaluateBatteryPolicy();
+}
+
+void WallpaperManager::setShowVideoOnBattery(bool enabled) {
+    if (m_showVideoOnBattery == enabled) {
+        return;
+    }
+    m_showVideoOnBattery = enabled;
+    reevaluateBatteryPolicy();
+}
+
+void WallpaperManager::reevaluateBatteryPolicy() {
+    if (!m_active) {
+        return;
+    }
+    const bool shouldHide = m_onBattery && !m_showVideoOnBattery;
+    if (shouldHide && !m_batterySuspended) {
+        suspendForBattery();
+    } else if (!shouldHide && m_batterySuspended) {
+        resumeFromBattery();
+    }
+}
+
+void WallpaperManager::suspendForBattery() {
+    if (!m_active || m_batterySuspended || m_windows.empty()) {
+        return;
+    }
+    qInfo() << "[Battery] Hiding video wallpaper - on battery and \"Show video on battery\" is off.";
+    for (auto& w : m_windows) {
+        WindowsDesktopWallpaper::DetachFromDesktop(w->handle());
+        w->hideNative();
+    }
+    m_batterySuspended = true;
+    // Same redraw nudge removeWallpaper() already uses - our own window
+    // detaching doesn't by itself make Explorer repaint the real
+    // wallpaper underneath. m_active stays true throughout, so this
+    // re-applies the SAME already-current wallpaper value (no genuine
+    // change), which is exactly what onPossibleExternalWallpaperChange's
+    // own baseline comparison already no-ops on - no feedback loop.
+    WindowsDesktopWallpaper::RefreshDesktopBackground();
+    emit wallpaperSuspendedForBattery();
+}
+
+void WallpaperManager::resumeFromBattery() {
+    if (!m_active || !m_batterySuspended) {
+        return;
+    }
+    qInfo() << "[Battery] AC power restored - restoring video wallpaper.";
+    m_batterySuspended = false;
+    // Reuses the existing async/generation-guarded/verified attach
+    // pipeline - the same one Explorer-restart and IPC recovery already
+    // drive. The render windows were only detached, never destroyed, so
+    // this just reparents them back, no rebuild needed.
+    attachAllWindows();
+    emit wallpaperResumedFromBattery();
 }
 
 void WallpaperManager::onPossibleExternalWallpaperChange() {
@@ -111,12 +203,31 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
     m_wallpaperBaselineAtAttach = WindowsDesktopWallpaper::GetCurrentWallpaperPath();
 
     rebuildWindows();
-    attachAllWindows();
+
+    // If "Show video on battery" is off and we're already on battery
+    // right now, never attach in the first place - avoids a visible
+    // flash-then-hide, and avoids racing suspendForBattery()'s detach
+    // against this attach attempt still being in flight. Skipping
+    // attachAllWindows() here (rather than calling it and immediately
+    // suspending) means there's nothing for onAttachAttemptFinished to
+    // race against; resumeFromBattery() drives the first real attach
+    // once AC power actually returns.
+    const bool shouldStartHidden = m_onBattery && !m_showVideoOnBattery;
+    if (shouldStartHidden) {
+        m_batterySuspended = true;
+        qInfo() << "[Battery] Wallpaper set while on battery with \"Show video on battery\" off - "
+                    "staying hidden until AC power returns.";
+    } else {
+        attachAllWindows();
+    }
 
     m_player->play();
     m_userPaused = false;
     m_active = true;
     emit wallpaperActivated();
+    if (shouldStartHidden) {
+        emit wallpaperSuspendedForBattery();
+    }
     qInfo() << "[Lifecycle] setWallpaper returning - desktop attach continues "
                 "asynchronously in the background (see [Shell]/[Discover] log lines).";
     return true;
@@ -140,6 +251,12 @@ void WallpaperManager::removeWallpaper() {
     // before this ordering fix). Setting it false first makes that guard
     // ignore our own resultant broadcast, as intended.
     m_active = false;
+    // An intentional removal always wins over a battery suspension - see
+    // the wallpaperSuspendedForBattery doc comment's distinction. Also
+    // means AC power returning afterward finds m_active already false and
+    // reevaluateBatteryPolicy() correctly does nothing (Test 5: Remove
+    // Wallpaper while battery-hidden must not auto-restore on AC return).
+    m_batterySuspended = false;
     if (m_recoveryState) {
         m_recoveryState->setWallpaperAttached(false);
     }
