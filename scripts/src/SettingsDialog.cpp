@@ -15,10 +15,10 @@
 SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* settings, QWidget* parent)
     : QDialog(parent), m_manager(manager), m_settings(settings) {
     setWindowTitle(tr("Settings"));
-    // Embedded via resources/app.qrc (Assets/settings-icon/settings.ico)
+    // Embedded via resources/app.qrc (Assets/settings-icon/settings.svg)
     // - same gear icon as the header button/tray menu entry that opens
     // this dialog, for visual consistency.
-    setWindowIcon(QIcon(":/settings-icon/settings.ico"));
+    setWindowIcon(QIcon(":/settings-icon/settings.svg"));
     setMinimumWidth(360);
     buildUi();
 }

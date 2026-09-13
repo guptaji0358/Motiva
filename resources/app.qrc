@@ -1,6 +1,16 @@
 <RCC>
     <qresource prefix="/">
         <file alias="application/motiva.ico">../Assets/application/motiva.ico</file>
-        <file alias="settings-icon/settings.ico">../Assets/settings-icon/settings.ico</file>
+        <file alias="settings-icon/settings.svg">../Assets/settings-icon/settings.svg</file>
+        <file alias="video/open-video.svg">../Assets/video/open-video.svg</file>
+        <file alias="video/video-file.svg">../Assets/video/video-file.svg</file>
+        <file alias="video/drop-arrow.svg">../Assets/video/drop-arrow.svg</file>
+        <file alias="video/link.svg">../Assets/video/link.svg</file>
+        <file alias="playback/play.svg">../Assets/playback/play.svg</file>
+        <file alias="playback/pause.svg">../Assets/playback/pause.svg</file>
+        <file alias="playback/volume.svg">../Assets/playback/volume.svg</file>
+        <file alias="playback/volume-mute.svg">../Assets/playback/volume-mute.svg</file>
+        <file alias="wallpaper/set-wallpaper.svg">../Assets/wallpaper/set-wallpaper.svg</file>
+        <file alias="wallpaper/remove-wallpaper.svg">../Assets/wallpaper/remove-wallpaper.svg</file>
     </qresource>
 </RCC>

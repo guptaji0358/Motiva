@@ -15,7 +15,7 @@ if(NOT WIN32)
     message(FATAL_ERROR "Motiva only builds for Windows (uses Win32 desktop APIs).")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Concurrent Svg)
 
 qt_standard_project_setup()
 
@@ -27,6 +27,8 @@ qt_standard_project_setup()
 set(IMPLEMENTATION_SOURCES
     scripts/src/MainWindow.cpp
     scripts/include/MainWindow.h
+    scripts/src/DropZoneWidget.cpp
+    scripts/include/DropZoneWidget.h
     scripts/src/SettingsDialog.cpp
     scripts/include/SettingsDialog.h
     scripts/src/VideoPlayer.cpp
@@ -59,6 +61,7 @@ target_link_libraries(Motiva PRIVATE
     Qt6::Multimedia
     Qt6::MultimediaWidgets
     Qt6::Concurrent
+    Qt6::Svg
     Dwmapi
     Shell32
     User32
@@ -81,3 +84,44 @@ set_target_properties(Motiva PROPERTIES
 if(MSVC)
     target_link_options(Motiva PRIVATE "/MANIFESTUAC:level='asInvoker' uiAccess='false'")
 endif()
+
+# --- Deployment-root launcher (see the "Organize Final Deployment
+# Output" task / deploy/Deploy.ps1) ---
+# A tiny, Qt-free native executable - EXCLUDE_FROM_ALL so a plain
+# `cmake --build build` (the normal dev inner loop) never builds it and
+# the dev workflow is completely unaffected; it's only built as part of
+# the opt-in `deploy` target below, or by name
+# (`cmake --build build --target MotivaLauncher`). Deliberately kept as
+# "MotivaLauncher.exe" inside the build tree itself (never named
+# "Motiva.exe" there) so it can never collide with the real Motiva.exe
+# output in the same directory - deploy/Deploy.ps1 renames it to
+# "Motiva.exe" only once it copies it out to the deployment root.
+add_executable(MotivaLauncher WIN32 EXCLUDE_FROM_ALL scripts/main/launcher.cpp)
+target_link_libraries(MotivaLauncher PRIVATE Shell32 User32)
+if(MINGW)
+    # MinGW's default CRT startup expects an ANSI WinMain unless told
+    # otherwise - -municode switches it to the wWinMainCRTStartup entry
+    # point that matches launcher.cpp's wWinMain(...).
+    target_compile_options(MotivaLauncher PRIVATE -municode)
+    target_link_options(MotivaLauncher PRIVATE -municode)
+endif()
+
+# `cmake --build build --target deploy` assembles the clean deployment
+# directory described in that task: builds both executables, then hands
+# off to deploy/Deploy.ps1 to stage windeployqt's output and reorganize
+# it into <repo>/deployment/{Motiva.exe, resources/{bin,Qt,plugins}} -
+# see that script for the full reasoning (also runnable directly without
+# CMake at all, e.g. from a scripted CI/release pipeline).
+get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
+add_custom_target(deploy
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_SOURCE_DIR}/deploy/Deploy.ps1"
+            -BuildDir "${CMAKE_BINARY_DIR}"
+            -QtBinDir "${_qt_bin_dir}"
+            -OutDir "${CMAKE_SOURCE_DIR}/deployment"
+    DEPENDS Motiva MotivaLauncher
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Assembling clean deployment directory in deployment/ (see deploy/Deploy.ps1)"
+    VERBATIM
+)

@@ -6,11 +6,13 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QToolButton>
+#include <QStackedLayout>
 #include <memory>
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
 #include "RecoveryState.h"
 #include "InstanceIpc.h"
+#include "DropZoneWidget.h"
 
 class QVideoWidget;
 class SettingsDialog;
@@ -54,6 +56,11 @@ private:
 
 private slots:
     void onChooseVideo();
+    // Third input method's two entry points - both validate then hand
+    // off to the same loadVideoSource() the Open Video button and drag &
+    // drop already use (see MainWindow.cpp's DropZoneWidget comment).
+    void onPasteVideoLink();
+    void onPasteShortcut();
     void onSetWallpaper();
     void onRemoveWallpaper();
     void onPrimaryButtonClicked();
@@ -95,6 +102,18 @@ private:
     // "meant".
     static QString extractDroppedVideoSource(const QMimeData* mimeData, int* extraCandidateCount);
     void setDragHintActive(bool active);
+    void setDragInvalidActive(bool active);
+    // Single source of truth for which preview-stack page is shown and
+    // what state the animated drop zone is in - derived from
+    // m_dragHintActive/m_dragInvalidActive/m_selectedVideoPath rather than
+    // scattering that logic across every call site that changes one of
+    // them.
+    void refreshDropZoneVisual();
+    // Briefly shows the drop zone's Invalid visual (same one drag & drop
+    // uses for an unsupported drag) then returns to Idle - used to give
+    // pasted-but-unrecognized clipboard content the same subtle "that's
+    // not a video" feedback, without a blocking dialog.
+    void flashDropZoneInvalid();
 
     std::unique_ptr<WallpaperManager> m_manager;
     SettingsManager m_settings;
@@ -107,13 +126,17 @@ private:
     QString m_lastErrorMessage;
 
     bool m_dragHintActive = false;
+    bool m_dragInvalidActive = false;
+    QStackedLayout* m_previewStack = nullptr;
     QLabel* m_previewLabel = nullptr;
+    DropZoneWidget* m_dropZone = nullptr;
     QLabel* m_fileNameLabel = nullptr;
     QLabel* m_fileDetailsLabel = nullptr;
     QString m_lastVideoDetailsText;
     QLabel* m_statusLabel = nullptr;
     QToolButton* m_settingsButton = nullptr;
     QPushButton* m_openVideoButton = nullptr;
+    QPushButton* m_pasteLinkButton = nullptr;
     QPushButton* m_playPauseButton = nullptr;
     QPushButton* m_primaryButton = nullptr;
 

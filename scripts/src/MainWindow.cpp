@@ -23,14 +23,31 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QUrl>
+#include <QTimer>
+#include <QShortcut>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QDialog>
+#include <QLineEdit>
+#include <QDialogButtonBox>
 
 namespace {
-// Embedded via resources/app.qrc (Assets/application/motiva.ico and
-// Assets/settings-icon/settings.ico) - loading via the Qt resource path
-// keeps this independent of the process's working directory, unlike a
-// relative filesystem path.
+// Embedded via resources/app.qrc - loading via the Qt resource path keeps
+// this independent of the process's working directory, unlike a relative
+// filesystem path. The window/tray identity icon stays a raster .ico
+// (Assets/application/motiva.ico) since that's what Windows itself needs
+// for the exe/taskbar/Alt-Tab icon; the in-app UI icons are all .svg
+// (Assets/<feature>/...), Qt's native SVG icon engine (Qt6::Svg).
 constexpr const char* kAppIconResourcePath = ":/application/motiva.ico";
-constexpr const char* kSettingsIconResourcePath = ":/settings-icon/settings.ico";
+constexpr const char* kSettingsIconResourcePath = ":/settings-icon/settings.svg";
+constexpr const char* kOpenVideoIconResourcePath = ":/video/open-video.svg";
+constexpr const char* kLinkIconResourcePath = ":/video/link.svg";
+constexpr const char* kPlayIconResourcePath = ":/playback/play.svg";
+constexpr const char* kPauseIconResourcePath = ":/playback/pause.svg";
+constexpr const char* kVolumeIconResourcePath = ":/playback/volume.svg";
+constexpr const char* kVolumeMuteIconResourcePath = ":/playback/volume-mute.svg";
+constexpr const char* kSetWallpaperIconResourcePath = ":/wallpaper/set-wallpaper.svg";
+constexpr const char* kRemoveWallpaperIconResourcePath = ":/wallpaper/remove-wallpaper.svg";
 
 // This app has no app-level light/dark theme toggle of its own (see
 // CLAUDE.md) - it simply follows the OS window palette everywhere except
@@ -58,20 +75,30 @@ bool hasSupportedVideoExtension(const QString& fileNameOrPath) {
     return fileNameOrPath.endsWith(QLatin1String(".mp4"), Qt::CaseInsensitive);
 }
 
-bool isWebVideoUrl(const QUrl& url) {
+// Split out from isWebVideoUrl() so the Paste Video URL dialog can tell
+// "that's not even a URL" apart from "that's a real webpage, just not a
+// directly playable video file" and show a distinct message for each -
+// see MainWindow::onPasteVideoLink().
+bool isHttpUrl(const QUrl& url) {
     if (!url.isValid() || url.isLocalFile()) {
         return false;
     }
     const QString scheme = url.scheme();
-    if (scheme.compare(QLatin1String("http"), Qt::CaseInsensitive) != 0 &&
-        scheme.compare(QLatin1String("https"), Qt::CaseInsensitive) != 0) {
+    return scheme.compare(QLatin1String("http"), Qt::CaseInsensitive) == 0 ||
+        scheme.compare(QLatin1String("https"), Qt::CaseInsensitive) == 0;
+}
+
+bool isWebVideoUrl(const QUrl& url) {
+    if (!isHttpUrl(url)) {
         return false;
     }
     // The URL path (excludes query string) needs to look like a video
     // file - accepting any http(s) URL unconditionally would mean
-    // "blindly accept arbitrary dropped content" (e.g. a webpage link),
-    // which the redesign task's security section explicitly warns
-    // against.
+    // "blindly assume every webpage link is a playable video" (e.g. a
+    // YouTube watch page), which this app's media backend (QMediaPlayer/
+    // FFmpeg) cannot actually play as-is, and which this project
+    // explicitly does not attempt to work around (no scraping/yt-dlp/
+    // downloading - see the "Paste Video URL" task).
     return hasSupportedVideoExtension(url.path());
 }
 } // namespace
@@ -90,6 +117,17 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
 
     buildUi();
     buildTray();
+
+    // Third video input method, alongside drag & drop and the Open Video
+    // button: Ctrl+V anywhere in this window loads a recognized video URL
+    // (or local file path) straight from the clipboard - see
+    // onPasteShortcut(). QShortcut's default WindowShortcut context means
+    // this only ever fires while MainWindow itself is the active window;
+    // SettingsDialog is a separate top-level QDialog, so a text field
+    // there stays focused and gets a completely normal Ctrl+V instead -
+    // no manual focus/widget-type checking needed to keep the two apart.
+    auto* pasteShortcut = new QShortcut(QKeySequence::Paste, this);
+    connect(pasteShortcut, &QShortcut::activated, this, &MainWindow::onPasteShortcut);
 
     m_manager->setRecoveryState(&m_recoveryState);
     // The single-instance winner (only instance that ever reaches this
@@ -206,17 +244,60 @@ void MainWindow::buildUi() {
     root->addWidget(headerRule);
 
     // --- Video preview: the visual focus of the window ---
-    m_previewLabel = new QLabel(central);
-    m_previewLabel->setMinimumHeight(220);
+    // A QStackedLayout switches between the two pages below, driven by
+    // refreshDropZoneVisual(): the animated drop-zone page whenever no
+    // video is loaded (or a drag is in progress, even over an already-
+    // loaded video), and the plain pixmap page once a video is actually
+    // playing - the animation never overlaps/covers real video content.
+    auto* previewContainer = new QWidget(central);
+    previewContainer->setMinimumHeight(220);
+    previewContainer->setStyleSheet(kPreviewSurfaceStyle);
+    previewContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_previewStack = new QStackedLayout(previewContainer);
+    m_previewStack->setContentsMargins(0, 0, 0, 0);
+
+    m_previewLabel = new QLabel(previewContainer);
     m_previewLabel->setAlignment(Qt::AlignCenter);
-    m_previewLabel->setStyleSheet(kPreviewSurfaceStyle);
-    m_previewLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    // Empty-state text also advertises drag & drop - restored here by
-    // setDragHintActive(false) once a drag leaves without dropping, and
-    // overwritten either by a real frame (once a video is loaded) or the
-    // "Release to load video" hint text during a valid drag-over.
-    m_previewLabel->setText(tr("No video selected\nDrag & drop a video, or click Open Video"));
-    root->addWidget(m_previewLabel, /*stretch=*/1);
+    m_previewStack->addWidget(m_previewLabel); // index kVideoPageIndex
+
+    auto* dropZoneWrapper = new QWidget(previewContainer);
+    auto* dropZoneLayout = new QVBoxLayout(dropZoneWrapper);
+    dropZoneLayout->setContentsMargins(24, 20, 24, 16);
+    dropZoneLayout->setSpacing(4);
+    m_dropZone = new DropZoneWidget(dropZoneWrapper);
+    dropZoneLayout->addWidget(m_dropZone, /*stretch=*/1);
+    auto* dropTitleLabel = new QLabel(tr("Drag & Drop Video"), dropZoneWrapper);
+    dropTitleLabel->setAlignment(Qt::AlignCenter);
+    QFont dropTitleFont = dropTitleLabel->font();
+    dropTitleFont.setBold(true);
+    dropTitleLabel->setFont(dropTitleFont);
+    dropTitleLabel->setStyleSheet(QStringLiteral("color: #c9c9c9;"));
+    dropZoneLayout->addWidget(dropTitleLabel);
+    auto* dropSubtitleLabel = new QLabel(tr("Local MP4 files"), dropZoneWrapper);
+    dropSubtitleLabel->setAlignment(Qt::AlignCenter);
+    dropSubtitleLabel->setStyleSheet(QStringLiteral("color: #8a8a8a;"));
+    dropZoneLayout->addWidget(dropSubtitleLabel);
+
+    // Three clearly separate input methods, not one overloaded drop zone
+    // (see the "Fix Video Input UX" task): drag & drop above is scoped to
+    // local files (the subtitle says so explicitly); a web video goes
+    // through this dedicated button/dialog instead of relying on a
+    // browser's drag payload, which often carries a thumbnail image
+    // rather than the actual video - see extractDroppedVideoSource()'s
+    // comment on why that thumbnail is never mistaken for a video either
+    // way. Open Video (below the preview) remains the third, unchanged.
+    auto* orLabel = new QLabel(QStringLiteral("— %1 —").arg(tr("OR")), dropZoneWrapper);
+    orLabel->setAlignment(Qt::AlignCenter);
+    orLabel->setStyleSheet(QStringLiteral("color: #5a5a5a;"));
+    dropZoneLayout->addWidget(orLabel);
+
+    m_pasteLinkButton = new QPushButton(QIcon(kLinkIconResourcePath), tr("Paste Video URL"), dropZoneWrapper);
+    m_pasteLinkButton->setToolTip(tr("Load a video from a direct URL (or press Ctrl+V anywhere in this window)"));
+    connect(m_pasteLinkButton, &QPushButton::clicked, this, &MainWindow::onPasteVideoLink);
+    dropZoneLayout->addWidget(m_pasteLinkButton, 0, Qt::AlignHCenter);
+    m_previewStack->addWidget(dropZoneWrapper); // index kDropZonePageIndex
+
+    root->addWidget(previewContainer, /*stretch=*/1);
 
     // --- Video info + secondary actions ---
     auto* infoRow = new QHBoxLayout();
@@ -233,12 +314,12 @@ void MainWindow::buildUi() {
     infoTextLayout->addWidget(m_fileDetailsLabel);
     infoRow->addLayout(infoTextLayout, /*stretch=*/1);
 
-    m_playPauseButton = new QPushButton(tr("▶ Play"), central);
+    m_playPauseButton = new QPushButton(QIcon(kPlayIconResourcePath), tr("Play"), central);
     m_playPauseButton->setToolTip(tr("Play or pause the preview"));
     connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::onPlayPause);
     infoRow->addWidget(m_playPauseButton);
 
-    m_openVideoButton = new QPushButton(tr("Open Video"), central);
+    m_openVideoButton = new QPushButton(QIcon(kOpenVideoIconResourcePath), tr("Open Video"), central);
     connect(m_openVideoButton, &QPushButton::clicked, this, &MainWindow::onChooseVideo);
     infoRow->addWidget(m_openVideoButton);
 
@@ -263,6 +344,7 @@ void MainWindow::buildUi() {
         if (m_trayMuteAction) {
             m_trayMuteAction->blockSignals(true);
             m_trayMuteAction->setChecked(muted);
+            m_trayMuteAction->setIcon(QIcon(muted ? kVolumeMuteIconResourcePath : kVolumeIconResourcePath));
             m_trayMuteAction->blockSignals(false);
         }
     });
@@ -274,9 +356,9 @@ void MainWindow::buildTray() {
     m_tray->setToolTip(tr("Motiva"));
 
     auto* menu = new QMenu();
-    m_trayPlayAction = menu->addAction(tr("▶ Play"), this, [this] { m_manager->play(); updatePlayPauseLabel(); });
-    m_trayPauseAction = menu->addAction(tr("⏸ Pause"), this, [this] { m_manager->pause(); updatePlayPauseLabel(); });
-    m_trayMuteAction = menu->addAction(tr("\U0001F507 Mute"));
+    m_trayPlayAction = menu->addAction(QIcon(kPlayIconResourcePath), tr("Play"), this, [this] { m_manager->play(); updatePlayPauseLabel(); });
+    m_trayPauseAction = menu->addAction(QIcon(kPauseIconResourcePath), tr("Pause"), this, [this] { m_manager->pause(); updatePlayPauseLabel(); });
+    m_trayMuteAction = menu->addAction(QIcon(kVolumeMuteIconResourcePath), tr("Mute"));
     m_trayMuteAction->setCheckable(true);
     connect(m_trayMuteAction, &QAction::toggled, this, [this](bool checked) {
         if (m_settingsDialog) {
@@ -286,8 +368,8 @@ void MainWindow::buildTray() {
 
     menu->addSeparator();
     menu->addAction(QIcon(kSettingsIconResourcePath), tr("Settings"), this, &MainWindow::openSettings);
-    menu->addAction(tr("Open Video"), this, &MainWindow::onChooseVideo);
-    menu->addAction(tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
+    menu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Video"), this, &MainWindow::onChooseVideo);
+    menu->addAction(QIcon(kRemoveWallpaperIconResourcePath), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
     menu->addSeparator();
     menu->addAction(tr("Exit"), this, &MainWindow::onExitRequested);
 
@@ -308,6 +390,7 @@ void MainWindow::applyVideoInfoUi() {
         m_fileDetailsLabel->clear();
         m_fileDetailsLabel->setVisible(false);
         m_lastVideoDetailsText.clear();
+        refreshDropZoneVisual();
         return;
     }
 
@@ -348,6 +431,7 @@ void MainWindow::applyVideoInfoUi() {
         m_fileDetailsLabel->setText(detailsText);
         m_fileDetailsLabel->setVisible(!detailsText.isEmpty());
     }
+    refreshDropZoneVisual();
 }
 
 void MainWindow::setUiState(WallpaperUiState state) {
@@ -391,15 +475,18 @@ void MainWindow::updateStatusUi() {
 void MainWindow::updatePrimaryButtonUi() {
     switch (m_uiState) {
     case WallpaperUiState::NoVideo:
+        m_primaryButton->setIcon(QIcon(kSetWallpaperIconResourcePath));
         m_primaryButton->setText(tr("Set as Wallpaper"));
         m_primaryButton->setEnabled(false);
         break;
     case WallpaperUiState::Ready:
     case WallpaperUiState::Error:
+        m_primaryButton->setIcon(QIcon(kSetWallpaperIconResourcePath));
         m_primaryButton->setText(tr("Set as Wallpaper"));
         m_primaryButton->setEnabled(true);
         break;
     case WallpaperUiState::Applying:
+        m_primaryButton->setIcon(QIcon(kSetWallpaperIconResourcePath));
         m_primaryButton->setText(tr("Applying…"));
         m_primaryButton->setEnabled(false);
         break;
@@ -407,6 +494,7 @@ void MainWindow::updatePrimaryButtonUi() {
         // Only one action makes sense once the wallpaper is genuinely
         // active - the button becomes "Remove Wallpaper" instead of
         // showing both actions as equally primary.
+        m_primaryButton->setIcon(QIcon(kRemoveWallpaperIconResourcePath));
         m_primaryButton->setText(tr("Remove Wallpaper"));
         m_primaryButton->setEnabled(true);
         break;
@@ -419,6 +507,84 @@ void MainWindow::onChooseVideo() {
         return;
     }
     loadVideoSource(path);
+}
+
+void MainWindow::onPasteVideoLink() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Paste Video URL"));
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* label = new QLabel(tr("Video URL"), &dialog);
+    layout->addWidget(label);
+
+    auto* urlEdit = new QLineEdit(&dialog);
+    urlEdit->setPlaceholderText(tr("https://example.com/video.mp4"));
+    // Pre-fills from the clipboard as a convenience only - the field
+    // stays fully editable and nothing loads until the user explicitly
+    // presses "Load Video" below. Reuses the exact same MIME-inspection
+    // extractDroppedVideoSource() already uses for drag/drop and the
+    // Ctrl+V shortcut, so "what counts as a usable clipboard URL" is
+    // defined in exactly one place.
+    const QString clipboardCandidate =
+        extractDroppedVideoSource(QGuiApplication::clipboard()->mimeData(), nullptr);
+    if (!clipboardCandidate.isEmpty()) {
+        urlEdit->setText(clipboardCandidate);
+        urlEdit->selectAll();
+    }
+    layout->addWidget(urlEdit);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+    auto* loadButton = buttons->addButton(tr("Load Video"), QDialogButtonBox::AcceptRole);
+    loadButton->setDefault(true);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    dialog.setMinimumWidth(380);
+    // Modal - the drop-zone's own idle/float animation behind it is
+    // already paused for free (DropZoneWidget::hideEvent fires once this
+    // modal dialog occludes/deactivates the main window's rendering the
+    // same way any other overlapping window would), so no separate
+    // "pause the background animation" bookkeeping is needed here.
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString entered = urlEdit->text().trimmed();
+    const QUrl candidate = QUrl::fromUserInput(entered);
+    if (!isHttpUrl(candidate)) {
+        // Covers both "hello world" (Test E) and a local filesystem path
+        // like C:\Videos\video.mp4 - local files belong to the drag/drop
+        // or Open Video workflow, never this URL field.
+        QMessageBox::warning(this, tr("Invalid URL"),
+            tr("Please enter a valid http:// or https:// video URL."));
+        return;
+    }
+    if (!hasSupportedVideoExtension(candidate.path())) {
+        // A syntactically valid webpage URL (e.g. a YouTube watch page)
+        // that this app's media backend cannot actually play as-is - see
+        // isWebVideoUrl()'s comment. Deliberately does not attempt to
+        // scrape/resolve/download it.
+        QMessageBox::warning(
+            this, tr("Unsupported Video URL"), tr("This URL is not a directly playable video source."));
+        return;
+    }
+    loadVideoSource(candidate.toString());
+}
+
+void MainWindow::onPasteShortcut() {
+    const QMimeData* mimeData = QGuiApplication::clipboard()->mimeData();
+    const QString source = extractDroppedVideoSource(mimeData, nullptr);
+    if (source.isEmpty()) {
+        // Not a recognized local video file or video URL - reject
+        // gracefully (never attempt to load arbitrary clipboard text) and
+        // just give the same subtle "not a video" feedback drag & drop
+        // already uses for an unsupported drag, rather than a dialog.
+        flashDropZoneInvalid();
+        return;
+    }
+    qInfo() << "[Paste] Loading video source from the clipboard:" << source;
+    loadVideoSource(source);
 }
 
 bool MainWindow::isUsableVideoSource(const QString& source) {
@@ -511,10 +677,66 @@ QString MainWindow::extractDroppedVideoSource(const QMimeData* mimeData, int* ex
         }
     }
 
+    // Explicit allowlist, not a denylist: this function only ever returns
+    // a candidate that was BOTH an existing local file ending in .mp4 AND
+    // matched by an isLocalFile() QUrl, OR an http(s) URL whose path ends
+    // in .mp4 - every other payload a browser drag can carry (image/png,
+    // image/jpeg, image/webp thumbnail bytes via hasImage()/imageData(),
+    // text/html, a bare webpage/watch-page URL, or a data:/blob: URI) is
+    // never inspected for its bytes and always falls through to the empty
+    // return below, no matter what mimeData->formats() lists. A thumbnail
+    // image dragged from a browser therefore can never become the loaded
+    // video - see the "Fix Video Input UX" task, which asked this to be
+    // verified/hardened rather than assumed. Logged here (not silently
+    // swallowed) so a drag that carries only unusable payloads is visible
+    // in %TEMP%\Motiva.log instead of just "nothing happened".
+    if (firstMatch.isEmpty() && (mimeData->hasImage() || mimeData->hasHtml() ||
+                                     (mimeData->hasUrls() && !mimeData->urls().isEmpty()) || mimeData->hasText())) {
+        qInfo() << "[DragDrop] Ignoring drag/drop payload - formats present:" << mimeData->formats()
+                << "- no existing local .mp4 or directly playable http(s) .mp4 URL found among them.";
+    }
+
     if (extraCandidateCount) {
         *extraCandidateCount = extras;
     }
     return firstMatch;
+}
+
+namespace {
+constexpr int kVideoPageIndex = 0;
+constexpr int kDropZonePageIndex = 1;
+} // namespace
+
+void MainWindow::refreshDropZoneVisual() {
+    if (!m_previewStack || !m_dropZone) {
+        return;
+    }
+    // The drop-zone page (animated visual) is shown whenever there's no
+    // loaded video yet, OR a drag is currently in progress (even over an
+    // already-loaded video, matching the original text-hint behavior it
+    // replaces) - never both pages at once, and the animation never
+    // overlaps a playing video.
+    const bool showDropZone = m_dragHintActive || m_dragInvalidActive || m_selectedVideoPath.isEmpty();
+    m_previewStack->setCurrentIndex(showDropZone ? kDropZonePageIndex : kVideoPageIndex);
+
+    DropZoneWidget::State state = DropZoneWidget::State::Idle;
+    if (m_dragInvalidActive) {
+        state = DropZoneWidget::State::Invalid;
+    } else if (m_dragHintActive) {
+        state = DropZoneWidget::State::DragOver;
+    }
+    m_dropZone->setState(state);
+}
+
+void MainWindow::flashDropZoneInvalid() {
+    if (!m_dropZone) {
+        return;
+    }
+    // Reuses m_dragInvalidActive/refreshDropZoneVisual rather than poking
+    // DropZoneWidget directly, so this composes correctly even if a real
+    // drag happens to start immediately afterward.
+    setDragInvalidActive(true);
+    QTimer::singleShot(900, this, [this] { setDragInvalidActive(false); });
 }
 
 void MainWindow::setDragHintActive(bool active) {
@@ -522,26 +744,29 @@ void MainWindow::setDragHintActive(bool active) {
         return;
     }
     m_dragHintActive = active;
-    if (active) {
-        // Temporarily overlays the preview's current content (pixmap or
-        // empty-state text) with the drag hint - restored on drop/leave
-        // by simply letting the next decoded frame (or the empty-state
-        // text) repaint over it, same as the existing "clear while
-        // loading" transient state in loadVideoSource.
-        m_previewLabel->setText(tr("Release to load video"));
-    } else if (m_selectedVideoPath.isEmpty()) {
-        m_previewLabel->setText(tr("No video selected\nDrag & drop a video, or click Open Video"));
-    } else {
-        m_previewLabel->setText(QString());
+    refreshDropZoneVisual();
+}
+
+void MainWindow::setDragInvalidActive(bool active) {
+    if (m_dragInvalidActive == active) {
+        return;
     }
+    m_dragInvalidActive = active;
+    refreshDropZoneVisual();
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
     if (!extractDroppedVideoSource(event->mimeData(), nullptr).isEmpty()) {
         event->acceptProposedAction();
+        setDragInvalidActive(false);
         setDragHintActive(true);
     } else {
+        // Still ignored at the Qt/OS level (so the cursor shows the usual
+        // "not allowed" feedback), but the drop zone gets its own subtle
+        // Invalid visual too - see DropZoneWidget::State::Invalid.
         event->ignore();
+        setDragHintActive(false);
+        setDragInvalidActive(true);
     }
 }
 
@@ -555,10 +780,12 @@ void MainWindow::dragMoveEvent(QDragMoveEvent* event) {
 
 void MainWindow::dragLeaveEvent(QDragLeaveEvent* /*event*/) {
     setDragHintActive(false);
+    setDragInvalidActive(false);
 }
 
 void MainWindow::dropEvent(QDropEvent* event) {
     setDragHintActive(false);
+    setDragInvalidActive(false);
     int extraCandidates = 0;
     const QString source = extractDroppedVideoSource(event->mimeData(), &extraCandidates);
     if (source.isEmpty()) {
@@ -574,6 +801,17 @@ void MainWindow::dropEvent(QDropEvent* event) {
     if (extraCandidates > 0) {
         m_statusLabel->setToolTip(tr("%1 additional dropped file(s) were ignored - only one video can be "
                                       "loaded at a time.").arg(extraCandidates));
+    }
+    // A short, purely visual success burst - loadVideoSource() above
+    // already kicked off decoding in parallel, so this never delays
+    // playback. refreshDropZoneVisual() (called from loadVideoSource's
+    // applyVideoInfoUi) already switched to the video page since
+    // m_selectedVideoPath is non-empty now; re-show the drop-zone page
+    // just long enough for the burst, then hand back to the normal logic.
+    if (m_dropZone && m_previewStack) {
+        m_previewStack->setCurrentIndex(kDropZonePageIndex);
+        m_dropZone->setState(DropZoneWidget::State::Success);
+        QTimer::singleShot(650, this, [this] { refreshDropZoneVisual(); });
     }
 }
 
@@ -623,7 +861,8 @@ void MainWindow::onPlayPause() {
 
 void MainWindow::updatePlayPauseLabel() {
     bool playing = m_manager->isPlaying();
-    m_playPauseButton->setText(playing ? tr("⏸ Pause") : tr("▶ Play"));
+    m_playPauseButton->setIcon(QIcon(playing ? kPauseIconResourcePath : kPlayIconResourcePath));
+    m_playPauseButton->setText(playing ? tr("Pause") : tr("Play"));
     m_trayPlayAction->setEnabled(!playing);
     m_trayPauseAction->setEnabled(playing);
 }

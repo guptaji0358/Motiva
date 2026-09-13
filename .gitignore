@@ -1,2 +1,4 @@
 build/
+deployment/
 *.log
+CLAUDE.md
