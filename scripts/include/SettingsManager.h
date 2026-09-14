@@ -43,6 +43,17 @@ public:
     bool showVideoOnBattery() const;
     void setShowVideoOnBattery(bool enabled);
 
+    // Which named visual style (see Theme::StyleId) the app renders with.
+    // Default 0 = Theme::StyleId::ModernAurora.
+    int uiStyle() const;
+    void setUiStyle(int style);
+
+    // Which appearance (see Theme::AppearanceId) the app renders with -
+    // independent of/orthogonal to uiStyle() above. Default 0 = System
+    // (follow the OS light/dark palette, the app's original behavior).
+    int appearance() const;
+    void setAppearance(int appearance);
+
 private:
     QSettings m_settings;
 };

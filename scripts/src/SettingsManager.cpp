@@ -135,3 +135,17 @@ bool SettingsManager::showVideoOnBattery() const {
 void SettingsManager::setShowVideoOnBattery(bool enabled) {
     m_settings.setValue("app/showVideoOnBattery", enabled);
 }
+
+int SettingsManager::uiStyle() const {
+    return m_settings.value("app/uiStyle", 0).toInt();
+}
+void SettingsManager::setUiStyle(int style) {
+    m_settings.setValue("app/uiStyle", style);
+}
+
+int SettingsManager::appearance() const {
+    return m_settings.value("app/appearance", 0).toInt();
+}
+void SettingsManager::setAppearance(int appearance) {
+    m_settings.setValue("app/appearance", appearance);
+}

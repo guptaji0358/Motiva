@@ -11,6 +11,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QDir>
@@ -43,7 +44,20 @@ namespace {
 // for the exe/taskbar/Alt-Tab icon; the in-app UI icons are all .svg
 // (Assets/<feature>/...), Qt's native SVG icon engine (Qt6::Svg).
 constexpr const char* kAppIconResourcePath = ":/application/motiva.ico";
-constexpr const char* kSettingsIconResourcePath = ":/settings-icon/settings.svg";
+// Settings/Set-Wallpaper/Remove-Wallpaper have genuinely different SVG
+// artwork per light/dark OS palette (not a single SVG recolored via a
+// filter) - see Assets/settings-icon/{light,dark}/ and
+// Assets/wallpaper/{light,dark}/, and the "Two distinct Motiva visual
+// styles with theme-aware icons" task. A function rather than a constant
+// so it re-resolves against whatever the palette is right now.
+QString settingsIconPath() {
+    return Theme::isDarkPalette() ? QStringLiteral(":/settings-icon/dark/settings.svg")
+                                   : QStringLiteral(":/settings-icon/light/settings.svg");
+}
+QString wallpaperIconPath(const char* name) {
+    return (Theme::isDarkPalette() ? QStringLiteral(":/wallpaper/dark/") : QStringLiteral(":/wallpaper/light/"))
+        + QLatin1String(name);
+}
 constexpr const char* kOpenVideoIconResourcePath = ":/video/open-video.svg";
 constexpr const char* kOpenVideoIconHoverPath = ":/video/open-video-hover.svg";
 constexpr const char* kOpenVideoIconPressedPath = ":/video/open-video-pressed.svg";
@@ -56,13 +70,14 @@ constexpr const char* kPauseIconResourcePath = ":/playback/pause.svg";
 constexpr const char* kPauseIconHoverPath = ":/playback/pause-hover.svg";
 constexpr const char* kVolumeIconResourcePath = ":/playback/volume.svg";
 constexpr const char* kVolumeMuteIconResourcePath = ":/playback/volume-mute.svg";
-constexpr const char* kSetWallpaperIconResourcePath = ":/wallpaper/set-wallpaper.svg";
-constexpr const char* kSetWallpaperIconHoverPath = ":/wallpaper/set-wallpaper-hover.svg";
-constexpr const char* kSetWallpaperIconPressedPath = ":/wallpaper/set-wallpaper-pressed.svg";
-constexpr const char* kSetWallpaperIconDisabledPath = ":/wallpaper/set-wallpaper-disabled.svg";
-constexpr const char* kRemoveWallpaperIconResourcePath = ":/wallpaper/remove-wallpaper.svg";
-constexpr const char* kRemoveWallpaperIconHoverPath = ":/wallpaper/remove-wallpaper-hover.svg";
-constexpr const char* kRemoveWallpaperIconPressedPath = ":/wallpaper/remove-wallpaper-pressed.svg";
+QString setWallpaperIconPath() { return wallpaperIconPath("set-wallpaper.svg"); }
+QString setWallpaperIconHoverPath() { return wallpaperIconPath("set-wallpaper-hover.svg"); }
+QString setWallpaperIconPressedPath() { return wallpaperIconPath("set-wallpaper-pressed.svg"); }
+QString setWallpaperIconDisabledPath() { return wallpaperIconPath("set-wallpaper-disabled.svg"); }
+QString removeWallpaperIconPath() { return wallpaperIconPath("remove-wallpaper.svg"); }
+QString removeWallpaperIconHoverPath() { return wallpaperIconPath("remove-wallpaper-hover.svg"); }
+QString removeWallpaperIconPressedPath() { return wallpaperIconPath("remove-wallpaper-pressed.svg"); }
+QString removeWallpaperIconDisabledPath() { return wallpaperIconPath("remove-wallpaper-disabled.svg"); }
 
 // This app has no app-level light/dark theme toggle of its own (see
 // CLAUDE.md) - it simply follows the OS window palette everywhere except
@@ -186,8 +201,8 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
     setWindowTitle("Motiva");
     setWindowIcon(QIcon(kAppIconResourcePath));
-    resize(560, 680);
-    setMinimumSize(420, 480);
+    resize(860, 680);
+    setMinimumSize(720, 480);
     // Whole-window drop target (see dragEnterEvent/dropEvent) - the
     // preview area is the visual focus of the drag hint, but the actual
     // Qt drop target is the window so a drop anywhere on it still works.
@@ -350,7 +365,7 @@ void MainWindow::buildUi() {
 
     m_settingsButton = new QToolButton(central);
     m_settingsButton->setObjectName(QStringLiteral("settingsButton"));
-    m_settingsButton->setIcon(QIcon(kSettingsIconResourcePath));
+    m_settingsButton->setIcon(QIcon(settingsIconPath()));
     m_settingsButton->setText(tr("Settings"));
     m_settingsButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_settingsButton->setToolTip(tr("Open settings"));
@@ -515,9 +530,9 @@ void MainWindow::buildTray() {
     });
 
     menu->addSeparator();
-    menu->addAction(QIcon(kSettingsIconResourcePath), tr("Settings"), this, &MainWindow::openSettings);
+    menu->addAction(QIcon(settingsIconPath()), tr("Settings"), this, &MainWindow::openSettings);
     menu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Video"), this, &MainWindow::onChooseVideo);
-    menu->addAction(QIcon(kRemoveWallpaperIconResourcePath), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
+    menu->addAction(QIcon(removeWallpaperIconPath()), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
     menu->addSeparator();
     menu->addAction(tr("Exit"), this, &MainWindow::onExitRequested);
 
@@ -636,21 +651,21 @@ void MainWindow::updatePrimaryButtonUi() {
     // (set vs. remove) is current - see IconButton.h.
     switch (m_uiState) {
     case WallpaperUiState::NoVideo:
-        m_primaryButton->setStateIcon(QIcon(kSetWallpaperIconResourcePath), QIcon(kSetWallpaperIconHoverPath),
-            QIcon(kSetWallpaperIconPressedPath), QIcon(kSetWallpaperIconDisabledPath));
+        m_primaryButton->setStateIcon(QIcon(setWallpaperIconPath()), QIcon(setWallpaperIconHoverPath()),
+            QIcon(setWallpaperIconPressedPath()), QIcon(setWallpaperIconDisabledPath()));
         m_primaryButton->setText(tr("Set as Wallpaper"));
         m_primaryButton->setEnabled(false);
         break;
     case WallpaperUiState::Ready:
     case WallpaperUiState::Error:
-        m_primaryButton->setStateIcon(QIcon(kSetWallpaperIconResourcePath), QIcon(kSetWallpaperIconHoverPath),
-            QIcon(kSetWallpaperIconPressedPath), QIcon(kSetWallpaperIconDisabledPath));
+        m_primaryButton->setStateIcon(QIcon(setWallpaperIconPath()), QIcon(setWallpaperIconHoverPath()),
+            QIcon(setWallpaperIconPressedPath()), QIcon(setWallpaperIconDisabledPath()));
         m_primaryButton->setText(tr("Set as Wallpaper"));
         m_primaryButton->setEnabled(true);
         break;
     case WallpaperUiState::Applying:
-        m_primaryButton->setStateIcon(QIcon(kSetWallpaperIconResourcePath), QIcon(kSetWallpaperIconHoverPath),
-            QIcon(kSetWallpaperIconPressedPath), QIcon(kSetWallpaperIconDisabledPath));
+        m_primaryButton->setStateIcon(QIcon(setWallpaperIconPath()), QIcon(setWallpaperIconHoverPath()),
+            QIcon(setWallpaperIconPressedPath()), QIcon(setWallpaperIconDisabledPath()));
         m_primaryButton->setText(tr("Applying…"));
         m_primaryButton->setEnabled(false);
         break;
@@ -659,10 +674,19 @@ void MainWindow::updatePrimaryButtonUi() {
         // active - the button becomes "Remove Wallpaper" instead of
         // showing both actions as equally primary.
         m_primaryButton->setStateIcon(
-            QIcon(kRemoveWallpaperIconResourcePath), QIcon(kRemoveWallpaperIconHoverPath),
-            QIcon(kRemoveWallpaperIconPressedPath));
+            QIcon(removeWallpaperIconPath()), QIcon(removeWallpaperIconHoverPath()),
+            QIcon(removeWallpaperIconPressedPath()), QIcon(removeWallpaperIconDisabledPath()));
         m_primaryButton->setText(tr("Remove Wallpaper"));
-        m_primaryButton->setEnabled(true);
+        // Reaching Active already implies a real, verified attach (see
+        // the constructor's wallpaperVerified/wallpaperSuspendedForBattery
+        // connections), but m_hasCurrentVideo is the explicit, session-
+        // scoped gate the task calls for: Remove must visually disable
+        // itself (not just silently no-op) whenever there is no video the
+        // user loaded via Open/Drop/Paste this session - a merely-recent/
+        // restored-from-settings path never sets it. setEnabled(false)
+        // here uses IconButton's existing disabled styling/icon, same as
+        // every other disabled state in this app.
+        m_primaryButton->setEnabled(m_hasCurrentVideo);
         break;
     }
 }
@@ -809,6 +833,11 @@ bool MainWindow::isUsableVideoSource(const QString& source) {
 void MainWindow::loadVideoSource(const QString& source) {
     m_selectedVideoPath = source;
     m_settings.setVideoPath(source);
+    // Open Video, drag & drop, and Paste Video URL all converge on this
+    // one function - so this is the single place that can honestly say
+    // the user explicitly chose a video THIS session. See m_hasCurrentVideo's
+    // declaration and the "Remove button correctness" task.
+    m_hasCurrentVideo = true;
     m_lastVideoDetailsText.clear();
     applyVideoInfoUi();
 
@@ -1047,6 +1076,10 @@ void MainWindow::onSetWallpaper() {
 void MainWindow::onRemoveWallpaper() {
     m_manager->removeWallpaper();
     m_settings.setWasWallpaperActive(false);
+    // Removing clears the "explicitly loaded this session" flag too, so
+    // the button goes back to visually disabled until the user opens/
+    // drops/pastes a video again - see m_hasCurrentVideo.
+    m_hasCurrentVideo = false;
     // UI state follows WallpaperManager::wallpaperRemoved.
 }
 
@@ -1152,6 +1185,14 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     } else {
         onExitRequested();
         event->accept();
+    }
+}
+
+void MainWindow::changeEvent(QEvent* event) {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
+        m_settingsButton->setIcon(QIcon(settingsIconPath()));
+        updatePrimaryButtonUi();
     }
 }
 

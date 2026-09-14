@@ -14,6 +14,7 @@
 #include "StartupDiagnostics.h"
 #include "InstanceIpc.h"
 #include "Theme.h"
+#include "SettingsManager.h"
 
 namespace {
 
@@ -82,8 +83,21 @@ int main(int argc, char* argv[]) {
     app.setWindowIcon(QIcon(":/application/motiva.ico"));
     // Single centralized stylesheet for the whole app (see Theme.h) -
     // purely visual, applied once here rather than scattered per-widget
-    // setStyleSheet() calls throughout MainWindow/SettingsDialog.
-    app.setStyleSheet(Theme::appStyleSheet());
+    // setStyleSheet() calls throughout MainWindow/SettingsDialog. Which of
+    // the two named styles (Modern Aurora / Motiva Onyx) is read from the
+    // persisted setting so a choice made in a previous session survives a
+    // relaunch; SettingsDialog re-applies live via qApp->setStyleSheet()
+    // when the user changes it mid-session, so this is only the initial
+    // value.
+    // Must run before any setPalette() call - this is the only chance to
+    // remember what the real OS-driven palette was, so a later "System"
+    // appearance choice has something genuine to restore to.
+    Theme::captureSystemPalette();
+    {
+        SettingsManager startupSettings;
+        app.setStyleSheet(Theme::appStyleSheet(static_cast<Theme::StyleId>(startupSettings.uiStyle())));
+        Theme::applyAppearance(static_cast<Theme::AppearanceId>(startupSettings.appearance()));
+    }
 
     // Two instances would each attach their own competing render window to
     // the desktop (fighting over z-order every health-check tick), so only

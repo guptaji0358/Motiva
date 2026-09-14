@@ -31,6 +31,13 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    // Re-picks every theme-aware icon (Settings/Set-Wallpaper/Remove-
+    // Wallpaper) when the OS switches between light and dark - otherwise
+    // an icon chosen for the OLD palette would stay on screen (e.g.
+    // invisible dark-on-dark) until something else happened to call
+    // updatePrimaryButtonUi()/refresh the Settings icon. See
+    // Theme::isDarkPalette() and the icon-path functions in MainWindow.cpp.
+    void changeEvent(QEvent* event) override;
     // Drag & drop entry points - accepts a local video file or a web
     // video URL dropped anywhere on the window, with the video preview
     // area as the visual target (see dragEnterEvent's hint text). Feeds
@@ -125,6 +132,18 @@ private:
     QString m_selectedVideoPath;
     WallpaperUiState m_uiState = WallpaperUiState::NoVideo;
     QString m_lastErrorMessage;
+
+    // True only while the user has explicitly loaded a video THIS
+    // session via Open Video, drag & drop, or Paste Video URL - i.e.
+    // whenever MainWindow::loadVideoSource() (the one convergence point
+    // all three of those use) has run and Remove hasn't undone it yet.
+    // Deliberately distinct from m_selectedVideoPath, which also holds
+    // whatever video was merely restored from settings/history at
+    // startup for the in-app preview - that "recent" restore must NOT by
+    // itself make Remove Wallpaper clickable. False at construction and
+    // reset to false after a successful Remove; see loadVideoSource()/
+    // onRemoveWallpaper()/updatePrimaryButtonUi().
+    bool m_hasCurrentVideo = false;
 
     // True while WallpaperManager has temporarily hidden the video
     // because the system is on battery and "Show video on battery" is

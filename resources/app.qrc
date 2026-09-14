@@ -1,7 +1,8 @@
 <RCC>
     <qresource prefix="/">
         <file alias="application/motiva.ico">../Assets/application/motiva.ico</file>
-        <file alias="settings-icon/settings.svg">../Assets/settings-icon/settings.svg</file>
+        <file alias="settings-icon/light/settings.svg">../Assets/settings-icon/light/settings.svg</file>
+        <file alias="settings-icon/dark/settings.svg">../Assets/settings-icon/dark/settings.svg</file>
         <file alias="video/open-video.svg">../Assets/video/open-video.svg</file>
         <file alias="video/open-video-hover.svg">../Assets/video/open-video-hover.svg</file>
         <file alias="video/open-video-pressed.svg">../Assets/video/open-video-pressed.svg</file>
@@ -16,13 +17,22 @@
         <file alias="playback/pause-hover.svg">../Assets/playback/pause-hover.svg</file>
         <file alias="playback/volume.svg">../Assets/playback/volume.svg</file>
         <file alias="playback/volume-mute.svg">../Assets/playback/volume-mute.svg</file>
-        <file alias="wallpaper/set-wallpaper.svg">../Assets/wallpaper/set-wallpaper.svg</file>
-        <file alias="wallpaper/set-wallpaper-hover.svg">../Assets/wallpaper/set-wallpaper-hover.svg</file>
-        <file alias="wallpaper/set-wallpaper-pressed.svg">../Assets/wallpaper/set-wallpaper-pressed.svg</file>
-        <file alias="wallpaper/set-wallpaper-disabled.svg">../Assets/wallpaper/set-wallpaper-disabled.svg</file>
-        <file alias="wallpaper/remove-wallpaper.svg">../Assets/wallpaper/remove-wallpaper.svg</file>
-        <file alias="wallpaper/remove-wallpaper-hover.svg">../Assets/wallpaper/remove-wallpaper-hover.svg</file>
-        <file alias="wallpaper/remove-wallpaper-pressed.svg">../Assets/wallpaper/remove-wallpaper-pressed.svg</file>
+        <file alias="wallpaper/light/set-wallpaper.svg">../Assets/wallpaper/light/set-wallpaper.svg</file>
+        <file alias="wallpaper/light/set-wallpaper-hover.svg">../Assets/wallpaper/light/set-wallpaper-hover.svg</file>
+        <file alias="wallpaper/light/set-wallpaper-pressed.svg">../Assets/wallpaper/light/set-wallpaper-pressed.svg</file>
+        <file alias="wallpaper/light/set-wallpaper-disabled.svg">../Assets/wallpaper/light/set-wallpaper-disabled.svg</file>
+        <file alias="wallpaper/light/remove-wallpaper.svg">../Assets/wallpaper/light/remove-wallpaper.svg</file>
+        <file alias="wallpaper/light/remove-wallpaper-hover.svg">../Assets/wallpaper/light/remove-wallpaper-hover.svg</file>
+        <file alias="wallpaper/light/remove-wallpaper-pressed.svg">../Assets/wallpaper/light/remove-wallpaper-pressed.svg</file>
+        <file alias="wallpaper/light/remove-wallpaper-disabled.svg">../Assets/wallpaper/light/remove-wallpaper-disabled.svg</file>
+        <file alias="wallpaper/dark/set-wallpaper.svg">../Assets/wallpaper/dark/set-wallpaper.svg</file>
+        <file alias="wallpaper/dark/set-wallpaper-hover.svg">../Assets/wallpaper/dark/set-wallpaper-hover.svg</file>
+        <file alias="wallpaper/dark/set-wallpaper-pressed.svg">../Assets/wallpaper/dark/set-wallpaper-pressed.svg</file>
+        <file alias="wallpaper/dark/set-wallpaper-disabled.svg">../Assets/wallpaper/dark/set-wallpaper-disabled.svg</file>
+        <file alias="wallpaper/dark/remove-wallpaper.svg">../Assets/wallpaper/dark/remove-wallpaper.svg</file>
+        <file alias="wallpaper/dark/remove-wallpaper-hover.svg">../Assets/wallpaper/dark/remove-wallpaper-hover.svg</file>
+        <file alias="wallpaper/dark/remove-wallpaper-pressed.svg">../Assets/wallpaper/dark/remove-wallpaper-pressed.svg</file>
+        <file alias="wallpaper/dark/remove-wallpaper-disabled.svg">../Assets/wallpaper/dark/remove-wallpaper-disabled.svg</file>
         <file alias="checkbox/check.svg">../Assets/checkbox/check.svg</file>
     </qresource>
 </RCC>

@@ -50,6 +50,8 @@ private:
     void onLoopToggled(bool checked);
     void onStartWithWindowsToggled(bool checked);
     void onShowVideoOnBatteryToggled(bool checked);
+    void onStyleChanged(int index);
+    void onAppearanceChanged(int index);
 
     WallpaperManager* m_manager;
     SettingsManager* m_settings;
@@ -61,4 +63,6 @@ private:
     QCheckBox* m_loopCheck = nullptr;
     QCheckBox* m_startWithWindowsCheck = nullptr;
     QCheckBox* m_showVideoOnBatteryCheck = nullptr;
+    QComboBox* m_styleCombo = nullptr;
+    QComboBox* m_appearanceCombo = nullptr;
 };
