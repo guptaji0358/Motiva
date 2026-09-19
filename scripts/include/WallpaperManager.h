@@ -130,6 +130,7 @@ private:
     // Explorer/Settings while our video was active, so we detach to let
     // their choice actually be visible instead of staying on top of it.
     void onPossibleExternalWallpaperChange();
+    void armDesktopKeyWatch();
 
     void rebuildWindows();
     // Kicks off attachment of every not-yet-attached window on a
@@ -171,6 +172,12 @@ private:
     std::unique_ptr<VideoPlayer> m_player;
     std::vector<std::unique_ptr<WallpaperWindow>> m_windows;
     UINT m_taskbarCreatedMessage = 0;
+    // Registry-change watch on HKCU\Control Panel\Desktop - see constructor.
+    HKEY m_desktopKey = nullptr;
+    HANDLE m_desktopKeyEvent = nullptr;
+    class QWinEventNotifier* m_desktopKeyNotifier = nullptr;
+    HANDLE m_themesChange = INVALID_HANDLE_VALUE;
+    class QWinEventNotifier* m_themesNotifier = nullptr;
 
     // WindowsDesktopWallpaper::AttachToDesktop() performs undocumented
     // Progman/WorkerW discovery: SendMessageTimeoutW round-trips to

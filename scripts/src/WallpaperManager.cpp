@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QCoreApplication>
 #include <QTimer>
+#include <QWinEventNotifier>
 #include <QtConcurrent/QtConcurrentRun>
 
 WallpaperManager::WallpaperManager(QObject* parent)
@@ -15,6 +16,60 @@ WallpaperManager::WallpaperManager(QObject* parent)
     qApp->installNativeEventFilter(this);
 
     connect(&m_attachWatcher, &QFutureWatcher<bool>::finished, this, &WallpaperManager::onAttachAttemptFinished);
+
+    // Explorer's "Set as desktop background" (and Settings > Personalization)
+    // go through IDesktopWallpaper, which does NOT broadcast WM_SETTINGCHANGE
+    // and leaves HKCU\Control Panel\Desktop\Wallpaper untouched (verified
+    // live) - but it does rewrite TranscodedImageCache in that same key. A
+    // kernel registry-change event on the key is the native, non-polling
+    // signal; the handler still applies the same baseline comparison as the
+    // WM_SETTINGCHANGE path, so unrelated writes (and Explorer restarts,
+    // which don't change the wallpaper) are ignored.
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", 0, KEY_NOTIFY, &m_desktopKey) == ERROR_SUCCESS) {
+        m_desktopKeyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (m_desktopKeyEvent) {
+            m_desktopKeyNotifier = new QWinEventNotifier(m_desktopKeyEvent, this);
+            connect(m_desktopKeyNotifier, &QWinEventNotifier::activated, this, [this]() {
+                armDesktopKeyWatch();
+                qInfo() << "[Wallpaper] HKCU\\Control Panel\\Desktop changed (active=" << m_active << ").";
+                onPossibleExternalWallpaperChange();
+            });
+            armDesktopKeyWatch();
+        }
+    } else {
+        qWarning() << "[Wallpaper] Could not open HKCU\\Control Panel\\Desktop for change notification.";
+    }
+
+    // Second native signal, because the registry event above was observed
+    // NOT to fire for IDesktopWallpaper changes: Explorer rewrites
+    // %APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper on every
+    // wallpaper change. A directory change notification (kernel event, no
+    // polling) wakes us; a short debounce lets the COM-visible wallpaper
+    // value settle before the same baseline comparison runs.
+    {
+        wchar_t appData[MAX_PATH] = {};
+        if (GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH) > 0) {
+            const std::wstring themesDir = std::wstring(appData) + L"\\Microsoft\\Windows\\Themes";
+            m_themesChange = FindFirstChangeNotificationW(
+                themesDir.c_str(), FALSE,
+                FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_FILE_NAME);
+            if (m_themesChange != INVALID_HANDLE_VALUE) {
+                m_themesNotifier = new QWinEventNotifier(m_themesChange, this);
+                connect(m_themesNotifier, &QWinEventNotifier::activated, this, [this]() {
+                    FindNextChangeNotification(m_themesChange);
+                    if (m_active) {
+                        QTimer::singleShot(400, this, [this]() {
+                            qInfo() << "[Wallpaper] Themes folder changed (active=" << m_active << ").";
+                            onPossibleExternalWallpaperChange();
+                        });
+                    }
+                });
+            } else {
+                m_themesChange = INVALID_HANDLE_VALUE;
+                qWarning() << "[Wallpaper] Could not watch the Themes folder for wallpaper changes.";
+            }
+        }
+    }
 
     // Short, self-terminating poll for desktop-hierarchy readiness - see
     // the m_attachRetryTimer comment in the header for why this exists
@@ -33,6 +88,13 @@ WallpaperManager::~WallpaperManager() {
     m_shuttingDown = true;
     m_attachRetryTimer.stop();
     qApp->removeNativeEventFilter(this);
+    delete m_themesNotifier;
+    m_themesNotifier = nullptr;
+    if (m_themesChange != INVALID_HANDLE_VALUE) FindCloseChangeNotification(m_themesChange);
+    delete m_desktopKeyNotifier;
+    m_desktopKeyNotifier = nullptr;
+    if (m_desktopKeyEvent) CloseHandle(m_desktopKeyEvent);
+    if (m_desktopKey) RegCloseKey(m_desktopKey);
     if (m_attachWatcher.isRunning()) {
         // The Win32 calls inside AttachToDesktop don't take an external
         // cancellation token, so this waits for the in-flight attempt to
@@ -167,6 +229,12 @@ void WallpaperManager::resumeFromBattery() {
     // this just reparents them back, no rebuild needed.
     attachAllWindows();
     emit wallpaperResumedFromBattery();
+}
+
+void WallpaperManager::armDesktopKeyWatch() {
+    if (m_desktopKey && m_desktopKeyEvent) {
+        RegNotifyChangeKeyValue(m_desktopKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, m_desktopKeyEvent, TRUE);
+    }
 }
 
 void WallpaperManager::onPossibleExternalWallpaperChange() {
