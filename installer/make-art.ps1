@@ -73,3 +73,74 @@ $bmp,$g = New-Canvas 440 464; Aurora $g 440 464
 Glow $g 220 232 150 @(90,170,255) 90
 $g.DrawImage($logo,110,122,220,220)
 Save-Scaled $bmp 220 "$PSScriptRoot\assets\motiva-installer-banner.png"
+
+# ================= Custom control artwork (installer/assets/ui/*.bmp) =================
+# Drawn at 2x; the installer scales them to the wizard's DPI with halftone stretching.
+# BMP has no alpha, so they are drawn on the exact wizard background RGB(12,14,30).
+$ui = "$PSScriptRoot\assets\ui"; New-Item -ItemType Directory $ui -Force | Out-Null
+$BG = [System.Drawing.Color]::FromArgb(12,14,30)
+function RR($x,$y,$w,$h,$r){
+  $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+  $d=$r*2; $p.AddArc($x,$y,$d,$d,180,90); $p.AddArc($x+$w-$d,$y,$d,$d,270,90)
+  $p.AddArc($x+$w-$d,$y+$h-$d,$d,$d,0,90); $p.AddArc($x,$y+$h-$d,$d,$d,90,90); $p.CloseFigure(); return $p
+}
+function C($r,$g,$b,$a=255){ [System.Drawing.Color]::FromArgb($a,$r,$g,$b) }
+function New-UiBmp($w,$h){
+  $b = New-Object System.Drawing.Bitmap $w,$h,([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+  $g = [System.Drawing.Graphics]::FromImage($b); $g.SmoothingMode='AntiAlias'; $g.Clear($BG)
+  return @($b,$g)
+}
+function Draw-Button($name,$w,$h,$fillA,$fillB,$border,$glow){
+  $b,$g = New-UiBmp $w $h
+  if($glow){ $pw = New-Object System.Drawing.Pen (C 90 190 255 70),6; $g.DrawPath($pw,(RR 1 1 ($w-3) ($h-3) 24)) }
+  $path = RR 5 5 ($w-11) ($h-11) 20
+  $br = New-Object System.Drawing.Drawing2D.LinearGradientBrush ([System.Drawing.Rectangle]::new(0,0,$w,$h)),$fillA,$fillB,0.0
+  $g.FillPath($br,$path)
+  if($border){ $g.DrawPath((New-Object System.Drawing.Pen $border,2.4),$path) }
+  $b.Save("$ui\$name.bmp",[System.Drawing.Imaging.ImageFormat]::Bmp)
+}
+# primary 300x80 (150x40 @1x) ; states 0 normal,1 hover,2 pressed,3 disabled
+Draw-Button 'btn-primary-0' 300 80 (C 52 140 255) (C 130 88 255) (C 150 200 255 120) $false
+Draw-Button 'btn-primary-1' 300 80 (C 84 172 255) (C 160 116 255) (C 210 235 255 200) $true
+Draw-Button 'btn-primary-2' 300 80 (C 36 108 220) (C 100 62 210) (C 120 170 240 120) $false
+Draw-Button 'btn-primary-3' 300 80 (C 26 30 58) (C 26 30 58) (C 44 50 90) $false
+# secondary 220x80 (110x40 @1x)
+Draw-Button 'btn-secondary-0' 220 80 (C 24 28 56) (C 24 28 56) (C 66 76 128) $false
+Draw-Button 'btn-secondary-1' 220 80 (C 32 38 76) (C 32 38 76) (C 90 190 255) $true
+Draw-Button 'btn-secondary-2' 220 80 (C 17 20 42) (C 17 20 42) (C 70 150 230) $false
+Draw-Button 'btn-secondary-3' 220 80 (C 14 16 34) (C 14 16 34) (C 34 38 70) $false
+
+function Draw-Check($name,$on,$hover){
+  $b,$g = New-UiBmp 48 48
+  if($hover){ $g.DrawPath((New-Object System.Drawing.Pen (C 90 190 255 80),6),(RR 2 2 42 42 14)) }
+  $path = RR 6 6 35 35 10
+  if($on){
+    $br = New-Object System.Drawing.Drawing2D.LinearGradientBrush ([System.Drawing.Rectangle]::new(0,0,48,48)),(C 52 140 255),(C 140 90 255),45.0
+    $g.FillPath($br,$path)
+    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White),5; $pen.StartCap='Round'; $pen.EndCap='Round'; $pen.LineJoin='Round'
+    $g.DrawLines($pen,@([System.Drawing.PointF]::new(14.5,24.5),[System.Drawing.PointF]::new(21.5,31.5),[System.Drawing.PointF]::new(34,17)))
+  } else {
+    $g.FillPath((New-Object System.Drawing.SolidBrush (C 18 21 44)),$path)
+    $bc = if($hover){ C 90 190 255 } else { C 112 126 190 }
+    $g.DrawPath((New-Object System.Drawing.Pen $bc,3.6),$path)
+  }
+  $b.Save("$ui\$name.bmp",[System.Drawing.Imaging.ImageFormat]::Bmp)
+}
+Draw-Check 'check-off' $false $false; Draw-Check 'check-off-hover' $false $true
+Draw-Check 'check-on'  $true  $false; Draw-Check 'check-on-hover'  $true  $true
+
+# progress track 1280x28 and fill 1280x16 (fill's 16px-high caps are drawn separately by the installer)
+$b,$g = New-UiBmp 1280 28
+$tp = RR 1 1 1277 25 13; $g.FillPath((New-Object System.Drawing.SolidBrush (C 20 24 50)),$tp); $g.DrawPath((New-Object System.Drawing.Pen (C 50 60 108),2),$tp)
+$b.Save("$ui\progress-track.bmp",[System.Drawing.Imaging.ImageFormat]::Bmp)
+$b,$g = New-UiBmp 1280 16
+$fp = RR 0 0 1279 15 7.5
+$fb = New-Object System.Drawing.Drawing2D.LinearGradientBrush ([System.Drawing.Rectangle]::new(0,0,1280,16)),(C 0 200 255),(C 150 90 255),0.0
+$blend = New-Object System.Drawing.Drawing2D.ColorBlend 3
+$blend.Colors = @((C 0 205 255),(C 80 140 255),(C 160 90 255)); $blend.Positions=@(0.0,0.55,1.0); $fb.InterpolationColors=$blend
+$g.FillPath($fb,$fp)
+$g.FillPath((New-Object System.Drawing.SolidBrush (C 255 255 255 40)),(RR 2 2 1276 6 3))
+$fill = $b
+function Crop-Save($bmp,$x,$w,$name){ $r=[System.Drawing.Rectangle]::new($x,0,$w,$bmp.Height); $c=$bmp.Clone($r,$bmp.PixelFormat); $c.Save("$ui\$name.bmp",[System.Drawing.Imaging.ImageFormat]::Bmp) }
+Crop-Save $fill 0 8 'progress-fill-l'; Crop-Save $fill 8 1264 'progress-fill-m'; Crop-Save $fill 1272 8 'progress-fill-r'
+
