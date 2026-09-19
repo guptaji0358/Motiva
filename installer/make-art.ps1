@@ -144,3 +144,27 @@ $fill = $b
 function Crop-Save($bmp,$x,$w,$name){ $r=[System.Drawing.Rectangle]::new($x,0,$w,$bmp.Height); $c=$bmp.Clone($r,$bmp.PixelFormat); $c.Save("$ui\$name.bmp",[System.Drawing.Imaging.ImageFormat]::Bmp) }
 Crop-Save $fill 0 8 'progress-fill-l'; Crop-Save $fill 8 1264 'progress-fill-m'; Crop-Save $fill 1272 8 'progress-fill-r'
 
+
+# ================= Uninstaller heroes (installer/assets/uninstall-*.bmp) =================
+# Same aurora language as the installer. Installed next to the app (see MotivaSetup.iss) because
+# the uninstaller has no access to the installer's embedded files. Aspect matches the dialog's hero area.
+$UW = 1600; $UH = 1034; $dy = 64
+$bmp,$g = New-Canvas $UW $UH; Aurora $g $UW $UH
+Glow $g ($UW/2) (250+$dy) 260 @(150,90,255) 110
+$g.DrawImage($logo,($UW/2-100),(150+$dy),200,200)
+Center $g 'Uninstall Motiva' (New-Object System.Drawing.Font 'Segoe UI Semibold',58) $white (392+$dy) $UW
+Center $g 'Remove Motiva from this computer?' (New-Object System.Drawing.Font 'Segoe UI Light',30) $soft (526+$dy) $UW
+Center $g 'Your settings and videos will be kept.' (New-Object System.Drawing.Font 'Segoe UI',20) $dim (612+$dy) $UW
+Center $g 'Robin Gupta Studios' (New-Object System.Drawing.Font 'Segoe UI',15) $dim ($UH-76) $UW
+Save-Scaled $bmp 800 "$PSScriptRoot\assets\uninstall-welcome.bmp" ([System.Drawing.Imaging.ImageFormat]::Bmp)
+
+$bmp,$g = New-Canvas $UW $UH; Aurora $g $UW $UH
+Glow $g ($UW/2) (260+$dy) 240 @(80,220,190) 100
+$pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255,120,235,210)),8
+$g.DrawEllipse($pen,($UW/2-80),(190+$dy),160,160)
+$pen2 = New-Object System.Drawing.Pen ([System.Drawing.Color]::White),13; $pen2.StartCap='Round'; $pen2.EndCap='Round'; $pen2.LineJoin='Round'
+$g.DrawLines($pen2,@([System.Drawing.PointF]::new($UW/2-34,(272+$dy)),[System.Drawing.PointF]::new($UW/2-8,(298+$dy)),[System.Drawing.PointF]::new($UW/2+38,(240+$dy))))
+Center $g 'Motiva has been removed' (New-Object System.Drawing.Font 'Segoe UI Semibold',54) $white (440+$dy) $UW
+Center $g 'You can reinstall Motiva at any time.' (New-Object System.Drawing.Font 'Segoe UI Light',28) $soft (560+$dy) $UW
+Center $g 'Robin Gupta Studios' (New-Object System.Drawing.Font 'Segoe UI',15) $dim ($UH-76) $UW
+Save-Scaled $bmp 800 "$PSScriptRoot\assets\uninstall-done.bmp" ([System.Drawing.Imaging.ImageFormat]::Bmp)

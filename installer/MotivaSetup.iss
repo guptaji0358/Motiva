@@ -62,6 +62,11 @@ FinishedLabel=Your desktop is ready for motion.
 ; extracting them at startup does not have to decompress the app payload.
 Source: "assets\motiva-installer-finish.bmp"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "assets\ui\*.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+; Uninstaller UI assets (the uninstaller cannot read the installer's embedded files). Listed before
+; the app payload so the installer's "Copying application" step ordering is unchanged.
+Source: "assets\ui\btn-*.bmp"; DestDir: "{app}\uninstall-ui"; Flags: ignoreversion
+Source: "assets\ui\progress-*.bmp"; DestDir: "{app}\uninstall-ui"; Flags: ignoreversion
+Source: "assets\uninstall-*.bmp"; DestDir: "{app}\uninstall-ui"; Flags: ignoreversion
 Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
@@ -95,6 +100,7 @@ function GetCursorPos(var P: TPoint): Boolean; external 'GetCursorPos@user32.dll
 function ScreenToClient(hWnd: LongWord; var P: TPoint): Boolean; external 'ScreenToClient@user32.dll stdcall';
 function GetKeyState(nVirtKey: Integer): SmallInt; external 'GetKeyState@user32.dll stdcall';
 function PostMessage(hWnd: LongWord; Msg: LongWord; wParam, lParam: LongInt): Boolean; external 'PostMessageW@user32.dll stdcall';
+function KillTimer(hWnd: LongWord; uIDEvent: LongWord): Boolean; external 'KillTimer@user32.dll stdcall';
 function SetStretchBltMode(hdc: LongWord; iMode: Integer): Integer; external 'SetStretchBltMode@gdi32.dll stdcall';
 function StretchBlt(hdcDest: LongWord; xDest, yDest, wDest, hDest: Integer; hdcSrc: LongWord; xSrc, ySrc, wSrc, hSrc: Integer; rop: LongWord): Boolean; external 'StretchBlt@gdi32.dll stdcall';
 
@@ -812,10 +818,402 @@ begin
   RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Motiva');
 end;
 
+// ================================================================ Uninstaller UI
+// Same Motiva design language as the installer. The uninstaller cannot use
+// ExtractTemporaryFile, so its bitmaps are read from {app}\uninstall-ui
+// (installed alongside the app) and loaded into memory before anything is removed.
+//
+// Flow: a normal launch shows the Motiva welcome dialog; on confirm it relaunches
+// itself with /SILENT /MOTIVAUI so Inno's own confirm / "successfully removed" message
+// boxes never appear, and the Motiva progress form + completion dialog are shown
+// instead. /VERYSILENT and scripted /SILENT runs (no /MOTIVAUI) show no dialogs.
+
+var
+  UnBase: array[0..7] of TBitmap;
+  UnFillL, UnFillM, UnFillR: TBitmap;
+  UnHeroWelcome, UnHeroDone: TBitmap;
+  UnAssetsReady: Boolean;
+  UnMode: Integer;              // 0 none, 1 dialog, 2 progress form
+  UnTimerId: LongWord;
+  UnPrev: array[0..3] of Boolean;
+  UnDlg: TSetupForm;
+  UnDlgOk: Boolean;
+  UnDlgImg: array[0..1] of TBitmapImage;   // 0 primary, 1 secondary
+  UnDlgCap, UnDlgShown: array[0..1] of String;
+  UpTrack, UpFill, UpCancelImg: TBitmapImage;
+  UpPct, UpLive, UpStatus: TNewStaticText;
+  UpG, UpT: array[0..3] of TNewStaticText;
+  UpTrackW, UpLastW, UpStage: Integer;
+  UpFormAlive: Boolean;   // Inno destroys the progress form before usPostUninstall
+  UpCancelShown: String;
+
+function HasParam(const P: String): Boolean;
+var I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), P) = 0 then Result := True;
+end;
+
+function UnAsset(const Name: String): String;
+begin
+  Result := ExpandConstant('{app}\uninstall-ui\' + Name);
+end;
+
+procedure UnLoadAssets;
+var I: Integer;
+begin
+  if UnAssetsReady then Exit;
+  try
+    for I := 0 to 3 do begin
+      UnBase[I] := TBitmap.Create;
+      UnBase[I].LoadFromFile(UnAsset('btn-primary-' + IntToStr(I) + '.bmp'));
+      UnBase[4 + I] := TBitmap.Create;
+      UnBase[4 + I].LoadFromFile(UnAsset('btn-secondary-' + IntToStr(I) + '.bmp'));
+    end;
+    UnFillL := TBitmap.Create; UnFillL.LoadFromFile(UnAsset('progress-fill-l.bmp'));
+    UnFillM := TBitmap.Create; UnFillM.LoadFromFile(UnAsset('progress-fill-m.bmp'));
+    UnFillR := TBitmap.Create; UnFillR.LoadFromFile(UnAsset('progress-fill-r.bmp'));
+    UnHeroWelcome := TBitmap.Create; UnHeroWelcome.LoadFromFile(UnAsset('uninstall-welcome.bmp'));
+    UnHeroDone := TBitmap.Create; UnHeroDone.LoadFromFile(UnAsset('uninstall-done.bmp'));
+    UnAssetsReady := True;
+  except
+    UnAssetsReady := False; // fall back to Inno's default uninstall UI
+  end;
+end;
+
+function UnClickEdge(Id: Integer; C: TControl): Boolean;
+var Down: Boolean;
+begin
+  Down := CursorInside(C) and (GetKeyState(1) < 0);
+  Result := UnPrev[Id] and (not Down) and CursorInside(C);
+  UnPrev[Id] := Down;
+end;
+
+procedure UnPaintBtn(Img: TBitmapImage; Kind, State: Integer; const Cap: String; var Shown: String);
+var B: TBitmap; Sig: String; Tw, Th: Integer;
+begin
+  Sig := IntToStr(State) + '|' + Cap;
+  if Sig = Shown then Exit;
+  Shown := Sig;
+  B := ScaledBmp(UnBase[Kind * 4 + State], Img.Width, Img.Height);
+  try
+    B.Canvas.Font.Name := 'Segoe UI Semibold';
+    B.Canvas.Font.Size := 10;
+    B.Canvas.Brush.Style := bsClear;
+    if State = 3 then B.Canvas.Font.Color := $82705A
+    else if (Kind = 0) or (State > 0) then B.Canvas.Font.Color := clWhite
+    else B.Canvas.Font.Color := $F0D8CC;
+    Tw := B.Canvas.TextWidth(Cap);
+    Th := B.Canvas.TextHeight(Cap);
+    B.Canvas.TextOut((B.Width - Tw) div 2, (B.Height - Th) div 2 - 1, Cap);
+    Img.Bitmap.Assign(B);
+  finally
+    B.Free;
+  end;
+end;
+
+function UnLabel(Owner: TComponent; Parent: TWinControl; const Caption: String; Left, Top, Width, Size: Integer;
+  Color: TColor; const FontName: String): TNewStaticText;
+begin
+  Result := TNewStaticText.Create(Owner);
+  Result.Parent := Parent;
+  Result.Left := Left;
+  Result.Top := Top;
+  Result.Width := Width;
+  Result.AutoSize := True;
+  Result.WordWrap := False;
+  Result.Font.Name := FontName;
+  Result.Font.Size := Size;
+  Result.Font.Color := Color;
+  Result.Caption := Caption;
+end;
+
+procedure UnPaintFill(W: Integer);
+var B: TBitmap; H, Cap: Integer;
+begin
+  H := ScaleY(8);
+  Cap := H div 2;
+  B := TBitmap.Create;
+  try
+    B.Width := W;
+    B.Height := H;
+    SetStretchBltMode(B.Canvas.Handle, 4);
+    StretchBlt(B.Canvas.Handle, 0, 0, Cap, H, UnFillL.Canvas.Handle, 0, 0, UnFillL.Width, UnFillL.Height, $CC0020);
+    if W > Cap * 2 then
+      StretchBlt(B.Canvas.Handle, Cap, 0, W - Cap * 2, H, UnFillM.Canvas.Handle, 0, 0, UnFillM.Width, UnFillM.Height, $CC0020);
+    StretchBlt(B.Canvas.Handle, W - Cap, 0, Cap, H, UnFillR.Canvas.Handle, 0, 0, UnFillR.Width, UnFillR.Height, $CC0020);
+    UpFill.Width := W;
+    UpFill.Bitmap.Assign(B);
+  finally
+    B.Free;
+  end;
+end;
+
+procedure UpRefreshSteps;
+var I: Integer;
+begin
+  for I := 0 to 3 do begin
+    if I < UpStage then begin
+      UpG[I].Caption := #$2713; UpG[I].Font.Color := clGood;
+      UpT[I].Font.Color := clMuted; UpT[I].Font.Style := [];
+    end else if I = UpStage then begin
+      UpG[I].Caption := #$2192; UpG[I].Font.Color := clAccent;
+      UpT[I].Font.Color := clText; UpT[I].Font.Style := [fsBold];
+    end else begin
+      UpG[I].Caption := #$25CB; UpG[I].Font.Color := clDim;
+      UpT[I].Font.Color := clDim; UpT[I].Font.Style := [];
+    end;
+  end;
+end;
+
+procedure UpSetStage(S: Integer; const Live: String);
+begin
+  if (UpStatus = nil) or (not UpFormAlive) then Exit;
+  UpStage := S;
+  UpLive.Caption := Live;
+  UpRefreshSteps;
+end;
+
+// Progress comes from Inno's own uninstall progress bar (real removal progress).
+procedure UpSyncProgress;
+var Cur, Mx, Pct, W, St: Integer;
+begin
+  Mx := UninstallProgressForm.ProgressBar.Max;
+  Cur := UninstallProgressForm.ProgressBar.Position;
+  if (UpStage = 2) and (Mx > 0) and (Cur >= Mx) then begin
+    // Inno's own removal pass has finished (progress bar full): what remains is finalizing.
+    UpStage := 3;
+    UpLive.Caption := 'Finalizing removal...';
+    UpRefreshSteps;
+  end;
+  if UpStage >= 3 then Pct := 100
+  else if (UpStage = 2) and (Mx > 0) then Pct := Integer((Int64(Cur) * 100) div Mx)
+  else Pct := 0;
+  W := (UpTrackW - ScaleX(6)) * Pct div 100;
+  if W < ScaleX(8) then W := ScaleX(8);
+  if W <> UpLastW then begin
+    UpLastW := W;
+    UnPaintFill(W);
+    UpPct.Caption := IntToStr(Pct) + '%';
+    UpPct.Left := UpTrack.Left + UpTrackW - UpPct.Width;
+  end;
+  UpFill.Visible := Pct > 0;
+  if (UpStage = 2) and (UninstallProgressForm.StatusLabel.Caption <> '') then
+    UpLive.Caption := UninstallProgressForm.StatusLabel.Caption;
+  // custom Cancel mirrors Inno's (normally hidden/disabled during removal)
+  UpCancelImg.Visible := UninstallProgressForm.CancelButton.Visible;
+  if UpCancelImg.Visible then begin
+    St := HoverState(UpCancelImg, UninstallProgressForm.CancelButton.Enabled);
+    UnPaintBtn(UpCancelImg, 1, St, 'Cancel', UpCancelShown);
+    if UnClickEdge(2, UpCancelImg) and UninstallProgressForm.CancelButton.Enabled then
+      PostMessage(UninstallProgressForm.CancelButton.Handle, BM_CLICK, 0, 0);
+  end;
+end;
+
+procedure UnTick(H: LongWord; Msg: LongWord; IdEvent: LongWord; Time: LongWord);
+var I: Integer; Clicked: Boolean;
+begin
+  try
+    if UnMode = 1 then begin
+      for I := 0 to 1 do
+        if UnDlgImg[I].Visible then begin
+          Clicked := UnClickEdge(I, UnDlgImg[I]);
+          UnPaintBtn(UnDlgImg[I], I, HoverState(UnDlgImg[I], True), UnDlgCap[I], UnDlgShown[I]);
+          if Clicked then begin
+            UnDlgOk := (I = 0);
+            UnDlg.Close;
+          end;
+        end;
+    end else if UnMode = 2 then
+      UpSyncProgress;
+  except
+  end;
+end;
+
+// Full-window Motiva dialog: hero artwork + primary (and optional secondary) button.
+// Returns True when the primary button was chosen.
+function ShowUnDialog(Hero: TBitmap; const PrimaryCap, SecondaryCap, StatusTxt: String): Boolean;
+var Img: TBitmapImage; HeroH, X, I: Integer; L: TNewStaticText; HB: TBitmap;
+begin
+  UnDlg := CreateCustomForm(ScaleX(600), ScaleY(460), False, False);
+  try
+    // CreateCustomForm scales its size again; set the real pixel size explicitly so the
+    // window matches the installer's.
+    UnDlg.ClientWidth := ScaleX(600);
+    UnDlg.ClientHeight := ScaleY(460);
+    UnDlg.Caption := 'Motiva Uninstall';
+    UnDlg.Color := clBg;
+    UnDlg.Font.Name := 'Segoe UI';
+    HeroH := UnDlg.ClientHeight - ScaleY(72);
+    Img := TBitmapImage.Create(UnDlg);
+    Img.Parent := UnDlg;
+    Img.SetBounds(0, 0, UnDlg.ClientWidth, HeroH);
+    HB := ScaledBmp(Hero, UnDlg.ClientWidth, HeroH);
+    Img.Bitmap.Assign(HB);
+    HB.Free;
+
+    X := UnDlg.ClientWidth - ScaleX(24);
+    for I := 0 to 1 do begin
+      UnDlgImg[I] := TBitmapImage.Create(UnDlg);
+      UnDlgImg[I].Parent := UnDlg;
+      UnDlgImg[I].Stretch := False;
+      UnDlgImg[I].Cursor := crHand;
+      if I = 0 then UnDlgImg[I].Width := ScaleX(150) else UnDlgImg[I].Width := ScaleX(110);
+      UnDlgImg[I].Height := ScaleY(40);
+      UnDlgImg[I].Top := UnDlg.ClientHeight - ScaleY(58);
+      UnDlgShown[I] := '';
+      UnPrev[I] := False;
+    end;
+    UnDlgCap[0] := PrimaryCap;
+    UnDlgCap[1] := SecondaryCap;
+    UnDlgImg[0].Left := X - UnDlgImg[0].Width;
+    UnDlgImg[1].Left := UnDlgImg[0].Left - ScaleX(10) - UnDlgImg[1].Width;
+    UnDlgImg[1].Visible := SecondaryCap <> '';
+
+    L := UnLabel(UnDlg, UnDlg, #$25CF + '  Motiva  ' + #$2022 + '  ' + StatusTxt, ScaleX(28),
+      UnDlg.ClientHeight - ScaleY(48), ScaleX(300), 9, clDim, 'Segoe UI');
+    UnPaintBtn(UnDlgImg[0], 0, 0, UnDlgCap[0], UnDlgShown[0]);
+    if SecondaryCap <> '' then UnPaintBtn(UnDlgImg[1], 1, 0, UnDlgCap[1], UnDlgShown[1]);
+
+    UnMode := 1;
+    UnTimerId := SetTimer(0, 0, 30, CreateCallback(@UnTick));
+    UnDlgOk := False;
+    UnDlg.ShowModal;
+    Result := UnDlgOk;
+  finally
+    UnMode := 0;
+    if UnTimerId <> 0 then KillTimer(0, UnTimerId);
+    UnTimerId := 0;
+    UnDlg.Free;
+  end;
+end;
+
+function InitializeUninstall: Boolean;
+var R: Integer;
+begin
+  Result := True;
+  // Silent runs and any failure to load the Motiva UI fall through to Inno's own flow.
+  if HasParam('/VERYSILENT') or UninstallSilent then Exit;
+  UnLoadAssets;
+  if not UnAssetsReady then Exit;
+  if not ShowUnDialog(UnHeroWelcome, 'Uninstall', 'Cancel', 'Uninstall') then begin
+    Result := False; // user cancelled
+    Exit;
+  end;
+  // Relaunch silently (no native confirm / finish boxes) with the Motiva UI switch.
+  if Exec(ExpandConstant('{uninstallexe}'), '/SILENT /MOTIVAUI', '', SW_SHOWNORMAL, ewNoWait, R) then
+    Result := False;
+end;
+
+procedure InitializeUninstallProgressForm;
+var F: TUninstallProgressForm; Pg: TNewNotebookPage; PW, I, Y, TX: Integer; T: TNewStaticText;
+  Names: array[0..3] of String; Tmp: TBitmap;
+begin
+  if HasParam('/VERYSILENT') then Exit;
+  UnLoadAssets;
+  if not UnAssetsReady then Exit;
+  F := UninstallProgressForm;
+  F.Font.Name := 'Segoe UI';
+  F.ClientWidth := ScaleX(600);
+  F.ClientHeight := ScaleY(460);
+  F.Color := clBg;
+  F.MainPanel.Visible := False;
+  F.Bevel.Visible := False;
+  F.Bevel1.Visible := False;
+  F.BeveledLabel.Visible := False;
+  F.OuterNotebook.Height := F.ClientHeight - F.OuterNotebook.Top - ScaleY(72);
+  F.InnerPage.Color := clBg;
+  F.InstallingPage.Color := clBg;
+  F.InnerNotebook.Top := 0;
+  F.InnerNotebook.Height := F.InnerPage.Height;
+  F.StatusLabel.Visible := False;
+  F.ProgressBar.Visible := False;
+
+  Pg := F.InstallingPage;
+  PW := Pg.Width;
+  T := UnLabel(F, Pg, 'Uninstalling Motiva', 0, ScaleY(34), PW, 24, clText, 'Segoe UI Light');
+  T.Left := (PW - T.Width) div 2;
+  T := UnLabel(F, Pg, 'Removing Motiva from this computer.', 0, ScaleY(80), PW, 11, clMuted, 'Segoe UI');
+  T.Left := (PW - T.Width) div 2;
+
+  UpTrackW := (PW * 90) div 100;
+  TX := (PW - UpTrackW) div 2;
+  Y := ScaleY(130);
+  UpTrack := TBitmapImage.Create(F);
+  UpTrack.Parent := Pg;
+  UpTrack.SetBounds(TX, Y, UpTrackW, ScaleY(14));
+  Tmp := TBitmap.Create;
+  Tmp.LoadFromFile(UnAsset('progress-track.bmp'));
+  UpTrack.Bitmap.Assign(ScaledBmp(Tmp, UpTrackW, ScaleY(14)));
+  Tmp.Free;
+  UpFill := TBitmapImage.Create(F);
+  UpFill.Parent := Pg;
+  UpFill.SetBounds(TX + ScaleX(3), Y + ScaleY(3), ScaleX(8), ScaleY(8));
+  UpLastW := -1;
+  UnPaintFill(ScaleX(8));
+  UpFill.Visible := False;
+  UpPct := UnLabel(F, Pg, '0%', TX, Y - ScaleY(26), ScaleX(60), 10, clAccent, 'Segoe UI');
+  UpPct.Font.Style := [fsBold];
+  UpPct.Left := TX + UpTrackW - UpPct.Width;
+
+  Names[0] := 'Preparing to uninstall';
+  Names[1] := 'Removing Explorer integration';
+  Names[2] := 'Removing application files and Start Menu shortcut';
+  Names[3] := 'Finalizing removal';
+  Y := ScaleY(172);
+  for I := 0 to 3 do begin
+    UpG[I] := UnLabel(F, Pg, #$25CB, TX + ScaleX(6), Y, ScaleX(24), 11, clDim, 'Segoe UI Symbol');
+    UpT[I] := UnLabel(F, Pg, Names[I], TX + ScaleX(38), Y + ScaleY(1), UpTrackW - ScaleX(44), 11, clDim, 'Segoe UI');
+    Y := Y + ScaleY(26);
+  end;
+  UpLive := UnLabel(F, Pg, 'Preparing to uninstall...', TX, Y + ScaleY(10), UpTrackW, 10, clMuted, 'Segoe UI');
+
+  UpStatus := UnLabel(F, F, #$25CF + '  Motiva  ' + #$2022 + '  Uninstalling Motiva  ' + #$2022 + '  Please wait...',
+    ScaleX(28), F.ClientHeight - ScaleY(48), ScaleX(300), 9, clDim, 'Segoe UI');
+
+  // custom Cancel (Inno's own is parked off-screen; its state is mirrored)
+  UpCancelImg := TBitmapImage.Create(F);
+  UpCancelImg.Parent := F;
+  UpCancelImg.Stretch := False;
+  UpCancelImg.Cursor := crHand;
+  UpCancelImg.Width := ScaleX(110);
+  UpCancelImg.Height := ScaleY(40);
+  UpCancelImg.Left := F.ClientWidth - ScaleX(24) - UpCancelImg.Width;
+  UpCancelImg.Top := F.ClientHeight - ScaleY(58);
+  UpCancelShown := '';
+  F.CancelButton.Left := -3000;
+
+  UpStage := 0;
+  UpRefreshSteps;
+  UpFormAlive := True;
+  UnMode := 2;
+  UnTimerId := SetTimer(0, 0, 30, CreateCallback(@UnTick));
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  // What gets removed is unchanged: stop a running Motiva, remove Motiva's own
+  // Explorer verb + autostart value, then Inno removes files/shortcut/registry entries.
   if CurUninstallStep = usUninstall then begin
+    UpSetStage(0, 'Preparing to uninstall...');
     StopMotiva;
+    UpSetStage(1, 'Removing Explorer integration...');
     CleanMotivaShellRegistration;
+    UpSetStage(2, 'Removing application files and Start Menu shortcut...');
+  end else if CurUninstallStep = usPostUninstall then begin
+    // The progress form no longer exists from here on: stop the timer, never touch it again.
+    UpFormAlive := False;
+    UnMode := 0;
+    if UnTimerId <> 0 then KillTimer(0, UnTimerId);
+    UnTimerId := 0;
+  end else if CurUninstallStep = usDone then begin
+    UpFormAlive := False;
+    UnMode := 0;
+    if UnTimerId <> 0 then KillTimer(0, UnTimerId);
+    UnTimerId := 0;
+    if UnAssetsReady and HasParam('/MOTIVAUI') and (not HasParam('/VERYSILENT')) then begin
+      ShowUnDialog(UnHeroDone, 'Done', '', 'Uninstall complete');
+    end;
   end;
 end;
