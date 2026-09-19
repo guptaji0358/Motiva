@@ -2,3 +2,4 @@ build/
 deployment/
 *.log
 CLAUDE.md
+release/

@@ -1,3 +1,4 @@
+#pragma code_page(65001)
 #include <winuser.h>
 #include <winver.h>
 
@@ -25,7 +26,10 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "Motiva"
+            VALUE "CompanyName", "Robin Gupta Studios"
+            VALUE "AuthorName", "Robin Gupta"
+            VALUE "LegalCopyright", "Copyright © Robin Gupta"
+            VALUE "LegalTrademarks", "RGS"
             VALUE "FileDescription", "Motiva - live desktop wallpaper"
             VALUE "FileVersion", "1.0.0.0"
             VALUE "InternalName", "Motiva"
