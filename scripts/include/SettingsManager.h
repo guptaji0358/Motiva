@@ -2,6 +2,7 @@
 
 #include <QSettings>
 #include <QString>
+#include "Theme.h"
 
 // Thin wrapper around QSettings (stored in the registry under
 // HKCU\Software\Motiva via the default Windows QSettings backend).
@@ -34,6 +35,27 @@ public:
     bool startWithWindows() const;
     void setStartWithWindows(bool enabled);
 
+    // The real user-facing Motiva executable path - resolves the dev-build
+    // vs. deployed (resources/bin + deployment-root launcher) layout
+    // difference exactly like startWithWindows's own autostart target does
+    // (this IS that same resolution, promoted to public so Windows Search
+    // shortcut / Explorer integration can reuse it instead of re-deriving
+    // it - see WindowsShellIntegration.h).
+    static QString motivaExecutablePath();
+
+    // Default false: an opt-in Windows Search / Start Menu shortcut - see
+    // WindowsShellIntegration::CreateStartMenuShortcut/RemoveStartMenuShortcut,
+    // which the setter below actually invokes.
+    bool showInWindowsSearch() const;
+    void setShowInWindowsSearch(bool enabled);
+
+    // Default false: an opt-in Explorer "Set as background" context-menu
+    // verb for supported media - see
+    // WindowsShellIntegration::Register/UnregisterSetBackgroundVerb, which
+    // the setter below actually invokes.
+    bool explorerIntegrationEnabled() const;
+    void setExplorerIntegrationEnabled(bool enabled);
+
     bool wasWallpaperActive() const;
     void setWasWallpaperActive(bool active);
 
@@ -43,16 +65,14 @@ public:
     bool showVideoOnBattery() const;
     void setShowVideoOnBattery(bool enabled);
 
-    // Which named visual style (see Theme::StyleId) the app renders with.
-    // Default 0 = Theme::StyleId::ModernAurora.
-    int uiStyle() const;
-    void setUiStyle(int style);
-
-    // Which appearance (see Theme::AppearanceId) the app renders with -
-    // independent of/orthogonal to uiStyle() above. Default 0 = System
-    // (follow the OS light/dark palette, the app's original behavior).
-    int appearance() const;
-    void setAppearance(int appearance);
+    // The single selected Motiva Theme (see Theme::AppTheme) - replaces
+    // the old two-axis Appearance x Visual Style settings. If neither
+    // "app/theme" nor any legacy key has ever been written, defaults to
+    // DarkAurora. If "app/theme" is absent but a legacy Appearance/Visual
+    // Style value exists (pre-Theme-system installs), one-time migrates
+    // via Theme::migrateLegacySettings() - see Theme.h.
+    Theme::AppTheme theme() const;
+    void setTheme(Theme::AppTheme theme);
 
 private:
     QSettings m_settings;

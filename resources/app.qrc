@@ -11,6 +11,10 @@
         <file alias="video/link.svg">../Assets/video/link.svg</file>
         <file alias="video/link-hover.svg">../Assets/video/link-hover.svg</file>
         <file alias="video/link-pressed.svg">../Assets/video/link-pressed.svg</file>
+        <file alias="video/remove-video.svg">../Assets/video/remove-video.svg</file>
+        <file alias="video/remove-video-hover.svg">../Assets/video/remove-video-hover.svg</file>
+        <file alias="video/remove-video-pressed.svg">../Assets/video/remove-video-pressed.svg</file>
+        <file alias="video/remove-video-disabled.svg">../Assets/video/remove-video-disabled.svg</file>
         <file alias="playback/play.svg">../Assets/playback/play.svg</file>
         <file alias="playback/play-hover.svg">../Assets/playback/play-hover.svg</file>
         <file alias="playback/pause.svg">../Assets/playback/pause.svg</file>

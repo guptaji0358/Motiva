@@ -16,7 +16,7 @@ namespace {
 // inside the preview area's own fixed-dark surface (kPreviewSurfaceStyle
 // in MainWindow.cpp), which is intentionally theme-independent.
 constexpr const char* kIdleIconColor = Theme::kPreviewText;
-constexpr const char* kDragOverColor = Theme::kAccent;
+constexpr const char* kDragOverColor = Theme::kBrandAccent;
 constexpr const char* kInvalidColor = Theme::kStatusError;
 constexpr const char* kIdleBorderColor = "#3a3a3a";
 

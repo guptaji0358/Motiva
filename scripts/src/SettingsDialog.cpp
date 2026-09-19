@@ -2,6 +2,7 @@
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
 #include "Theme.h"
+#include "ThemeTransitionOverlay.h"
 
 #include <QFormLayout>
 #include <QVBoxLayout>
@@ -15,17 +16,19 @@
 #include <QApplication>
 #include <QWidget>
 #include <QSizePolicy>
+#include <QTimer>
 
 SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* settings, QWidget* parent)
     : QDialog(parent), m_manager(manager), m_settings(settings) {
     setWindowTitle(tr("Settings"));
+    m_transitionOverlay = new ThemeTransitionOverlay(this);
     // Embedded via resources/app.qrc (Assets/settings-icon/settings.svg)
     // - same gear icon as the header button/tray menu entry that opens
     // this dialog, for visual consistency. Picks the light/dark SVG
-    // variant matching the current OS palette - see
-    // Theme::isDarkPalette() and MainWindow.cpp's settingsIconPath().
-    setWindowIcon(QIcon(Theme::isDarkPalette() ? QStringLiteral(":/settings-icon/dark/settings.svg")
-                                                : QStringLiteral(":/settings-icon/light/settings.svg")));
+    // variant matching the current Motiva Theme - see Theme::iconVariant()
+    // and MainWindow.cpp's settingsIconPath().
+    setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg")
+                             .arg(Theme::iconVariant(Theme::currentTheme()))));
     buildUi();
     // Redo of the "Popup proportions" fix: the previous pass split content
     // into two columns but only bumped setMinimumSize() to 560x320 (a
@@ -157,32 +160,47 @@ void SettingsDialog::buildUi() {
     connect(m_showVideoOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onShowVideoOnBatteryToggled);
     rightCol->addWidget(m_showVideoOnBatteryCheck);
 
-    auto* appearanceForm = new QFormLayout();
-    appearanceForm->setSpacing(10);
-    appearanceForm->setContentsMargins(0, 4, 0, 0);
-    appearanceForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    auto* themeForm = new QFormLayout();
+    themeForm->setSpacing(10);
+    themeForm->setContentsMargins(0, 4, 0, 0);
+    themeForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
-    // Appearance (Light/Dark/System) and Style (Modern Aurora/Motiva Onyx)
-    // are two independent axes - see Theme.h. Appearance previously had no
-    // user-facing control at all (the app only ever silently followed the
-    // OS palette); this combo is new.
-    m_appearanceCombo = new QComboBox(this);
-    m_appearanceCombo->addItem(tr("System"));
-    m_appearanceCombo->addItem(tr("Light"));
-    m_appearanceCombo->addItem(tr("Dark"));
-    m_appearanceCombo->setToolTip(tr("Choose Light or Dark, or follow the Windows setting."));
-    connect(m_appearanceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &SettingsDialog::onAppearanceChanged);
-    appearanceForm->addRow(tr("Appearance:"), m_appearanceCombo);
+    // One "Theme" selector, not two competing Appearance/Visual Style
+    // axes - each entry is a complete, independently-designed Motiva
+    // appearance (see Theme.h). Item order matches Theme::AppTheme's own
+    // ordinal order exactly, so `index` here can be cast straight to
+    // Theme::AppTheme with no separate lookup table.
+    m_themeCombo = new QComboBox(this);
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::DarkAurora));
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::LightAurora));
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::DarkOnyx));
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::LightOnyx));
+    m_themeCombo->setToolTip(tr("Choose Motiva's visual theme."));
+    connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::onThemeChanged);
+    themeForm->addRow(tr("Theme:"), m_themeCombo);
+    rightCol->addLayout(themeForm);
 
-    m_styleCombo = new QComboBox(this);
-    m_styleCombo->addItem(Theme::styleName(Theme::StyleId::ModernAurora));
-    m_styleCombo->addItem(Theme::styleName(Theme::StyleId::MotivaOnyx));
-    m_styleCombo->setToolTip(tr("Switch between Motiva's two built-in visual styles."));
-    connect(m_styleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &SettingsDialog::onStyleChanged);
-    appearanceForm->addRow(tr("Style:"), m_styleCombo);
-    rightCol->addLayout(appearanceForm);
+    auto* integrationSection = new QLabel(tr("Windows Integration"));
+    integrationSection->setObjectName(QStringLiteral("sectionLabel"));
+    integrationSection->setFont(sectionFont);
+    rightCol->addWidget(integrationSection);
+
+    m_showInWindowsSearchCheck = new QCheckBox(tr("Show Motiva in Windows Search"), this);
+    m_showInWindowsSearchCheck->setToolTip(
+        tr("Add a Start Menu shortcut so Motiva can be found via Windows Search."));
+    connect(m_showInWindowsSearchCheck, &QCheckBox::toggled, this,
+        &SettingsDialog::onShowInWindowsSearchToggled);
+    rightCol->addWidget(m_showInWindowsSearchCheck);
+
+    m_explorerIntegrationCheck = new QCheckBox(tr("Set as background for supported media"), this);
+    m_explorerIntegrationCheck->setToolTip(
+        tr("Adds a \"Set as background\" option to the right-click menu for supported video "
+           "and GIF files in File Explorer. On Windows 11 this may appear under \"Show more "
+           "options\"."));
+    connect(m_explorerIntegrationCheck, &QCheckBox::toggled, this,
+        &SettingsDialog::onExplorerIntegrationToggled);
+    rightCol->addWidget(m_explorerIntegrationCheck);
 
     rightCol->addStretch();
 
@@ -210,8 +228,18 @@ void SettingsDialog::restoreFromSettings() {
     m_startWithWindowsCheck->setChecked(m_settings->startWithWindows());
     m_showVideoOnBatteryCheck->setChecked(m_settings->showVideoOnBattery());
     m_manager->setShowVideoOnBattery(m_settings->showVideoOnBattery());
-    m_styleCombo->setCurrentIndex(m_settings->uiStyle());
-    m_appearanceCombo->setCurrentIndex(m_settings->appearance());
+    m_showInWindowsSearchCheck->setChecked(m_settings->showInWindowsSearch());
+    m_explorerIntegrationCheck->setChecked(m_settings->explorerIntegrationEnabled());
+
+    // Blocked, unlike a normal user pick: this only seeds the combo from
+    // the persisted value at startup and must NOT fire onThemeChanged -
+    // that kicks off a theme-transition overlay, which must never appear
+    // during startup (only on a live, later change). Theme::applyTheme()
+    // is already applied separately at startup (see main.cpp) - this
+    // combo is just reflecting that, not re-applying it a second time.
+    m_themeCombo->blockSignals(true);
+    m_themeCombo->setCurrentIndex(static_cast<int>(m_settings->theme()));
+    m_themeCombo->blockSignals(false);
 
     m_manager->setVolume(m_settings->volume());
     m_manager->setMuted(m_settings->muted());
@@ -300,27 +328,92 @@ void SettingsDialog::onShowVideoOnBatteryToggled(bool checked) {
     m_manager->setShowVideoOnBattery(checked);
 }
 
-void SettingsDialog::onAppearanceChanged(int index) {
-    m_settings->setAppearance(index);
-    // Live switch, no restart needed - Theme::applyAppearance() swaps
-    // QApplication's actual QPalette, and every widget using palette(...)
-    // in the QSS (i.e. all of it, for base surfaces/text) re-polishes
-    // immediately off the new palette. Icons that pick a light/dark SVG
-    // variant (settings gear, wallpaper set/remove) refresh themselves via
-    // MainWindow::changeEvent()'s existing QEvent::PaletteChange handling,
-    // since QApplication::setPalette() triggers exactly that event on
-    // every top-level widget - no separate icon-refresh call needed here.
-    Theme::applyAppearance(static_cast<Theme::AppearanceId>(index));
-    setWindowIcon(QIcon(Theme::isDarkPalette() ? QStringLiteral(":/settings-icon/dark/settings.svg")
-                                                : QStringLiteral(":/settings-icon/light/settings.svg")));
+void SettingsDialog::onShowInWindowsSearchToggled(bool checked) {
+    // The actual shortcut create/remove happens inside the setter itself
+    // (see SettingsManager::setShowInWindowsSearch) - same convention as
+    // onStartWithWindowsToggled's registry side effect above.
+    m_settings->setShowInWindowsSearch(checked);
 }
 
-void SettingsDialog::onStyleChanged(int index) {
-    m_settings->setUiStyle(index);
-    // Live switch, no restart needed - same mechanism main.cpp uses for
-    // the initial application, just re-applied to the already-running
-    // QApplication. Every existing widget re-polishes against the new
-    // stylesheet immediately; icon variants (light/dark, per-state) are
-    // independent of this and unaffected by a style change.
-    qApp->setStyleSheet(Theme::appStyleSheet(static_cast<Theme::StyleId>(index)));
+void SettingsDialog::onExplorerIntegrationToggled(bool checked) {
+    // Likewise, the actual Explorer verb register/unregister happens
+    // inside the setter (see SettingsManager::setExplorerIntegrationEnabled).
+    m_settings->setExplorerIntegrationEnabled(checked);
+}
+
+void SettingsDialog::onThemeChanged(int index) {
+    const auto theme = static_cast<Theme::AppTheme>(index);
+    // The persisted setting is the user's final selection the instant
+    // they pick it in the combo - never an intermediate/transition state,
+    // even if this particular apply ends up superseded by a later one
+    // below (rapid switching).
+    m_settings->setTheme(theme);
+    requestThemeTransition([this, theme]() {
+        // Live switch, no restart needed - Theme::applyTheme() swaps
+        // QApplication's actual QPalette AND its global stylesheet
+        // together, both generated from the same literal ThemePalette, so
+        // every widget re-polishes off one fully self-consistent theme -
+        // never a runtime derivation/inversion of another theme, and
+        // never left to Qt's native palette conversion. Icons that pick a
+        // light/dark SVG variant (settings gear, wallpaper set/remove)
+        // refresh via MainWindow::changeEvent()'s existing
+        // QEvent::PaletteChange handling, since QApplication::setPalette()
+        // triggers exactly that event on every top-level widget.
+        Theme::applyTheme(theme);
+        setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg")
+                                 .arg(Theme::iconVariant(theme))));
+    });
+}
+
+void SettingsDialog::requestThemeTransition(std::function<void()> applyFn) {
+    // "Ignore intermediate requests, apply the newest" - a rapid run of
+    // selections while a transition is already in flight just keeps
+    // replacing this, so only the latest ever actually gets applied.
+    m_pendingApply = std::move(applyFn);
+
+    if (m_themeTransitionActive) {
+        return;
+    }
+    m_themeTransitionActive = true;
+
+    m_transitionOverlay->beginTransition();
+    emit themeTransitionStarted();
+
+    // Deferred to the next event-loop turn so the overlay's first paint
+    // actually reaches the screen before the (synchronous) theme apply
+    // below runs - otherwise Qt could coalesce both into one repaint and
+    // the overlay would never visibly appear before the change lands.
+    QTimer::singleShot(0, this, &SettingsDialog::runPendingThemeApply);
+}
+
+void SettingsDialog::runPendingThemeApply() {
+    // Suppress repaints on both affected top-level windows for the
+    // duration of the actual palette/stylesheet swap, so the user never
+    // sees it applied widget-by-widget - only the fully-updated result,
+    // in one paint, once updates are re-enabled below.
+    QWidget* mainWindow = parentWidget();
+    if (mainWindow) {
+        mainWindow->setUpdatesEnabled(false);
+    }
+    setUpdatesEnabled(false);
+
+    // A change requested again while this very apply is running (it isn't
+    // - the apply itself is synchronous - but a future async apply might
+    // be) still only leaves the latest pending change in effect.
+    while (m_pendingApply) {
+        auto fn = std::move(m_pendingApply);
+        m_pendingApply = nullptr;
+        fn();
+    }
+
+    setUpdatesEnabled(true);
+    update();
+    if (mainWindow) {
+        mainWindow->setUpdatesEnabled(true);
+        mainWindow->update();
+    }
+
+    m_themeTransitionActive = false;
+    m_transitionOverlay->finishTransition();
+    emit themeTransitionFinished();
 }

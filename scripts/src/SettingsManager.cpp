@@ -1,4 +1,6 @@
 #include "SettingsManager.h"
+#include "WindowsShellIntegration.h"
+#include "MainWindow.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -8,25 +10,42 @@
 namespace {
 constexpr const char* kRunKeyPath = R"(Software\Microsoft\Windows\CurrentVersion\Run)";
 constexpr const wchar_t* kRunValueName = L"Motiva";
+} // namespace
 
-// In a normal dev build, applicationFilePath() is exactly what autostart
-// should launch. In the packaged deployment layout (see the "Organize
-// Final Deployment Output" task), the real Qt-linked binary instead runs
-// at resources/bin/<exe>, launched indirectly by a tiny native launcher
-// at the deployment root that adds resources/Qt to the child process's
-// DLL search PATH before creating it - the real binary's own implicitly-
+// In a normal dev build, applicationFilePath() is exactly what should be
+// launched. In the packaged deployment layout (see the "Organize Final
+// Deployment Output" task), the real Qt-linked binary instead runs at
+// resources/bin/<exe>, launched indirectly by a tiny native launcher at
+// the deployment root that adds resources/Qt to the child process's DLL
+// search PATH before creating it - the real binary's own implicitly-
 // linked Qt/FFmpeg DLLs can only be found that way, since nothing inside
 // the real binary's own startup code can redirect its own load-time
-// imports. Autostart must therefore go through that same launcher in a
-// deployed install, or the app would silently fail to start on login.
-// Detected purely from directory shape (applicationDirPath() ending in
-// resources/bin, with a same-named exe present one level above
-// resources/) - a normal dev build's applicationDirPath() never matches
-// this, so its autostart target is unaffected.
-QString autostartTargetPath() {
+// imports. Autostart, the Start Menu shortcut, and the Explorer "Set as
+// background" verb's command must therefore all point at that same
+// launcher in a deployed install, or they'd silently fail/point at a
+// binary that can't find its own DLLs. Detected purely from directory
+// shape (applicationDirPath() ending in resources/bin, with a same-named
+// exe present one level above resources/) - a normal dev build's
+// applicationDirPath() never matches this, so its resolved path is
+// unaffected.
+QString SettingsManager::motivaExecutablePath() {
     const QString ownPath = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
     QDir binDir(QCoreApplication::applicationDirPath());
     if (binDir.dirName().compare("bin", Qt::CaseInsensitive) != 0) {
+        // Dev build tree (<repo>/build/Motiva.exe): its Qt/FFmpeg DLLs are
+        // not beside it, so it is NOT a valid target for shortcuts/verbs
+        // (this was the Windows Search DLL-not-found bug). Prefer the
+        // sibling deployment output the `deploy` target produces
+        // (<repo>/deployment/Motiva.exe + resources/bin/Motiva.exe),
+        // located relative to this exe, never by a hardcoded path.
+        QDir parent = binDir;
+        if (parent.cdUp()) {
+            const QString launcher = parent.filePath(QStringLiteral("deployment/") + QFileInfo(ownPath).fileName());
+            const QString realBin = parent.filePath(QStringLiteral("deployment/resources/bin/") + QFileInfo(ownPath).fileName());
+            if (QFileInfo::exists(launcher) && QFileInfo::exists(realBin)) {
+                return QDir::toNativeSeparators(QFileInfo(launcher).absoluteFilePath());
+            }
+        }
         return ownPath;
     }
     QDir resourcesDir = binDir;
@@ -42,7 +61,6 @@ QString autostartTargetPath() {
     }
     return ownPath;
 }
-} // namespace
 
 SettingsManager::SettingsManager()
     : m_settings(QSettings::NativeFormat, QSettings::UserScope, "Motiva", "Motiva") {
@@ -110,7 +128,7 @@ void SettingsManager::setStartWithWindows(bool enabled) {
     }
 
     if (enabled) {
-        QString exePath = autostartTargetPath();
+        QString exePath = motivaExecutablePath();
         QString cmd = "\"" + exePath + "\" --autostart";
         std::wstring wcmd = cmd.toStdWString();
         RegSetValueExW(key, kRunValueName, 0, REG_SZ,
@@ -136,16 +154,47 @@ void SettingsManager::setShowVideoOnBattery(bool enabled) {
     m_settings.setValue("app/showVideoOnBattery", enabled);
 }
 
-int SettingsManager::uiStyle() const {
-    return m_settings.value("app/uiStyle", 0).toInt();
+bool SettingsManager::showInWindowsSearch() const {
+    return m_settings.value("app/showInWindowsSearch", false).toBool();
 }
-void SettingsManager::setUiStyle(int style) {
-    m_settings.setValue("app/uiStyle", style);
+void SettingsManager::setShowInWindowsSearch(bool enabled) {
+    m_settings.setValue("app/showInWindowsSearch", enabled);
+    if (enabled) {
+        WindowsShellIntegration::CreateStartMenuShortcut(motivaExecutablePath());
+    } else {
+        WindowsShellIntegration::RemoveStartMenuShortcut();
+    }
 }
 
-int SettingsManager::appearance() const {
-    return m_settings.value("app/appearance", 0).toInt();
+bool SettingsManager::explorerIntegrationEnabled() const {
+    return m_settings.value("app/explorerIntegrationEnabled", false).toBool();
 }
-void SettingsManager::setAppearance(int appearance) {
-    m_settings.setValue("app/appearance", appearance);
+void SettingsManager::setExplorerIntegrationEnabled(bool enabled) {
+    m_settings.setValue("app/explorerIntegrationEnabled", enabled);
+    const QStringList extensions = MainWindow::explorerIntegrationExtensions();
+    if (enabled) {
+        WindowsShellIntegration::RegisterSetBackgroundVerb(motivaExecutablePath(), extensions);
+    } else {
+        WindowsShellIntegration::UnregisterSetBackgroundVerb(extensions);
+    }
+}
+
+Theme::AppTheme SettingsManager::theme() const {
+    if (m_settings.contains("app/theme")) {
+        return Theme::themeFromSettingsKey(m_settings.value("app/theme").toString(), Theme::AppTheme::DarkAurora);
+    }
+    // One-time migration from the old Appearance x Visual Style settings
+    // (pre-Theme-system installs) - see Theme::migrateLegacySettings().
+    // Once "app/theme" is written below (by setTheme(), called right
+    // after this on the same startup path - see main.cpp), these legacy
+    // keys are never read again.
+    if (m_settings.contains("app/uiStyle") || m_settings.contains("app/appearance")) {
+        const int legacyAppearance = m_settings.value("app/appearance", 0).toInt();
+        const int legacyUiStyle = m_settings.value("app/uiStyle", 0).toInt();
+        return Theme::migrateLegacySettings(legacyAppearance, legacyUiStyle);
+    }
+    return Theme::AppTheme::DarkAurora;
+}
+void SettingsManager::setTheme(Theme::AppTheme theme) {
+    m_settings.setValue("app/theme", Theme::themeSettingsKey(theme));
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <windows.h>
 
 // Single-instance recovery hand-off. The QSharedMemory lock in main.cpp
@@ -31,6 +32,13 @@ public:
     // the QSharedMemory lock already proves an instance exists.
     static bool sendRecoverRequest();
 
+    // Called by a second launch attempt that lost the QSharedMemory lock
+    // AND was invoked via Explorer's "Set as background" verb (see
+    // main.cpp): finds the first instance's receiver window and hands it
+    // the selected file path, instead of a bare recover request. Same
+    // "just exit either way" contract as sendRecoverRequest() above.
+    static bool sendSetBackgroundRequest(const QString& path);
+
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 signals:
@@ -38,6 +46,10 @@ signals:
     // whenever Windows delivers the message) when another launch attempt
     // asked this instance to recover/activate.
     void recoverRequested();
+    // Emitted (also queued) when another launch attempt handed off a file
+    // path via Explorer's "Set as background" verb - see
+    // sendSetBackgroundRequest() above and MainWindow::onExplorerFileReceived.
+    void fileReceived(const QString& path);
 
 private:
     HWND m_hwnd = nullptr;

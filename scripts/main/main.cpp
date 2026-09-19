@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QDateTime>
 #include <QSharedMemory>
+#include <QStringList>
 #include <cstdio>
 #include <windows.h>
 #include "MainWindow.h"
@@ -81,22 +82,38 @@ int main(int argc, char* argv[]) {
     // rather than a generic one. MainWindow/its tray icon set the same
     // resource explicitly too - see MainWindow.cpp's kAppIconResourcePath.
     app.setWindowIcon(QIcon(":/application/motiva.ico"));
-    // Single centralized stylesheet for the whole app (see Theme.h) -
-    // purely visual, applied once here rather than scattered per-widget
-    // setStyleSheet() calls throughout MainWindow/SettingsDialog. Which of
-    // the two named styles (Modern Aurora / Motiva Onyx) is read from the
-    // persisted setting so a choice made in a previous session survives a
-    // relaunch; SettingsDialog re-applies live via qApp->setStyleSheet()
-    // when the user changes it mid-session, so this is only the initial
-    // value.
-    // Must run before any setPalette() call - this is the only chance to
-    // remember what the real OS-driven palette was, so a later "System"
-    // appearance choice has something genuine to restore to.
-    Theme::captureSystemPalette();
+    // The selected Motiva Theme (see Theme.h) is the one, fully
+    // deterministic source of truth for the app's appearance - applied
+    // once here (both QPalette and the global stylesheet, together) so
+    // there's no separate "half-styled" moment before MainWindow exists.
+    // SettingsDialog re-applies live via Theme::applyTheme() when the
+    // user picks a different theme mid-session, so this is only the
+    // startup value. No transition overlay here - that's a live-change-
+    // only affordance (see SettingsDialog).
     {
         SettingsManager startupSettings;
-        app.setStyleSheet(Theme::appStyleSheet(static_cast<Theme::StyleId>(startupSettings.uiStyle())));
-        Theme::applyAppearance(static_cast<Theme::AppearanceId>(startupSettings.appearance()));
+        const Theme::AppTheme theme = startupSettings.theme();
+        startupSettings.setTheme(theme); // persists the one-time legacy migration, if any
+        Theme::applyTheme(theme);
+    }
+
+    // Parsed once, before the single-instance branch below, since which
+    // instance ends up handling it (this one, directly, vs. an existing
+    // one via IPC) depends on the very next check.
+    bool startMinimized = false;
+    QString explorerSelectedFile;
+    // QCoreApplication::arguments() (rather than a raw argv scan) handles
+    // Windows' own command-line quoting correctly - Explorer's "Set as
+    // background" verb supplies the selected path quoted, since it may
+    // contain spaces (see WindowsShellIntegration::RegisterSetBackgroundVerb's
+    // registered command).
+    const QStringList args = QCoreApplication::arguments();
+    for (int i = 1; i < args.size(); ++i) {
+        if (args[i] == QLatin1String("--autostart")) {
+            startMinimized = true;
+        } else if (args[i] == QLatin1String("--set-background") && i + 1 < args.size()) {
+            explorerSelectedFile = args[++i];
+        }
     }
 
     // Two instances would each attach their own competing render window to
@@ -108,8 +125,15 @@ int main(int argc, char* argv[]) {
         // (which previously left the user no way to recover a stuck
         // instance short of End Task), ask it to recover/activate itself
         // via IPC, then exit - single-instance semantics are unchanged,
-        // exactly one process ever runs.
-        InstanceIpc::sendRecoverRequest();
+        // exactly one process ever runs. A file supplied via Explorer's
+        // "Set as background" verb is forwarded to that existing instance
+        // instead of a bare recovery request - no second Motiva process is
+        // ever created for this.
+        if (!explorerSelectedFile.isEmpty()) {
+            InstanceIpc::sendSetBackgroundRequest(explorerSelectedFile);
+        } else {
+            InstanceIpc::sendRecoverRequest();
+        }
         return 0;
     }
 
@@ -118,14 +142,7 @@ int main(int argc, char* argv[]) {
             "No system tray was detected on this system. The application will still run.");
     }
 
-    bool startMinimized = false;
-    for (int i = 1; i < argc; ++i) {
-        if (QString::fromLocal8Bit(argv[i]) == "--autostart") {
-            startMinimized = true;
-        }
-    }
-
-    MainWindow window(startMinimized);
+    MainWindow window(startMinimized, explorerSelectedFile);
     if (!startMinimized) {
         window.show();
     }

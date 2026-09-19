@@ -1,7 +1,9 @@
 #include "MainWindow.h"
 #include "SettingsDialog.h"
+#include "ThemeTransitionOverlay.h"
 #include "StartupDiagnostics.h"
 #include "WindowsDesktopWallpaper.h"
+#include "WindowsShellIntegration.h"
 #include "Theme.h"
 
 #include <QWidget>
@@ -45,18 +47,17 @@ namespace {
 // (Assets/<feature>/...), Qt's native SVG icon engine (Qt6::Svg).
 constexpr const char* kAppIconResourcePath = ":/application/motiva.ico";
 // Settings/Set-Wallpaper/Remove-Wallpaper have genuinely different SVG
-// artwork per light/dark OS palette (not a single SVG recolored via a
+// artwork per light/dark icon variant (not a single SVG recolored via a
 // filter) - see Assets/settings-icon/{light,dark}/ and
-// Assets/wallpaper/{light,dark}/, and the "Two distinct Motiva visual
-// styles with theme-aware icons" task. A function rather than a constant
-// so it re-resolves against whatever the palette is right now.
+// Assets/wallpaper/{light,dark}/. Aurora and Onyx deliberately share this
+// same artwork (see Theme::iconVariant()) - only the QSS-driven chrome
+// differs between them. A function rather than a constant so it
+// re-resolves against whichever Motiva Theme is active right now.
 QString settingsIconPath() {
-    return Theme::isDarkPalette() ? QStringLiteral(":/settings-icon/dark/settings.svg")
-                                   : QStringLiteral(":/settings-icon/light/settings.svg");
+    return QStringLiteral(":/settings-icon/%1/settings.svg").arg(Theme::iconVariant(Theme::currentTheme()));
 }
 QString wallpaperIconPath(const char* name) {
-    return (Theme::isDarkPalette() ? QStringLiteral(":/wallpaper/dark/") : QStringLiteral(":/wallpaper/light/"))
-        + QLatin1String(name);
+    return QStringLiteral(":/wallpaper/%1/").arg(Theme::iconVariant(Theme::currentTheme())) + QLatin1String(name);
 }
 constexpr const char* kOpenVideoIconResourcePath = ":/video/open-video.svg";
 constexpr const char* kOpenVideoIconHoverPath = ":/video/open-video-hover.svg";
@@ -64,6 +65,15 @@ constexpr const char* kOpenVideoIconPressedPath = ":/video/open-video-pressed.sv
 constexpr const char* kLinkIconResourcePath = ":/video/link.svg";
 constexpr const char* kLinkIconHoverPath = ":/video/link-hover.svg";
 constexpr const char* kLinkIconPressedPath = ":/video/link-pressed.svg";
+// "Remove Current Video" - unloads the loaded video from Motiva's own
+// player/preview. Deliberately its own icon (a video frame with an X),
+// distinct from wallpaper/{light,dark}/remove-wallpaper.svg's monitor-with-X
+// glyph, so the two different actions never look the same at a glance -
+// see the "Remove Current Video" task.
+constexpr const char* kRemoveVideoIconResourcePath = ":/video/remove-video.svg";
+constexpr const char* kRemoveVideoIconHoverPath = ":/video/remove-video-hover.svg";
+constexpr const char* kRemoveVideoIconPressedPath = ":/video/remove-video-pressed.svg";
+constexpr const char* kRemoveVideoIconDisabledPath = ":/video/remove-video-disabled.svg";
 constexpr const char* kPlayIconResourcePath = ":/playback/play.svg";
 constexpr const char* kPlayIconHoverPath = ":/playback/play-hover.svg";
 constexpr const char* kPauseIconResourcePath = ":/playback/pause.svg";
@@ -196,7 +206,13 @@ bool isWebVideoUrl(const QUrl& url) {
 }
 } // namespace
 
-MainWindow::MainWindow(bool startMinimized, QWidget* parent)
+QStringList MainWindow::explorerIntegrationExtensions() {
+    QStringList exts = supportedVideoContainerExtensions().values();
+    exts.append(QStringLiteral("gif"));
+    return exts;
+}
+
+MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
     qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
     setWindowTitle("Motiva");
@@ -228,6 +244,10 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     // from any later launch attempt.
     m_ipc.startListening();
     connect(&m_ipc, &InstanceIpc::recoverRequested, this, &MainWindow::recoverOrActivate);
+    // A second launch attempt invoked via Explorer's "Set as background"
+    // verb while this instance is already running - see main.cpp/
+    // InstanceIpc::sendSetBackgroundRequest.
+    connect(&m_ipc, &InstanceIpc::fileReceived, this, &MainWindow::onExplorerFileReceived);
 
     connect(m_manager.get(), &WallpaperManager::errorOccurred, this, &MainWindow::onWallpaperError);
     // wallpaperActivated fires as soon as attach is REQUESTED, not once
@@ -317,6 +337,32 @@ MainWindow::MainWindow(bool startMinimized, QWidget* parent)
     // idempotent if nothing was ever wrong: it just re-applies whatever
     // wallpaper Explorer already has configured.
     WindowsDesktopWallpaper::RefreshDesktopBackground();
+
+    // Self-heal, gated purely on the user's own opt-in settings (never
+    // registered "just because the app started" - see CLAUDE.md's
+    // architecture-protection notes): if either Windows-integration
+    // feature was already turned on in a previous session, silently
+    // re-apply it now. Both calls are idempotent (fixed target path /
+    // overwritten registry values), so this only matters after a rebuild
+    // or redeploy moved the real executable - it keeps the shortcut/verb
+    // pointing at the correct current path without the user having to
+    // toggle the setting off and on again.
+    if (m_settings.showInWindowsSearch()) {
+        WindowsShellIntegration::CreateStartMenuShortcut(SettingsManager::motivaExecutablePath());
+    }
+    if (m_settings.explorerIntegrationEnabled()) {
+        WindowsShellIntegration::RegisterSetBackgroundVerb(
+            SettingsManager::motivaExecutablePath(), explorerIntegrationExtensions());
+    }
+
+    // A file handed off from Explorer's "Set as background" verb, when
+    // THIS process is the one that won the single-instance lock (see
+    // main.cpp) - applied last, after the rest of construction/restore
+    // above, so it correctly supersedes whatever was merely restored from
+    // a previous session.
+    if (!initialExplorerFile.isEmpty()) {
+        handleExplorerRequestedFile(initialExplorerFile);
+    }
 
     // Force the native HWND to actually exist even when starting
     // minimized-to-tray and never shown: Qt often defers creating a
@@ -481,6 +527,22 @@ void MainWindow::buildUi() {
     connect(m_openVideoButton, &QPushButton::clicked, this, &MainWindow::onChooseVideo);
     infoRow->addWidget(m_openVideoButton);
 
+    // "Remove Current Video" - unloads the loaded video from Motiva's own
+    // player/preview (NOT the desktop wallpaper - see onRemoveVideo()'s
+    // comment). Placed here next to Open Video/Paste URL rather than down
+    // with the primary Set/Remove Wallpaper button, and given its own
+    // objectName so it never inherits primaryButton's accent styling -
+    // keeps the two action groups visually distinct.
+    m_removeVideoButton = new IconButton(QIcon(kRemoveVideoIconResourcePath), tr("Remove Video"), central);
+    m_removeVideoButton->setObjectName(QStringLiteral("removeVideoButton"));
+    m_removeVideoButton->setStateIcon(
+        QIcon(kRemoveVideoIconResourcePath), QIcon(kRemoveVideoIconHoverPath),
+        QIcon(kRemoveVideoIconPressedPath), QIcon(kRemoveVideoIconDisabledPath));
+    m_removeVideoButton->setToolTip(tr("Unload the currently loaded video from Motiva's player/preview"));
+    m_removeVideoButton->setEnabled(m_hasCurrentVideo);
+    connect(m_removeVideoButton, &QPushButton::clicked, this, &MainWindow::onRemoveVideo);
+    infoRow->addWidget(m_removeVideoButton);
+
     root->addLayout(infoRow);
 
     // --- Status ---
@@ -510,6 +572,14 @@ void MainWindow::buildUi() {
             m_trayMuteAction->setIcon(QIcon(muted ? kVolumeMuteIconResourcePath : kVolumeIconResourcePath));
             m_trayMuteAction->blockSignals(false);
         }
+    });
+
+    m_themeTransitionOverlay = new ThemeTransitionOverlay(this);
+    connect(m_settingsDialog, &SettingsDialog::themeTransitionStarted, this, [this] {
+        m_themeTransitionOverlay->beginTransition();
+    });
+    connect(m_settingsDialog, &SettingsDialog::themeTransitionFinished, this, [this] {
+        m_themeTransitionOverlay->finishTransition();
     });
 }
 
@@ -691,6 +761,12 @@ void MainWindow::updatePrimaryButtonUi() {
     }
 }
 
+void MainWindow::updateRemoveVideoButtonUi() {
+    if (m_removeVideoButton) {
+        m_removeVideoButton->setEnabled(m_hasCurrentVideo);
+    }
+}
+
 void MainWindow::onChooseVideo() {
     // Built from the same backend-reported extension set drag & drop uses
     // (supportedVideoContainerExtensions), plus GIF - never a hardcoded
@@ -838,6 +914,7 @@ void MainWindow::loadVideoSource(const QString& source) {
     // the user explicitly chose a video THIS session. See m_hasCurrentVideo's
     // declaration and the "Remove button correctness" task.
     m_hasCurrentVideo = true;
+    updateRemoveVideoButtonUi();
     m_lastVideoDetailsText.clear();
     applyVideoInfoUi();
 
@@ -1080,7 +1157,41 @@ void MainWindow::onRemoveWallpaper() {
     // the button goes back to visually disabled until the user opens/
     // drops/pastes a video again - see m_hasCurrentVideo.
     m_hasCurrentVideo = false;
+    updateRemoveVideoButtonUi();
     // UI state follows WallpaperManager::wallpaperRemoved.
+}
+
+void MainWindow::onRemoveVideo() {
+    // Distinct action from onRemoveWallpaper() above: this unloads the
+    // video from Motiva's OWN player/preview - it never touches the
+    // desktop wallpaper detach path directly, and never deletes the file
+    // or m_settings' persisted video path (this app's closest thing to
+    // "history"/recent-item storage - see loadVideoSource()).
+    if (!m_hasCurrentVideo) {
+        return;
+    }
+    m_manager->player()->stop();
+    m_selectedVideoPath.clear();
+    m_hasCurrentVideo = false;
+    updateRemoveVideoButtonUi();
+    applyVideoInfoUi();
+    m_previewLabel->clear();
+    m_previewLabel->setText(QString());
+    refreshDropZoneVisual();
+
+    // If this same video also happens to be the active desktop wallpaper,
+    // reuse the EXISTING wallpaper lifecycle hook (WallpaperManager::
+    // removeWallpaper(), the same call onRemoveWallpaper() above makes) -
+    // no parallel teardown path, no D3D/DirectComposition code here.
+    // m_selectedVideoPath is already cleared above, so wallpaperRemoved's
+    // handler (see the constructor) correctly lands on NoVideo rather than
+    // Ready.
+    if (m_uiState == WallpaperUiState::Active || m_uiState == WallpaperUiState::Applying) {
+        m_manager->removeWallpaper();
+        m_settings.setWasWallpaperActive(false);
+    } else {
+        setUiState(WallpaperUiState::NoVideo);
+    }
 }
 
 void MainWindow::onPrimaryButtonClicked() {
@@ -1211,6 +1322,35 @@ void MainWindow::recoverOrActivate() {
     showNormal();
     raise();
     activateWindow();
+}
+
+void MainWindow::handleExplorerRequestedFile(const QString& path) {
+    qInfo() << "[Explorer] Handling file supplied via \"Set as background\":" << path;
+    // Untrusted input from Explorer/the command line - validated with the
+    // exact same check every other input method (Open Video, drag & drop,
+    // startup restore) already relies on, never executed/passed to a
+    // shell, and never given a second, parallel loading path. The extra
+    // isFile() check below (Explorer's own verb only ever supplies a real
+    // file, but the command line is untrusted either way) rejects a
+    // directory that happens to end in a supported extension - something
+    // isUsableVideoSource() alone doesn't rule out, since every existing
+    // caller of it only ever sees paths that already went through a file
+    // picker/drag payload that can't produce a directory.
+    const QUrl asUrl(path);
+    if (!isWebVideoUrl(asUrl) && !QFileInfo(path).isFile()) {
+        onWallpaperError(tr("Unsupported media.\n\nMotiva could not load \"%1\".").arg(path));
+        return;
+    }
+    if (!isUsableVideoSource(path)) {
+        onWallpaperError(tr("Unsupported media.\n\nMotiva could not load \"%1\".").arg(path));
+        return;
+    }
+    loadVideoSource(path);
+    onSetWallpaper();
+}
+
+void MainWindow::onExplorerFileReceived(const QString& path) {
+    handleExplorerRequestedFile(path);
 }
 
 void MainWindow::onExitRequested() {

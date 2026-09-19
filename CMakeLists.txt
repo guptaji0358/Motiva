@@ -35,6 +35,8 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/DropZoneWidget.h
     scripts/src/SettingsDialog.cpp
     scripts/include/SettingsDialog.h
+    scripts/src/ThemeTransitionOverlay.cpp
+    scripts/include/ThemeTransitionOverlay.h
     scripts/src/VideoPlayer.cpp
     scripts/include/VideoPlayer.h
     scripts/src/WallpaperWindow.cpp
@@ -52,6 +54,8 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/StartupDiagnostics.h
     scripts/src/InstanceIpc.cpp
     scripts/include/InstanceIpc.h
+    scripts/src/WindowsShellIntegration.cpp
+    scripts/include/WindowsShellIntegration.h
 )
 
 set(ENTRY_POINT_SOURCES

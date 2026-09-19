@@ -7,6 +7,7 @@
 #include <QPushButton>
 #include <QToolButton>
 #include <QStackedLayout>
+#include <QStringList>
 #include <memory>
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
@@ -17,6 +18,7 @@
 
 class QVideoWidget;
 class SettingsDialog;
+class ThemeTransitionOverlay;
 class QDragEnterEvent;
 class QDragMoveEvent;
 class QDragLeaveEvent;
@@ -26,17 +28,34 @@ class QMimeData;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(bool startMinimized, QWidget* parent = nullptr);
+    // initialExplorerFile: a file path handed off from Explorer's "Set as
+    // background" verb via the command line (see main.cpp) when THIS
+    // process is the one that wins the single-instance lock. Loaded and
+    // applied at the end of construction via the same
+    // handleExplorerRequestedFile() helper the InstanceIpc::fileReceived
+    // path uses - see MainWindow.cpp.
+    explicit MainWindow(bool startMinimized, const QString& initialExplorerFile = QString(),
+        QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // Every extension Explorer's "Set as background" verb should be
+    // registered for - the same backend-decodable video containers Open
+    // Video/drag & drop already accept, plus GIF (see
+    // isSupportedLocalMediaFile in MainWindow.cpp). Public/static so
+    // SettingsManager::setExplorerIntegrationEnabled() can reuse this
+    // exact validation logic instead of re-deriving/hardcoding a format
+    // list - see WindowsShellIntegration::RegisterSetBackgroundVerb.
+    static QStringList explorerIntegrationExtensions();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
     // Re-picks every theme-aware icon (Settings/Set-Wallpaper/Remove-
-    // Wallpaper) when the OS switches between light and dark - otherwise
-    // an icon chosen for the OLD palette would stay on screen (e.g.
-    // invisible dark-on-dark) until something else happened to call
-    // updatePrimaryButtonUi()/refresh the Settings icon. See
-    // Theme::isDarkPalette() and the icon-path functions in MainWindow.cpp.
+    // Wallpaper) whenever the active Motiva Theme changes (QApplication::
+    // setPalette() inside Theme::applyTheme() triggers this event on every
+    // top-level widget) - otherwise an icon chosen for the OLD theme would
+    // stay on screen (e.g. invisible dark-on-dark) until something else
+    // happened to call updatePrimaryButtonUi()/refresh the Settings icon.
+    // See Theme::iconVariant() and the icon-path functions in MainWindow.cpp.
     void changeEvent(QEvent* event) override;
     // Drag & drop entry points - accepts a local video file or a web
     // video URL dropped anywhere on the window, with the video preview
@@ -71,6 +90,13 @@ private slots:
     void onPasteShortcut();
     void onSetWallpaper();
     void onRemoveWallpaper();
+    // Unloads the video currently loaded in Motiva's own player/preview
+    // (the last source loaded via Open Video / Drag & Drop / Paste URL) -
+    // a distinct action from onRemoveWallpaper() above, which only detaches
+    // Motiva from the desktop wallpaper. Does not delete the file and does
+    // not touch m_settings' persisted video path (the closest thing this
+    // app has to "history"/recent-item storage) - see MainWindow.cpp.
+    void onRemoveVideo();
     void onPrimaryButtonClicked();
     void onPlayPause();
     void onWallpaperError(const QString& message);
@@ -80,6 +106,10 @@ private slots:
     void onExitRequested();
     void recoverOrActivate();
     void openSettings();
+    // Connected to InstanceIpc::fileReceived - a running instance's
+    // handling of a file handed off from Explorer's "Set as background"
+    // verb while it's already running (see main.cpp/InstanceIpc.h).
+    void onExplorerFileReceived(const QString& path);
 
 private:
     void buildUi();
@@ -90,6 +120,11 @@ private:
     void setUiState(WallpaperUiState state);
     void updateStatusUi();
     void updatePrimaryButtonUi();
+    // Enabled/disabled state of the standalone "Remove Current Video"
+    // button - driven purely by m_hasCurrentVideo, same gating rule as
+    // the old Remove Wallpaper button used (Open/Drop/Paste enable it,
+    // a startup-restored path never does).
+    void updateRemoveVideoButtonUi();
 
     // Shared by the Open Video button and drag & drop: source is either a
     // local filesystem path or an http(s) video URL - see
@@ -122,12 +157,24 @@ private:
     // pasted-but-unrecognized clipboard content the same subtle "that's
     // not a video" feedback, without a blocking dialog.
     void flashDropZoneInvalid();
+    // Shared by the constructor's initialExplorerFile handling and
+    // onExplorerFileReceived() above - one implementation of "apply a
+    // file Explorer's Set as background verb supplied," not two. Valid
+    // media loads via the existing loadVideoSource()/onSetWallpaper()
+    // convergence point; anything else reuses the existing
+    // onWallpaperError() warning/tray-message path rather than a new one.
+    void handleExplorerRequestedFile(const QString& path);
 
     std::unique_ptr<WallpaperManager> m_manager;
     SettingsManager m_settings;
     RecoveryState m_recoveryState;
     InstanceIpc m_ipc;
     SettingsDialog* m_settingsDialog = nullptr;
+    // Mirrors SettingsDialog's own overlay whenever a theme transition it
+    // starts also restyles MainWindow (see its themeTransitionStarted/
+    // Finished signals) - both top-level windows repaint from the same
+    // palette/stylesheet swap, so both need covering.
+    ThemeTransitionOverlay* m_themeTransitionOverlay = nullptr;
 
     QString m_selectedVideoPath;
     WallpaperUiState m_uiState = WallpaperUiState::NoVideo;
@@ -162,6 +209,7 @@ private:
     QLabel* m_statusLabel = nullptr;
     QToolButton* m_settingsButton = nullptr;
     IconButton* m_openVideoButton = nullptr;
+    IconButton* m_removeVideoButton = nullptr;
     IconButton* m_pasteLinkButton = nullptr;
     IconButton* m_playPauseButton = nullptr;
     IconButton* m_primaryButton = nullptr;

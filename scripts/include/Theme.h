@@ -1,122 +1,130 @@
 #pragma once
 
 #include <QString>
-#include <QPalette>
+#include <QColor>
 
-// Centralized Motiva visual design system - colors, typography, and the
-// single application-wide QSS stylesheet. This is a pure styling module
-// (see the "Motiva UI Styling Pass" task): no widget behavior, layout
-// structure, or backend logic lives here, only how existing widgets look.
-//
-// Base surfaces/text intentionally use Qt's "palette(...)" QSS functions
-// rather than fixed hex values, so the app keeps following the OS
-// light/dark palette exactly as it did before this styling pass (see
-// MainWindow.cpp's original comment: "This app has no app-level
-// light/dark theme toggle of its own - it simply follows the OS window
-// palette"). Only the accent/status colors and a couple of deliberately
-// fixed-dark surfaces (the video preview, matching prior behavior) are
-// fixed hex values, consistent with how they already worked before this
-// pass.
+// Centralized Motiva visual design system - see the "Motiva Theme System"
+// task. A Theme is a single, complete, explicitly-defined visual identity
+// (background/panel/text/border/accent colors, corner language, hover/
+// pressed behavior, icon variant) - never derived from another theme at
+// runtime (no "light = dark inverted", no relying on Qt's native QPalette
+// to auto-convert anything). Exactly one AppTheme is ever active; there is
+// no separate Appearance/Visual Style axis anymore.
 namespace Theme {
 
-// Two genuinely different, professional, Motiva-branded visual styles the
-// user can pick in Settings (see the "Two distinct Motiva visual styles"
-// task) - not two recolors of the same rules, but different border/
-// radius/hover/pressed language per style. Persisted via
-// SettingsManager::uiStyle().
-enum class StyleId {
-    // "Modern Aurora" - clean flat surfaces, restrained 6/8px radius,
-    // subtle 1px borders, a soft lighten-on-hover/darken-on-press
-    // language, matches stock modern Windows apps (Settings, Photos).
-    ModernAurora = 0,
-    // "Motiva Onyx" - flatter/sharper (2/3px radius, mostly borderless),
-    // bolder full-accent-fill hover/pressed blocks instead of a subtle
-    // lighten, and heavier-weight text - a distinct, more graphic Motiva
-    // identity rather than a Windows-stock look.
-    MotivaOnyx = 1,
+// The four themes. Values are stable (persisted via
+// SettingsManager::setTheme()) - do not renumber existing entries.
+enum class AppTheme {
+    DarkAurora = 0,
+    LightAurora = 1,
+    DarkOnyx = 2,
+    LightOnyx = 3,
 };
 
-// Appearance is an independent axis from StyleId above: StyleId controls
-// button/border/radius/hover *chrome* language; AppearanceId controls
-// which light/dark QPalette the whole app renders with. Persisted via
-// SettingsManager::appearance().
-enum class AppearanceId {
-    // Follow whatever the OS's own window palette currently is - the
-    // app's original, only-ever behavior before this setting existed.
-    System = 0,
-    Light = 1,
-    Dark = 2,
+// Every field a theme needs to render Motiva's UI, as literal colors -
+// see themePalette()'s four independently-authored definitions in
+// Theme.cpp. Corner radius is NOT here: it's a property of the Aurora vs
+// Onyx *design language* (soft vs sharp corners), not of light vs dark,
+// so it's baked into auroraStyleSheet()/onyxStyleSheet() directly instead
+// (both Aurora themes share one radius scale, both Onyx themes share
+// another).
+struct ThemePalette {
+    QColor windowBg;       // main window/dialog background
+    QColor panelBg;        // section/card surfaces
+    QColor baseBg;         // inputs, combo popups
+    QColor altBg;          // alternate rows / subtle recessed surfaces
+    QColor textPrimary;
+    QColor textSecondary;
+    QColor textDisabled;
+    QColor border;         // subtle/default borders
+    QColor borderStrong;   // hover/focus-adjacent borders
+    QColor buttonBg;
+    QColor buttonHoverBg;
+    QColor buttonPressedBg;
+    QColor accent;
+    QColor accentHover;
+    QColor accentPressed;
+    QColor accentSoft;      // translucent accent, e.g. list-item selection
+    QColor selectionText;   // text color on top of an accent-filled surface
+    bool isDark;
 };
 
-// Whether an icon variant folder ("light" or "dark") should be used for
-// the CURRENT effective palette - i.e. is the app rendering on a light
-// or dark theme right now (System-followed OR explicitly chosen via
-// AppearanceId - both end up expressed through qApp->palette(), so this
-// one check covers both). Based on QApplication::palette().window()
-// lightness - centralized here so every icon lookup site agrees.
-bool isDarkPalette();
+// The theme most recently passed to applyTheme() - readable anywhere
+// (icon lookups, the transition overlay's own paint) without threading
+// the current selection through every call site. Defaults to DarkAurora
+// until applyTheme() has run at least once (see main.cpp).
+AppTheme currentTheme();
 
-// Snapshots the real OS-driven palette. Must be called exactly once, at
-// startup, before any call to applyAppearance() ever changes
-// QApplication's palette - otherwise "System" could no longer be
-// recovered later. See main.cpp.
-void captureSystemPalette();
+// The one, fully deterministic source of truth for `theme`'s look:
+// swaps QApplication's QPalette AND its global stylesheet together, both
+// generated from the same literal ThemePalette - see themePalette().
+void applyTheme(AppTheme theme);
 
-// Switches QApplication's actual QPalette to match the requested
-// appearance: System restores the snapshot captured by
-// captureSystemPalette(), Light/Dark install a fixed, deliberately
-// distinct palette of Motiva's own. All of this app's QSS uses
-// palette(...) tokens rather than fixed colors specifically so this one
-// call is enough to re-theme everything already on screen - no
-// stylesheet re-apply needed alongside it.
-void applyAppearance(AppearanceId appearance);
+// The literal, independently-authored color set for `theme` - see
+// Theme.cpp. Never computed from another theme at runtime.
+const ThemePalette& themePalette(AppTheme theme);
 
-// Human-readable name for an appearance, used by SettingsDialog's picker.
-QString appearanceName(AppearanceId appearance);
+// "Dark Aurora" etc - for the Settings Theme combo box, in the exact
+// order that combo lists them (matches AppTheme's own ordinal order).
+QString themeName(AppTheme theme);
 
-// --- Accent (Motiva brand color) ---
-// The same green already used for the "Wallpaper Active" status text and
-// the drop zone's drag-over highlight (see DropZoneWidget.cpp) - adopted
-// here as the one intentional accent color used for every primary
-// interactive element, rather than introducing a second, competing hue.
-constexpr const char* kAccent = "#3fae5c";
-constexpr const char* kAccentHover = "#4fc26c";
-constexpr const char* kAccentPressed = "#358f4c";
-constexpr const char* kAccentSoft = "rgba(63, 174, 92, 0.16)";
+// "DarkAurora" etc - a stable persistence key, independent of themeName()
+// so a future retranslation/rename of the display name can never change
+// what's stored in the registry.
+QString themeSettingsKey(AppTheme theme);
+AppTheme themeFromSettingsKey(const QString& key, AppTheme fallback = AppTheme::DarkAurora);
 
-// --- Status colors (state-only, not the general accent) ---
+bool isDarkTheme(AppTheme theme);
+
+// "dark" or "light" - the icon-variant subfolder shared by every theme.
+// Aurora and Onyx deliberately use the SAME icon artwork per light/dark
+// (only their QSS-driven chrome differs) - see CLAUDE.md's asset-layout
+// notes and the "Only create theme-specific icon files when the artwork
+// genuinely needs to differ" instruction. Used everywhere an icon path is
+// built, e.g. ":/settings-icon/" + iconVariant(theme) + "/settings.svg".
+QString iconVariant(AppTheme theme);
+
+// One-time, pure (no I/O) migration from the old two-axis Appearance
+// (0=System/1=Light/2=Dark) x Visual Style (0=ModernAurora/1=MotivaOnyx)
+// settings to a single AppTheme - see SettingsManager::theme(). "System"
+// maps to Dark (the axis that was already reported working correctly),
+// matching this task's note that Light was the broken one, not System.
+AppTheme migrateLegacySettings(int legacyAppearance, int legacyUiStyle);
+
+// --- Colors that intentionally stay constant across every theme ---
+
+// Status text colors - kept legible/consistent regardless of the active
+// theme rather than reformulated per-theme (a warning should always read
+// as "warning", independent of which theme is active).
 constexpr const char* kStatusNeutral = "#808080";
 constexpr const char* kStatusWarning = "#c98a1a";
 constexpr const char* kStatusSuccess = "#2e9e4f";
 constexpr const char* kStatusError = "#d64545";
 
-// --- Fixed-dark preview surface (theme-independent by design - see
-// MainWindow.cpp's original comment on kPreviewSurfaceStyle) ---
+// The video preview surface is a deliberately fixed-dark backdrop
+// regardless of the active theme (the same convention most media/player
+// apps use) - see MainWindow.cpp's kPreviewSurfaceStyle.
 constexpr const char* kPreviewSurfaceBg = "#161616";
 constexpr const char* kPreviewSurfaceBorder = "#2c2c2c";
 constexpr const char* kPreviewText = "#8a8a8a";
 constexpr const char* kPreviewTextStrong = "#c9c9c9";
 constexpr const char* kPreviewTextFaint = "#5a5a5a";
 
-// Corner radii used consistently across surfaces/buttons/inputs - one
-// scale, not a random assortment of rounded rectangles (see the task's
-// "Avoid excessive rounded rectangles everywhere").
-constexpr int kRadiusSmall = 8;   // buttons, inputs, small controls (Modern Aurora)
-constexpr int kRadiusMedium = 10; // panels/cards, the preview container (Modern Aurora)
-constexpr int kRadiusOnyx = 0;    // Motiva Onyx is square-cornered, full stop - not just
-                                  // "slightly sharper" than Aurora's soft radius, so the
-                                  // two are unmistakable even in a button at rest.
+// Same fixed brand green used by the (theme-independent) preview surface
+// and the theme-transition overlay's own decorative sweep - not one of
+// the four themes' own (per-theme) accent colors.
+constexpr const char* kBrandAccent = "#3fae5c";
 
-// The one application-wide stylesheet, applied once via
-// QApplication::setStyleSheet in main.cpp. Organized by widget class/
-// object name rather than scattered per-widget setStyleSheet() calls
-// (see the task's "QSS / styling architecture" section) - the few
-// setStyleSheet() calls remaining in MainWindow.cpp/DropZoneWidget.cpp
-// are for the deliberately fixed-dark preview surface only, which is
-// intentionally exempt from theme-following (see above).
-QString appStyleSheet(StyleId style = StyleId::ModernAurora);
+// Corner radius scale used by the fixed-dark preview surface above and
+// its own light-on-dark controls (which do not belong to either Aurora
+// or Onyx's own per-theme-family radius language, applied inside
+// appStyleSheet() instead).
+constexpr int kRadiusSmall = 8;
+constexpr int kRadiusMedium = 10;
 
-// Human-readable name for a style, used by SettingsDialog's picker.
-QString styleName(StyleId style);
+// The one application-wide stylesheet for `theme`, built from its
+// ThemePalette - applied once via QApplication::setStyleSheet (main.cpp)
+// and again on every live theme change (SettingsDialog).
+QString appStyleSheet(AppTheme theme);
 
 } // namespace Theme
