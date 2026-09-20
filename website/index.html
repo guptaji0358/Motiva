@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Motiva — Live video wallpapers for Windows</title>
+  <meta name="description" content="Motiva is a native Windows application that plays videos and GIFs as a live desktop wallpaper, behind your desktop icons.">
+  <meta name="theme-color" content="#0c0e1e">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" type="image/svg+xml" href="Assets/logo/favicon.svg">
+  <script>document.documentElement.classList.add('js');</script>
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Motiva — Live video wallpapers for Windows">
+  <meta property="og:description" content="Play videos and GIFs as a live desktop wallpaper on Windows.">
+  <meta property="og:image" content="Assets/other/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/animations.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- ============================== Header ============================== -->
+  <header class="site-header" id="top">
+    <div class="container header-inner">
+      <a class="brand" href="#top" aria-label="Motiva — back to top">
+        <img src="Assets/logo/motiva-logo.svg" alt="" width="34" height="34">
+        <span class="brand-name">Motiva</span>
+      </a>
+
+      <nav class="site-nav" id="site-nav" aria-label="Primary">
+        <ul>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#how-it-works">How It Works</a></li>
+          <li><a href="#screenshots">Screenshots</a></li>
+          <li><a href="#windows">Windows</a></li>
+          <li><a href="#download">Download</a></li>
+          <li><a href="https://github.com/guptaji0358/Motiva" rel="noopener" target="_blank" class="nav-external" data-github>GitHub<img src="Assets/icons/external.svg" alt="" width="14" height="14"></a></li>
+        </ul>
+        <a class="btn btn-primary btn-sm nav-cta" href="#download" data-download>Download</a>
+      </nav>
+
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Open menu">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path class="bar bar-1" d="M4 7h16"/><path class="bar bar-2" d="M4 12h16"/><path class="bar bar-3" d="M4 17h16"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ============================== Hero ============================== -->
+    <section class="hero" id="hero" aria-labelledby="hero-title">
+      <div class="hero-bg" aria-hidden="true"></div>
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow" data-anim="hero" style="--d:0ms">Windows video wallpaper</p>
+          <h1 id="hero-title" data-anim="hero" style="--d:80ms">Bring <span class="grad-text">motion</span> to your&nbsp;desktop.</h1>
+          <p class="lead" data-anim="hero" style="--d:160ms">
+            Motiva is a native Windows application that plays videos and GIFs as a live wallpaper,
+            behind your desktop icons — no browser, no fake fullscreen window.
+          </p>
+          <div class="hero-actions" data-anim="hero" style="--d:240ms">
+            <a class="btn btn-primary btn-lg" href="#download" data-download>
+              <img src="Assets/icons/download.svg" alt="" width="20" height="20"><span>Download for Windows</span>
+            </a>
+            <a class="btn btn-ghost btn-lg" href="#features">Learn more</a>
+          </div>
+          <ul class="hero-facts" data-anim="hero" style="--d:320ms" aria-label="Key facts">
+            <li>Native C++ / Qt&nbsp;6</li>
+            <li>Video &amp; GIF</li>
+            <li>Per-user install</li>
+          </ul>
+        </div>
+
+        <div class="hero-visual" data-anim="hero" style="--d:200ms" data-parallax>
+          <div class="desktop" role="img" aria-label="Illustration of a Windows desktop with an animated aurora wallpaper behind the desktop icons and the Motiva window in front.">
+            <div class="desktop-wall" aria-hidden="true">
+              <span class="blob blob-a"></span><span class="blob blob-b"></span><span class="blob blob-c"></span>
+              <svg class="ribbons" viewBox="0 0 800 450" preserveAspectRatio="none">
+                <path d="M0 280C120 240 220 320 380 296S620 230 800 270" />
+                <path d="M0 316C130 280 240 350 400 330S640 268 800 306" />
+                <path d="M0 352C140 320 260 384 420 364S660 306 800 342" />
+              </svg>
+            </div>
+            <div class="desktop-icons" aria-hidden="true">
+              <span><i></i>Recycle Bin</span><span><i></i>Videos</span><span><i></i>Projects</span>
+            </div>
+            <div class="desktop-taskbar" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          </div>
+          <figure class="float-window">
+            <img src="Assets/screenshots/main-darkaurora.webp" width="1084" height="888"
+                 alt="The Motiva main window showing a preview of a video, the Play, Open Video and Remove Video buttons and the Set as Wallpaper button.">
+            <figcaption>Motiva window (real screenshot)</figcaption>
+          </figure>
+          <span class="badge-illustration">Desktop is an illustration</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================== Features ============================== -->
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="container">
+        <header class="section-head reveal">
+          <p class="eyebrow">Features</p>
+          <h2 id="features-title">Everything Motiva does today</h2>
+          <p class="section-lead">A focused set of features, all built into the current version.</p>
+        </header>
+
+        <ul class="feature-grid">
+          <li class="card reveal"><img class="icon" src="Assets/icons/video.svg" alt="" width="44" height="44">
+            <h3>Video wallpapers</h3>
+            <p>Play a video continuously behind your desktop icons, and pause, mute or loop it from Motiva.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/gif.svg" alt="" width="44" height="44">
+            <h3>GIF support</h3>
+            <p>Use an animated GIF as your wallpaper exactly like a video file.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/formats.svg" alt="" width="44" height="44">
+            <h3>Multiple media formats</h3>
+            <p>MP4, MKV, MOV, AVI, WMV, OGV and GIF. Video formats depend on the media backend Motiva ships with.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/drag-drop.svg" alt="" width="44" height="44">
+            <h3>Drag &amp; drop</h3>
+            <p>Drop a local video or GIF onto the window, or use <em>Open Video</em> to browse for one.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/link.svg" alt="" width="44" height="44">
+            <h3>Load from a URL</h3>
+            <p>Paste a direct http(s) link to a video file — or press <kbd>Ctrl</kbd>+<kbd>V</kbd> in the window.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/explorer.svg" alt="" width="44" height="44">
+            <h3>File Explorer integration</h3>
+            <p>Optionally add <em>Set as background</em> to the right-click menu of supported media files.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/battery.svg" alt="" width="44" height="44">
+            <h3>Battery control</h3>
+            <p>A <em>Show video on battery</em> setting lets you choose whether the video keeps playing on battery power.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/themes.svg" alt="" width="44" height="44">
+            <h3>Four themes</h3>
+            <p>Dark Aurora, Light Aurora, Dark Onyx and Light Onyx — switch any time in Settings.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/recovery.svg" alt="" width="44" height="44">
+            <h3>Explorer recovery</h3>
+            <p>If Windows Explorer restarts, Motiva re-attaches the wallpaper on its own.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/wallpaper.svg" alt="" width="44" height="44">
+            <h3>Plays well with Windows</h3>
+            <p>Pick a normal picture with <em>Set as desktop background</em> and Motiva steps aside, staying ready in the background.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/monitor.svg" alt="" width="44" height="44">
+            <h3>Monitors &amp; scaling</h3>
+            <p>Use all monitors, the primary one, or a specific one — with Fill, Fit, Stretch or Original scaling.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/search.svg" alt="" width="44" height="44">
+            <h3>Search &amp; startup</h3>
+            <p>Add Motiva to the Start Menu so Windows Search finds it, and optionally start it with Windows.</p></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== How it works ============================== -->
+    <section class="section section-alt" id="how-it-works" aria-labelledby="how-title">
+      <div class="container">
+        <header class="section-head reveal">
+          <p class="eyebrow">How it works</p>
+          <h2 id="how-title">From file to wallpaper in four steps</h2>
+        </header>
+
+        <ol class="flow" aria-label="Steps">
+          <li class="flow-step reveal" style="--i:0">
+            <span class="flow-node"><img src="Assets/icons/folder.svg" alt="" width="40" height="40"></span>
+            <h3>Choose media</h3>
+            <p>Drag a video or GIF in, open one, or paste a link.</p>
+          </li>
+          <li class="flow-step reveal" style="--i:1">
+            <span class="flow-node"><img src="Assets/icons/eye.svg" alt="" width="40" height="40"></span>
+            <h3>Preview</h3>
+            <p>Motiva plays it in its own window first, with play and pause controls.</p>
+          </li>
+          <li class="flow-step reveal" style="--i:2">
+            <span class="flow-node"><img src="Assets/icons/wallpaper.svg" alt="" width="40" height="40"></span>
+            <h3>Set as Wallpaper</h3>
+            <p>One click puts it behind your desktop icons. Remove Wallpaper reverses it.</p>
+          </li>
+          <li class="flow-step reveal" style="--i:3">
+            <span class="flow-node"><img src="Assets/icons/sparkle.svg" alt="" width="40" height="40"></span>
+            <h3>Enjoy</h3>
+            <p>Motiva lives in the system tray while your desktop moves.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ============================== Screenshots ============================== -->
+    <section class="section" id="screenshots" aria-labelledby="shots-title">
+      <div class="container">
+        <header class="section-head reveal">
+          <p class="eyebrow">Demo &amp; screenshots</p>
+          <h2 id="shots-title">See Motiva in action</h2>
+          <p class="section-lead">Real screenshots of the app. They show a sample aurora GIF that was generated for these captures — your own media appears in its place.</p>
+        </header>
+
+        <div class="shots reveal" data-tabs>
+          <div class="shot-tabs" role="tablist" aria-label="Screenshots" aria-orientation="vertical">
+            <button role="tab" id="tab-dark-aurora" aria-controls="panel-dark-aurora" aria-selected="true" type="button">Dark Aurora<small>Main window</small></button>
+            <button role="tab" id="tab-light-aurora" aria-controls="panel-light-aurora" aria-selected="false" tabindex="-1" type="button">Light Aurora<small>Main window</small></button>
+            <button role="tab" id="tab-dark-onyx" aria-controls="panel-dark-onyx" aria-selected="false" tabindex="-1" type="button">Dark Onyx<small>Main window</small></button>
+            <button role="tab" id="tab-light-onyx" aria-controls="panel-light-onyx" aria-selected="false" tabindex="-1" type="button">Light Onyx<small>Main window</small></button>
+            <button role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false" tabindex="-1" type="button">Settings<small>Playback, power, integration</small></button>
+            <button role="tab" id="tab-explorer" aria-controls="panel-explorer" aria-selected="false" tabindex="-1" type="button">Explorer menu<small>Illustration</small></button>
+          </div>
+
+          <div class="shot-stage">
+            <figure class="shot-panel" role="tabpanel" id="panel-dark-aurora" aria-labelledby="tab-dark-aurora" tabindex="0">
+              <div class="window-frame"><img src="Assets/screenshots/main-darkaurora.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Dark Aurora theme: video preview, playback buttons and the Set as Wallpaper button."></div>
+              <figcaption>Dark Aurora — the default look.</figcaption>
+            </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-light-aurora" aria-labelledby="tab-light-aurora" tabindex="0" hidden>
+              <div class="window-frame"><img src="Assets/screenshots/main-lightaurora.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Light Aurora theme with a light interface."></div>
+              <figcaption>Light Aurora.</figcaption>
+            </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-dark-onyx" aria-labelledby="tab-dark-onyx" tabindex="0" hidden>
+              <div class="window-frame"><img src="Assets/screenshots/main-darkonyx.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Dark Onyx theme with a black interface and a green accent."></div>
+              <figcaption>Dark Onyx.</figcaption>
+            </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-light-onyx" aria-labelledby="tab-light-onyx" tabindex="0" hidden>
+              <div class="window-frame"><img src="Assets/screenshots/main-lightonyx.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Light Onyx theme."></div>
+              <figcaption>Light Onyx.</figcaption>
+            </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" tabindex="0" hidden>
+              <div class="window-frame"><img src="Assets/screenshots/settings-darkaurora.png" width="1109" height="538" loading="lazy" alt="The Motiva Settings window: scaling, monitor, volume, mute and loop, start with Windows, show video on battery, theme, and the Windows Integration options."></div>
+              <figcaption>Settings — display, playback, power and Windows integration.</figcaption>
+            </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-explorer" aria-labelledby="tab-explorer" tabindex="0" hidden>
+              <div class="window-frame explorer-art">
+                <svg viewBox="0 0 560 330" role="img" aria-label="Illustration of a File Explorer right-click menu with a Set as background entry.">
+                  <defs><linearGradient id="ex-g" x1="0" x2="1"><stop offset="0" stop-color="#4cc9ff"/><stop offset="1" stop-color="#9a6bff"/></linearGradient></defs>
+                  <rect x="0" y="0" width="560" height="330" rx="14" fill="#11132a"/>
+                  <rect x="34" y="34" width="132" height="92" rx="10" fill="#1a1d3d" stroke="#2c3168"/>
+                  <path d="M92 66v28l26-14z" fill="url(#ex-g)"/>
+                  <text x="100" y="146" text-anchor="middle" fill="#b9c4f0" font-size="14" font-family="Segoe UI, sans-serif">my-video.mp4</text>
+                  <g transform="translate(150 70)">
+                    <rect width="330" height="220" rx="12" fill="#1b1e3f" stroke="#33397a"/>
+                    <g font-family="Segoe UI, sans-serif" font-size="15" fill="#cfd8ff">
+                      <text x="22" y="38">Open</text>
+                      <text x="22" y="72">Play</text>
+                      <rect x="8" y="90" width="314" height="38" rx="8" fill="url(#ex-g)" fill-opacity="0.22" stroke="url(#ex-g)"/>
+                      <text x="22" y="115" fill="#fff" font-weight="600">Set as background</text>
+                      <text x="22" y="152">Copy</text>
+                      <text x="22" y="186">Properties</text>
+                    </g>
+                  </g>
+                </svg>
+              </div>
+              <figcaption>Illustration of the optional right-click entry (enable it in Settings ▸ Windows Integration). On Windows 11 it appears under <em>Show more options</em>.</figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================== Windows integration ============================== -->
+    <section class="section section-alt" id="windows" aria-labelledby="win-title">
+      <div class="container">
+        <header class="section-head reveal">
+          <p class="eyebrow">Native Windows integration</p>
+          <h2 id="win-title">Built for the Windows desktop</h2>
+          <p class="section-lead">Motiva is a native C++ application using Qt 6 and Win32 — not a browser or a fullscreen overlay.</p>
+        </header>
+
+        <div class="integration-grid">
+          <article class="card reveal">
+            <img class="icon" src="Assets/icons/native.svg" alt="" width="44" height="44">
+            <h3>Behind your icons</h3>
+            <p>The wallpaper is attached to the Windows desktop layer, beneath your desktop icons. It is not a topmost or fullscreen window, so the taskbar and your apps stay on top.</p>
+          </article>
+          <article class="card reveal">
+            <img class="icon" src="Assets/icons/video.svg" alt="" width="44" height="44">
+            <h3>DirectComposition &amp; Direct3D 11</h3>
+            <p>Frames are decoded with Qt Multimedia and presented through DirectComposition using Direct3D 11.</p>
+          </article>
+          <article class="card reveal">
+            <img class="icon" src="Assets/icons/recovery.svg" alt="" width="44" height="44">
+            <h3>Recovers on its own</h3>
+            <p>Motiva detects Explorer restarts and re-attaches, and hands the desktop back when you choose a regular Windows wallpaper.</p>
+          </article>
+        </div>
+
+        <aside class="notice reveal" aria-labelledby="power-title">
+          <img class="icon" src="Assets/icons/warning.svg" alt="" width="40" height="40">
+          <div>
+            <h3 id="power-title">Power &amp; battery usage</h3>
+            <p>Animated and video wallpapers can use noticeably more CPU/GPU power than a static wallpaper, depending on the media, resolution, frame rate and hardware. On battery this can reduce runtime.
+              Use the <strong>Show video on battery</strong> setting to control whether the video stays visible on battery power.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================== Download ============================== -->
+    <section class="section download" id="download" aria-labelledby="dl-title">
+      <div class="container">
+        <div class="download-card reveal">
+          <div class="download-main">
+            <img class="download-logo" src="Assets/logo/motiva-logo.svg" alt="" width="72" height="72">
+            <p class="eyebrow">For users</p>
+            <h2 id="dl-title">Download for Windows</h2>
+            <p class="section-lead">Get the latest Motiva release for Windows. Version <strong>1.0.0</strong></p>
+            <div class="hero-actions">
+              <a class="btn btn-primary btn-lg" href="#download" rel="noopener" data-download-main>
+                <img src="Assets/icons/download.svg" alt="" width="20" height="20"><span>Download for Windows</span>
+              </a>
+            </div>
+            <p class="fine">Served from the official GitHub Releases page.</p>
+          </div>
+
+          <div class="download-side">
+            <h3>Requirements</h3>
+            <ul class="checklist">
+              <li>64-bit Windows (developed and tested on Windows 11)</li>
+              <li>No administrator rights needed — installs for your user account</li>
+            </ul>
+            <h3>Installing</h3>
+            <ol class="steps-list">
+              <li>Run <code>MotivaSetup.exe</code>.</li>
+              <li>Review the power usage notice.</li>
+              <li>Choose a location and install.</li>
+              <li>Launch Motiva and open a video or GIF.</li>
+            </ol>
+            <p class="fine">Uninstall any time from Windows Settings ▸ Apps. Your settings and videos are kept.</p>
+          </div>
+        </div>
+
+        <div class="source-card reveal">
+          <img src="Assets/icons/code.svg" alt="" width="40" height="40">
+          <div class="source-text">
+            <p class="eyebrow">For developers</p>
+            <h3>Download Source Code</h3>
+            <p>Explore, modify, and extend Motiva from the source.</p>
+          </div>
+          <a class="btn btn-ghost btn-lg" href="https://github.com/guptaji0358/Motiva" rel="noopener" target="_blank" data-github>
+            <img src="Assets/icons/code.svg" alt="" width="20" height="20"><span>View Source Code</span>
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================== Footer ============================== -->
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <a class="brand" href="#top" aria-label="Motiva — back to top">
+          <img src="Assets/logo/motiva-logo.svg" alt="" width="30" height="30"><span class="brand-name">Motiva</span>
+        </a>
+        <p>Live video wallpapers for Windows.<br>Developed by Robin Gupta Studios.</p>
+        <p class="built-with"><span>Built with Claude</span><img src="Assets/other/claude.png" alt="Claude" width="18" height="18"></p>
+      </div>
+      <nav aria-label="Footer">
+        <ul>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#how-it-works">How It Works</a></li>
+          <li><a href="#screenshots">Screenshots</a></li>
+          <li><a href="#windows">Windows</a></li>
+          <li><a href="#download">Download</a></li>
+          <li><a href="https://github.com/guptaji0358/Motiva" rel="noopener" target="_blank" data-github>GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="container footer-legal">
+      <p>Copyright &copy; Robin Gupta. RGS&trade;</p>
+    </div>
+  </footer>
+
+  <script src="js/main.js" defer></script>
+  <script src="js/animations.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+/* Motiva website — motion.
+   Rules of thumb: transform/opacity only, slow ambient loops, everything paused when
+   offscreen or the tab is hidden (animations.js toggles [data-paused]), and everything
+   removed under prefers-reduced-motion. */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(26px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes float-a { from { transform: translate3d(0, 0, 0) scale(1); }    to { transform: translate3d(9%, -7%, 0) scale(1.08); } }
+@keyframes float-b { from { transform: translate3d(0, 0, 0) scale(1); }    to { transform: translate3d(-8%, 9%, 0) scale(1.06); } }
+@keyframes float-c { from { transform: translate3d(-6%, 4%, 0); }          to { transform: translate3d(8%, -6%, 0) scale(1.1); } }
+@keyframes ribbon  { from { transform: translate3d(-1.5%, 0, 0); }         to { transform: translate3d(1.5%, -3%, 0); } }
+@keyframes bob     { from { transform: translate3d(0, 0, 0); }             to { transform: translate3d(0, -8px, 0); } }
+@keyframes ring    { 0% { opacity: .7; transform: scale(.9); } 100% { opacity: 0; transform: scale(1.5); } }
+@keyframes sweep   { from { transform: translateX(-120%) skewX(-18deg); }  to { transform: translateX(260%) skewX(-18deg); } }
+@keyframes icon-pop { 0% { transform: scale(1); } 40% { transform: scale(1.14) rotate(-4deg); } 100% { transform: scale(1); } }
+
+/* ------------------------------------------------------- hero entrance
+   Content is only hidden when JS is present (html.js), so it is never lost without it. */
+html.js [data-anim="hero"] { opacity: 0; }
+html.js.is-ready [data-anim="hero"] {
+  animation: fade-up .9s cubic-bezier(.2, .7, .2, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* ------------------------------------------------------- ambient hero motion */
+.blob-a { animation: float-a 17s ease-in-out infinite alternate; }
+.blob-b { animation: float-b 21s ease-in-out infinite alternate; }
+.blob-c { animation: float-c 25s ease-in-out infinite alternate; }
+.ribbons { animation: ribbon 14s ease-in-out infinite alternate; }
+.float-window { animation: bob 7s ease-in-out infinite alternate; }
+
+/* subtle pointer parallax (values set by animations.js; only while the pointer is over the hero) */
+.desktop      { transform: translate3d(calc(var(--px, 0) * -10px), calc(var(--py, 0) * -8px), 0); transition: transform .35s ease-out; }
+.float-window { translate: calc(var(--px, 0) * 12px) calc(var(--py, 0) * 9px); transition: translate .35s ease-out; }
+
+/* pause ambient loops when the hero is offscreen or the tab is hidden */
+[data-paused] .blob, [data-paused] .ribbons, [data-paused] .float-window { animation-play-state: paused; }
+
+/* ------------------------------------------------------- scroll reveal */
+html.js .reveal {
+  opacity: 0; transform: translateY(28px);
+  transition: opacity .7s cubic-bezier(.2, .7, .2, 1), transform .7s cubic-bezier(.2, .7, .2, 1),
+              border-color .25s ease, box-shadow .25s ease;
+}
+html.js .reveal.is-visible { opacity: 1; transform: none; }
+.feature-grid .reveal:nth-child(3n + 2), .integration-grid .reveal:nth-child(3n + 2) { transition-delay: .07s, .07s, 0s, 0s; }
+.feature-grid .reveal:nth-child(3n + 3), .integration-grid .reveal:nth-child(3n + 3) { transition-delay: .14s, .14s, 0s, 0s; }
+.flow-step.reveal { transition-delay: calc(var(--i, 0) * 110ms), calc(var(--i, 0) * 110ms), 0s, 0s; }
+
+/* Once a card has revealed, hover lifts must respond immediately */
+html.js .card.is-visible { transition-delay: 0s; transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease, opacity .25s ease; }
+
+/* ------------------------------------------------------- how-it-works accents */
+.flow-node::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; border: 2px solid rgba(120, 170, 255, .7); opacity: 0; pointer-events: none;
+}
+.flow-step.is-visible .flow-node::before { animation: ring 1.6s ease-out calc(var(--i, 0) * 220ms + 300ms) 1 both; }
+.flow-node img { transition: transform .3s ease, filter .3s ease; }
+.flow-step:hover .flow-node img { transform: scale(1.12); filter: drop-shadow(0 0 10px rgba(110, 160, 255, .7)); }
+
+/* ------------------------------------------------------- buttons */
+.btn-primary { overflow: hidden; isolation: isolate; }
+.btn-primary::after {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 40%; z-index: -1;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent); transform: translateX(-120%) skewX(-18deg);
+}
+.btn-primary:hover::after { animation: sweep .9s ease; }
+.btn img { transition: transform .2s ease; }
+.btn:hover img { transform: translateY(2px); }
+
+/* ------------------------------------------------------- screenshot panels */
+.shot-panel:not([hidden]) { animation: fade-up .5s cubic-bezier(.2, .7, .2, 1) both; }
+
+/* ------------------------------------------------------- icon hover accent */
+.card:hover .icon { animation: icon-pop .5s ease; }
+
+/* ------------------------------------------------------- reduced motion: keep content, drop motion */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation: none !important;
+    transition-duration: .01ms !important;
+    transition-delay: 0s !important;
+  }
+  html.js [data-anim="hero"], html.js .reveal { opacity: 1 !important; transform: none !important; }
+  .desktop, .float-window { transform: none !important; translate: none !important; }
+}
