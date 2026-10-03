@@ -209,6 +209,12 @@ void WallpaperWindow::notifyAttachedToDesktop() {
     }
 }
 
+void WallpaperWindow::presentLastFrame() {
+    if (m_renderer) {
+        QMetaObject::invokeMethod(m_renderer, "presentLastFrame", Qt::QueuedConnection);
+    }
+}
+
 void WallpaperWindow::showNative() {
     if (m_hwnd) {
         ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);

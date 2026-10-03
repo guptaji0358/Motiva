@@ -55,6 +55,15 @@ public slots:
     // method invoked once per decoded frame.
     void presentFrame(std::shared_ptr<const QImage> frame);
 
+    // Presents the most recently presented frame again (no-op if none
+    // yet). A still image only ever produces one frame, so this is what
+    // keeps it on screen correctly after anything that needs a fresh
+    // Present(): a scaling-mode change, a resize (ResizeBuffers discards
+    // the back buffer contents), or a (re)attach that WallpaperManager
+    // verifies via presentedFrameCount. For video this is only ever an
+    // extra present of a frame that was already showing.
+    void presentLastFrame();
+
     // Releases every D3D11/DXGI/DirectComposition object in dependency
     // order. Must be called on this object's own thread before the thread
     // is asked to quit (COM objects must be released on the thread that
@@ -142,6 +151,9 @@ private:
     ID3D11PixelShader* m_pixelShader = nullptr;
     ID3D11SamplerState* m_sampler = nullptr;
     ID3D11Buffer* m_uvTransformBuffer = nullptr;
+
+    // Kept for presentLastFrame(); only touched on this object's thread.
+    std::shared_ptr<const QImage> m_lastFrame;
 
     ID3D11Texture2D* m_sourceTexture = nullptr;
     ID3D11ShaderResourceView* m_sourceSrv = nullptr;

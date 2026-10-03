@@ -9,6 +9,8 @@
 #include <QVideoFrame>
 #include <QFutureWatcher>
 #include <QMovie>
+#include <QSet>
+#include <QString>
 #include <memory>
 
 Q_DECLARE_METATYPE(std::shared_ptr<const QImage>) // needed for the cross-thread frameReady queued connection
@@ -31,10 +33,32 @@ Q_DECLARE_METATYPE(std::shared_ptr<const QImage>) // needed for the cross-thread
 // the QMediaPlayer path already uses - WallpaperWindow/D3DWallpaperRenderer
 // need no changes at all to present GIF frames; they only ever see "a new
 // QImage arrived", never which pipeline produced it.
+//
+// Static images (v1.1.0 - see MediaKind::StaticImage) use that same
+// contract: decoded once via QImageReader, normalized to RGB32, and
+// published through frameReady exactly like a video/GIF frame. The only
+// difference is that a still image never produces a "next" frame on its
+// own, so play() re-publishes the one decoded frame (see play()) - that is
+// how freshly created WallpaperWindows receive it, since they only exist
+// after loadFile() has already run (see WallpaperManager::setWallpaper).
 class VideoPlayer : public QObject {
     Q_OBJECT
 public:
+    // What the currently loaded source is, decided once in loadFile().
+    // AnimatedImage = anything played through QMovie (GIF, and animated
+    // WebP - QMovie::supportedFormats() on this Qt build is "gif webp").
+    enum class MediaKind { None, Video, AnimatedImage, StaticImage };
+
     explicit VideoPlayer(QObject* parent = nullptr);
+
+    // Lowercase file extensions of still-image formats this build can
+    // actually decode, derived from QImageReader::supportedImageFormats()
+    // (i.e. from the image plugins really deployed), NOT a hardcoded list.
+    // Excludes GIF (it keeps its existing QMovie/AnimatedImage path) and
+    // formats that aren't meaningful raster wallpapers (icon containers,
+    // vector SVG) - see the .cpp. Requires a QGuiApplication to exist.
+    static const QSet<QString>& supportedStaticImageExtensions();
+    static bool hasStaticImageExtension(const QString& fileNameOrPath);
 
     bool loadFile(const QString& path);
     void play();
@@ -50,12 +74,20 @@ public:
     void setMuted(bool muted);
     bool isMuted() const { return m_muted; }
 
+    // Stops playback AND releases the loaded source (decoder input, QMovie
+    // file, decoded still image) - used by "Remove Media". stop() alone
+    // keeps the source loaded so a later play() can resume it.
+    void unload();
+
     bool isPlaying() const;
+    MediaKind mediaKind() const { return m_mediaKind; }
+    bool isStaticImage() const { return m_mediaKind == MediaKind::StaticImage; }
     QSize videoNativeSize() const { return m_lastFrameSize; }
     // Passthrough to the underlying QMediaPlayer - for UI display only
     // (e.g. showing the loaded video's length), not used by any playback
-    // or wallpaper-lifecycle decision.
-    qint64 durationMs() const { return m_player.duration(); }
+    // or wallpaper-lifecycle decision. 0 unless the current source is a
+    // video (QMediaPlayer keeps a previous video's duration after stop()).
+    qint64 durationMs() const { return m_mediaKind == MediaKind::Video ? m_player.duration() : 0; }
 
     // Latest decoded frame, already converted to Format_RGB32 exactly once
     // (not per-monitor), shared by all render windows.
@@ -70,6 +102,10 @@ signals:
     // written here with no synchronization.
     void frameReady(std::shared_ptr<const QImage> frame);
     void errorOccurred(const QString& message);
+    // A new source was successfully loaded (or the current one unloaded) -
+    // mediaKind() may have changed. Lets WallpaperManager re-evaluate
+    // anything that depends on the media type (the battery policy).
+    void mediaChanged();
     void playbackStateChanged(QMediaPlayer::PlaybackState state);
 
 private slots:
@@ -94,10 +130,11 @@ private:
     QVideoSink m_sink;
     QMovie m_movie;
     // Which pipeline the currently-loaded source is playing through -
-    // decided once in loadFile() by extension, drives play()/pause()/
-    // stop()/isPlaying() below. Both m_player and m_movie always exist;
-    // only one is ever actually started for a given loaded source.
-    bool m_isGifMode = false;
+    // decided once in loadFile(), drives play()/pause()/stop()/isPlaying()
+    // below. Both m_player and m_movie always exist; only one is ever
+    // actually started for a given loaded source (and neither for a
+    // StaticImage, which has no playback clock at all).
+    MediaKind m_mediaKind = MediaKind::None;
 
     bool m_looping = true;
     int m_volumePercent = 0;
@@ -118,4 +155,6 @@ private:
     bool m_hasPendingFrame = false;
 
     void startConversion(const QVideoFrame& frame);
+    bool startMovie(const QString& path);
+    bool loadStaticImage(const QString& path);
 };

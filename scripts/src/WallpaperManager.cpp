@@ -9,6 +9,11 @@
 WallpaperManager::WallpaperManager(QObject* parent)
     : QObject(parent), m_player(std::make_unique<VideoPlayer>()) {
     connect(m_player.get(), &VideoPlayer::errorOccurred, this, &WallpaperManager::onPlayerError);
+    // The battery policy only governs video-like media (see
+    // reevaluateBatteryPolicy), so switching the current media between a
+    // video and a still image while a wallpaper is active can flip its
+    // verdict.
+    connect(m_player.get(), &VideoPlayer::mediaChanged, this, &WallpaperManager::reevaluateBatteryPolicy);
 
     // See the class comment: "TaskbarCreated" is the standard, purely
     // event-driven signal for "Explorer just finished restarting".
@@ -185,11 +190,21 @@ void WallpaperManager::setShowVideoOnBattery(bool enabled) {
     reevaluateBatteryPolicy();
 }
 
+bool WallpaperManager::batteryPolicyHidesCurrentMedia() const {
+    // "Show video on battery" is a video setting (its label, tooltip and
+    // the "Video paused on battery" status all say so) whose purpose is
+    // to stop continuous decode/present work on battery. A still image
+    // does no such work - it is presented once - so the setting is not
+    // applied to it. Video and animated GIF/WebP keep the existing
+    // behavior unchanged.
+    return m_onBattery && !m_showVideoOnBattery && !m_player->isStaticImage();
+}
+
 void WallpaperManager::reevaluateBatteryPolicy() {
     if (!m_active) {
         return;
     }
-    const bool shouldHide = m_onBattery && !m_showVideoOnBattery;
+    const bool shouldHide = batteryPolicyHidesCurrentMedia();
     if (shouldHide && !m_batterySuspended) {
         suspendForBattery();
     } else if (!shouldHide && m_batterySuspended) {
@@ -280,12 +295,17 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
     // suspending) means there's nothing for onAttachAttemptFinished to
     // race against; resumeFromBattery() drives the first real attach
     // once AC power actually returns.
-    const bool shouldStartHidden = m_onBattery && !m_showVideoOnBattery;
+    const bool shouldStartHidden = batteryPolicyHidesCurrentMedia();
     if (shouldStartHidden) {
         m_batterySuspended = true;
         qInfo() << "[Battery] Wallpaper set while on battery with \"Show video on battery\" off - "
                     "staying hidden until AC power returns.";
     } else {
+        // Only reachable with a suspension still recorded when a video was
+        // battery-hidden and a still image is now being set (for video ->
+        // video the verdict, and so this flag, can't differ). The windows
+        // were just rebuilt above, so there is nothing hidden to restore.
+        m_batterySuspended = false;
         attachAllWindows();
     }
 
@@ -635,6 +655,17 @@ void WallpaperManager::onAttachAttemptFinished() {
                     << "hasValidDevice=" << w->rendererHasValidDevice()
                     << "presentedFrameCount=" << w->presentedFrames();
             framesBefore.push_back(w->presentedFrames());
+        }
+        // A still image never produces a next frame on its own, so the
+        // "frames advanced" check below would report STALLED forever (and
+        // keep the retry poll re-attaching). Re-present its one frame now,
+        // after the reparent + recommit: the counter only advances if that
+        // Present() through the new parentage succeeds, so the check stays
+        // a real verification rather than being skipped for images.
+        if (m_player->isStaticImage()) {
+            for (auto& w : m_windows) {
+                w->presentLastFrame();
+            }
         }
 
         const quint64 generationAtCheck = m_attachGeneration;

@@ -155,6 +155,9 @@ private:
     // already hidden; restores via resumeFromBattery() if the opposite
     // and currently hidden. A no-op otherwise.
     void reevaluateBatteryPolicy();
+    // The hide verdict itself: on battery, "Show video on battery" off,
+    // and the current media is video-like (not a still image).
+    bool batteryPolicyHidesCurrentMedia() const;
     // Detaches/hides the render window(s) from the desktop WITHOUT
     // touching m_active, m_windows, RecoveryState, or
     // SettingsManager::wasWallpaperActive - the wallpaper is still

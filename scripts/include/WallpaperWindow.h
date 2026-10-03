@@ -82,6 +82,12 @@ public:
     // Non-blocking (queued call to the render thread).
     void notifyAttachedToDesktop();
 
+    // Asks the renderer to present its most recent frame again - see
+    // D3DWallpaperRenderer::presentLastFrame. Non-blocking (queued call to
+    // the render thread, so it runs after any already-queued work such as
+    // notifyAttachedToDesktop's recommit).
+    void presentLastFrame();
+
 public:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 

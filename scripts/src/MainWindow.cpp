@@ -171,11 +171,15 @@ bool hasSupportedVideoExtension(const QString& fileNameOrPath) {
     return supportedVideoContainerExtensions().contains(QFileInfo(fileNameOrPath).suffix().toLower());
 }
 
-// Local files only: any backend-decodable video container OR a GIF. Used
-// wherever a LOCAL file's usability is being decided (drag & drop, Open
-// Video) - see isWebVideoUrl for the (deliberately narrower) URL case.
+// Local files only: any backend-decodable video container, a GIF, or a
+// still image the deployed Qt image plugins can decode (see
+// VideoPlayer::supportedStaticImageExtensions - derived from
+// QImageReader, not hardcoded). Used wherever a LOCAL file's usability is
+// being decided (drag & drop, Open Media, Explorer verb, startup restore)
+// - see isWebVideoUrl for the (deliberately narrower, video-only) URL case.
 bool isSupportedLocalMediaFile(const QString& path) {
-    return hasSupportedVideoExtension(path) || isGifExtension(path);
+    return hasSupportedVideoExtension(path) || isGifExtension(path) ||
+        VideoPlayer::hasStaticImageExtension(path);
 }
 
 // Split out from isWebVideoUrl() so the Paste Video URL dialog can tell
@@ -209,6 +213,7 @@ bool isWebVideoUrl(const QUrl& url) {
 QStringList MainWindow::explorerIntegrationExtensions() {
     QStringList exts = supportedVideoContainerExtensions().values();
     exts.append(QStringLiteral("gif"));
+    exts.append(VideoPlayer::supportedStaticImageExtensions().values());
     return exts;
 }
 
@@ -308,6 +313,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, 
     } else {
         setUiState(WallpaperUiState::NoVideo);
     }
+    updatePlayPauseAvailability();
 
     // A fresh process launch - whether a normal double-click or a
     // Start-with-Windows autostart - NEVER auto-attaches the wallpaper on
@@ -444,6 +450,13 @@ void MainWindow::buildUi() {
 
     m_previewLabel = new QLabel(previewContainer);
     m_previewLabel->setAlignment(Qt::AlignCenter);
+    // The pixmap is always pre-scaled to the label's current size (see
+    // renderPreviewFrame), so the label must not ask the layout for the
+    // pixmap's size - otherwise the window could never shrink below the
+    // last pixmap it showed. Resize/Show re-render it at the new size,
+    // which a still image (one frame, no later frame to self-heal) needs.
+    m_previewLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    m_previewLabel->installEventFilter(this);
     m_previewStack->addWidget(m_previewLabel); // index kVideoPageIndex
 
     auto* dropZoneWrapper = new QWidget(previewContainer);
@@ -452,14 +465,14 @@ void MainWindow::buildUi() {
     dropZoneLayout->setSpacing(4);
     m_dropZone = new DropZoneWidget(dropZoneWrapper);
     dropZoneLayout->addWidget(m_dropZone, /*stretch=*/1);
-    auto* dropTitleLabel = new QLabel(tr("Drag & Drop Video"), dropZoneWrapper);
+    auto* dropTitleLabel = new QLabel(tr("Drag & Drop Media"), dropZoneWrapper);
     dropTitleLabel->setAlignment(Qt::AlignCenter);
     QFont dropTitleFont = dropTitleLabel->font();
     dropTitleFont.setBold(true);
     dropTitleLabel->setFont(dropTitleFont);
     dropTitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewTextStrong));
     dropZoneLayout->addWidget(dropTitleLabel);
-    auto* dropSubtitleLabel = new QLabel(tr("Local video or GIF files"), dropZoneWrapper);
+    auto* dropSubtitleLabel = new QLabel(tr("Local video, GIF or image files"), dropZoneWrapper);
     dropSubtitleLabel->setAlignment(Qt::AlignCenter);
     dropSubtitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewText));
     dropZoneLayout->addWidget(dropSubtitleLabel);
@@ -521,7 +534,8 @@ void MainWindow::buildUi() {
     connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::onPlayPause);
     infoRow->addWidget(m_playPauseButton);
 
-    m_openVideoButton = new IconButton(QIcon(kOpenVideoIconResourcePath), tr("Open Video"), central);
+    m_openVideoButton = new IconButton(QIcon(kOpenVideoIconResourcePath), tr("Open Media"), central);
+    m_openVideoButton->setToolTip(tr("Open a video, GIF or image file"));
     m_openVideoButton->setStateIcon(
         QIcon(kOpenVideoIconResourcePath), QIcon(kOpenVideoIconHoverPath), QIcon(kOpenVideoIconPressedPath));
     connect(m_openVideoButton, &QPushButton::clicked, this, &MainWindow::onChooseVideo);
@@ -533,12 +547,12 @@ void MainWindow::buildUi() {
     // with the primary Set/Remove Wallpaper button, and given its own
     // objectName so it never inherits primaryButton's accent styling -
     // keeps the two action groups visually distinct.
-    m_removeVideoButton = new IconButton(QIcon(kRemoveVideoIconResourcePath), tr("Remove Video"), central);
+    m_removeVideoButton = new IconButton(QIcon(kRemoveVideoIconResourcePath), tr("Remove Media"), central);
     m_removeVideoButton->setObjectName(QStringLiteral("removeVideoButton"));
     m_removeVideoButton->setStateIcon(
         QIcon(kRemoveVideoIconResourcePath), QIcon(kRemoveVideoIconHoverPath),
         QIcon(kRemoveVideoIconPressedPath), QIcon(kRemoveVideoIconDisabledPath));
-    m_removeVideoButton->setToolTip(tr("Unload the currently loaded video from Motiva's player/preview"));
+    m_removeVideoButton->setToolTip(tr("Unload the current media from Motiva's player/preview"));
     m_removeVideoButton->setEnabled(m_hasCurrentVideo);
     connect(m_removeVideoButton, &QPushButton::clicked, this, &MainWindow::onRemoveVideo);
     infoRow->addWidget(m_removeVideoButton);
@@ -601,7 +615,7 @@ void MainWindow::buildTray() {
 
     menu->addSeparator();
     menu->addAction(QIcon(settingsIconPath()), tr("Settings"), this, &MainWindow::openSettings);
-    menu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Video"), this, &MainWindow::onChooseVideo);
+    menu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Media"), this, &MainWindow::onChooseVideo);
     menu->addAction(QIcon(removeWallpaperIconPath()), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
     menu->addSeparator();
     menu->addAction(tr("Exit"), this, &MainWindow::onExitRequested);
@@ -774,15 +788,24 @@ void MainWindow::onChooseVideo() {
     // backend decode attempt (VideoPlayer::loadFile, surfaced via
     // onWallpaperError) is still the real source of truth on whether a
     // selected file plays - this filter is a convenience, not a hard gate.
-    QStringList patterns;
-    for (const QString& ext : supportedVideoContainerExtensions()) {
-        patterns << QStringLiteral("*.%1").arg(ext);
-    }
-    patterns << QStringLiteral("*.gif");
-    patterns.sort(Qt::CaseInsensitive);
-    const QString filter = tr("Supported Video Files (%1);;All Files (*)").arg(patterns.join(QLatin1Char(' ')));
+    // Image patterns come from VideoPlayer::supportedStaticImageExtensions
+    // (the deployed QImageReader plugins), the same set drag & drop and the
+    // Explorer verb accept.
+    auto toPatterns = [](const QStringList& exts) {
+        QStringList patterns;
+        for (const QString& ext : exts) {
+            patterns << QStringLiteral("*.%1").arg(ext);
+        }
+        patterns.sort(Qt::CaseInsensitive);
+        return patterns.join(QLatin1Char(' '));
+    };
+    QStringList videoExts = supportedVideoContainerExtensions().values();
+    videoExts << QStringLiteral("gif");
+    const QStringList imageExts = VideoPlayer::supportedStaticImageExtensions().values();
+    const QString filter = tr("Supported Media (%1);;Video Files (%2);;Image Files (%3);;All Files (*)")
+        .arg(toPatterns(videoExts + imageExts), toPatterns(videoExts), toPatterns(imageExts));
 
-    QString path = QFileDialog::getOpenFileName(this, tr("Open Video"), QString(), filter);
+    QString path = QFileDialog::getOpenFileName(this, tr("Open Media"), QString(), filter);
     if (path.isEmpty()) {
         return;
     }
@@ -894,15 +917,13 @@ bool MainWindow::isUsableVideoSource(const QString& source) {
     if (isWebVideoUrl(asUrl)) {
         return true;
     }
-    // Previously just QFileInfo::exists(source) with no extension check
-    // at all - harmless while only .mp4 could ever reach here (the only
-    // ways in were the .mp4-filtered Open Video dialog and .mp4-gated
-    // drag & drop), but a real gap once more formats were accepted:
-    // Qt Multimedia's FFmpeg backend will happily decode a single PNG/JPG
-    // as a degenerate one-frame "video" if asked (confirmed by testing) -
-    // this is what actually keeps a rejected image type rejected even via
-    // this path (startup restore / second-instance IPC recovery), not
-    // just the file-picker/drag-drop entry points.
+    // Extension-gated, not just QFileInfo::exists(): this is what keeps
+    // an unsupported file type rejected even via this path (startup
+    // restore / second-instance IPC recovery), not just the file-picker/
+    // drag-drop entry points. Still images are accepted here since v1.1.0
+    // and are routed by VideoPlayer::loadFile to its QImageReader path -
+    // never to QMediaPlayer, which would otherwise decode a PNG/JPG as a
+    // degenerate one-frame "video" (confirmed by earlier testing).
     return QFileInfo::exists(source) && isSupportedLocalMediaFile(source);
 }
 
@@ -926,6 +947,7 @@ void MainWindow::loadVideoSource(const QString& source) {
     if (m_manager->player()->loadFile(source)) {
         m_manager->player()->play();
     }
+    updatePlayPauseAvailability();
 
     // If the wallpaper is currently active, the shared decode pipeline
     // already starts presenting this new content on the desktop too (see
@@ -961,7 +983,7 @@ QString MainWindow::extractDroppedVideoSource(const QMimeData* mimeData, int* ex
             QString candidate;
             if (url.isLocalFile()) {
                 const QString localPath = url.toLocalFile();
-                if (QFileInfo::exists(localPath) && isSupportedLocalMediaFile(localPath)) {
+                if (QFileInfo(localPath).isFile() && isSupportedLocalMediaFile(localPath)) {
                     candidate = localPath;
                 }
             } else if (isWebVideoUrl(url)) {
@@ -1007,7 +1029,7 @@ QString MainWindow::extractDroppedVideoSource(const QMimeData* mimeData, int* ex
     if (firstMatch.isEmpty() && (mimeData->hasImage() || mimeData->hasHtml() ||
                                      (mimeData->hasUrls() && !mimeData->urls().isEmpty()) || mimeData->hasText())) {
         qInfo() << "[DragDrop] Ignoring drag/drop payload - formats present:" << mimeData->formats()
-                << "- no existing local .mp4 or directly playable http(s) .mp4 URL found among them.";
+                << "- no existing local supported media file or directly playable http(s) video URL found among them.";
     }
 
     if (extraCandidateCount) {
@@ -1104,7 +1126,7 @@ void MainWindow::dropEvent(QDropEvent* event) {
     const QString source = extractDroppedVideoSource(event->mimeData(), &extraCandidates);
     if (source.isEmpty()) {
         event->ignore();
-        qInfo() << "[DragDrop] Drop rejected - no supported local video or web video URL found in the "
+        qInfo() << "[DragDrop] Drop rejected - no supported local media file or web video URL found in the "
                     "dropped data.";
         return;
     }
@@ -1113,7 +1135,7 @@ void MainWindow::dropEvent(QDropEvent* event) {
             << (extraCandidates > 0 ? QString(" (%1 additional dropped file(s) ignored)").arg(extraCandidates) : QString());
     loadVideoSource(source);
     if (extraCandidates > 0) {
-        m_statusLabel->setToolTip(tr("%1 additional dropped file(s) were ignored - only one video can be "
+        m_statusLabel->setToolTip(tr("%1 additional dropped file(s) were ignored - only one media file can be "
                                       "loaded at a time.").arg(extraCandidates));
     }
     // A short, purely visual success burst - loadVideoSource() above
@@ -1131,12 +1153,12 @@ void MainWindow::dropEvent(QDropEvent* event) {
 
 void MainWindow::onSetWallpaper() {
     if (m_selectedVideoPath.isEmpty()) {
-        QMessageBox::information(this, tr("Choose a video"), tr("Please open a video first."));
+        QMessageBox::information(this, tr("Choose media"), tr("Please open a video or image first."));
         return;
     }
     if (!isUsableVideoSource(m_selectedVideoPath)) {
-        QMessageBox::warning(this, tr("Video not found"),
-            tr("Wallpaper video could not be found.\n\nPlease choose another video."));
+        QMessageBox::warning(this, tr("Media not found"),
+            tr("The wallpaper file could not be found.\n\nPlease choose another video or image."));
         return;
     }
 
@@ -1170,26 +1192,36 @@ void MainWindow::onRemoveVideo() {
     if (!m_hasCurrentVideo) {
         return;
     }
-    m_manager->player()->stop();
     m_selectedVideoPath.clear();
     m_hasCurrentVideo = false;
-    updateRemoveVideoButtonUi();
-    applyVideoInfoUi();
-    m_previewLabel->clear();
-    m_previewLabel->setText(QString());
-    refreshDropZoneVisual();
 
-    // If this same video also happens to be the active desktop wallpaper,
+    // If this same media also happens to be the active desktop wallpaper,
     // reuse the EXISTING wallpaper lifecycle hook (WallpaperManager::
     // removeWallpaper(), the same call onRemoveWallpaper() above makes) -
     // no parallel teardown path, no D3D/DirectComposition code here.
     // m_selectedVideoPath is already cleared above, so wallpaperRemoved's
     // handler (see the constructor) correctly lands on NoVideo rather than
-    // Ready.
-    if (m_uiState == WallpaperUiState::Active || m_uiState == WallpaperUiState::Applying) {
+    // Ready. Done before unload() below so the media change can't first
+    // trigger a battery re-evaluation against a wallpaper that is about to
+    // be removed anyway.
+    const bool wallpaperWasOurs =
+        m_uiState == WallpaperUiState::Active || m_uiState == WallpaperUiState::Applying;
+    if (wallpaperWasOurs) {
         m_manager->removeWallpaper();
         m_settings.setWasWallpaperActive(false);
-    } else {
+    }
+
+    // Stops playback and releases the source (decoder input / decoded
+    // still image) - the file itself is never touched.
+    m_manager->player()->unload();
+    updateRemoveVideoButtonUi();
+    updatePlayPauseAvailability();
+    applyVideoInfoUi();
+    m_previewLabel->clear();
+    m_previewLabel->setText(QString());
+    refreshDropZoneVisual();
+
+    if (!wallpaperWasOurs) {
         setUiState(WallpaperUiState::NoVideo);
     }
 }
@@ -1209,6 +1241,22 @@ void MainWindow::onPlayPause() {
         m_manager->play();
     }
     updatePlayPauseLabel();
+}
+
+void MainWindow::updatePlayPauseAvailability() {
+    // A still image has no playback to pause/resume. Video and animated
+    // GIF/WebP keep Play/Pause exactly as before.
+    const bool canPlay = !m_manager->player()->isStaticImage();
+    m_playPauseButton->setEnabled(canPlay);
+    m_playPauseButton->setToolTip(canPlay ? tr("Play or pause the preview")
+                                          : tr("Play/Pause is not available for still images"));
+    if (!canPlay) {
+        m_trayPlayAction->setEnabled(false);
+        m_trayPauseAction->setEnabled(false);
+    } else {
+        m_trayPlayAction->setEnabled(true);
+        m_trayPauseAction->setEnabled(true);
+    }
 }
 
 void MainWindow::updatePlayPauseLabel() {
@@ -1243,26 +1291,40 @@ void MainWindow::onPreviewFrameReady() {
     if (!frame || frame->isNull()) {
         return;
     }
+    // Info labels are cheap and updated even while hidden: main.cpp shows
+    // the window only after the constructor (which may already have
+    // loaded a previously-selected source) returns, and a single-frame
+    // source fires this exactly once.
+    applyVideoInfoUi();
+    renderPreviewFrame();
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_previewLabel && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+        renderPreviewFrame();
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::renderPreviewFrame() {
+    auto frame = m_manager->player()->currentFrame();
+    if (!frame || frame->isNull() || m_selectedVideoPath.isEmpty()) {
+        return;
+    }
     // The pixmap scale+paint is the real per-frame cost, worth skipping
     // while the window isn't actually visible (main window shown, not
     // minimized to tray) - the decode pipeline itself keeps running
-    // regardless since it's shared with the desktop wallpaper. Updating
-    // the (cheap) info labels is NOT gated on this: a single-frame
-    // source (a static GIF - see VideoPlayer's QMovie path) only ever
-    // fires this once, and main.cpp calls window.show() only AFTER
-    // MainWindow's constructor (which starts loading any previously-
-    // selected source) returns - gating this on isVisible() meant a
-    // static image whose one frame decoded during that window could
-    // permanently lose its only chance to populate the resolution/format
-    // details text, with no later frame ever coming to self-heal it the
-    // way video/animated-GIF playback does.
-    applyVideoInfoUi();
-    if (!isVisible() || !m_previewLabel) {
+    // regardless since it's shared with the desktop wallpaper. A frame
+    // skipped here is not lost for single-frame sources (static GIF,
+    // still image): the label's Show/Resize re-renders it (eventFilter).
+    if (!isVisible() || !m_previewLabel || m_previewLabel->width() <= 0 || m_previewLabel->height() <= 0) {
         return;
     }
-    QPixmap pixmap = QPixmap::fromImage(*frame).scaled(
-        m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    m_previewLabel->setPixmap(pixmap);
+    // Scale the QImage first, then convert only the preview-sized result -
+    // converting a full-resolution (e.g. 8K) still image to a QPixmap on
+    // every resize would be needlessly expensive.
+    m_previewLabel->setPixmap(QPixmap::fromImage(
+        frame->scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
 }
 
 void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {

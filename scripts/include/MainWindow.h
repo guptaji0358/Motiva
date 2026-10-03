@@ -40,7 +40,8 @@ public:
 
     // Every extension Explorer's "Set as background" verb should be
     // registered for - the same backend-decodable video containers Open
-    // Video/drag & drop already accept, plus GIF (see
+    // Media/drag & drop already accept, plus GIF and the decodable still-
+    // image formats (see
     // isSupportedLocalMediaFile in MainWindow.cpp). Public/static so
     // SettingsManager::setExplorerIntegrationEnabled() can reuse this
     // exact validation logic instead of re-deriving/hardcoding a format
@@ -57,6 +58,7 @@ protected:
     // happened to call updatePrimaryButtonUi()/refresh the Settings icon.
     // See Theme::iconVariant() and the icon-path functions in MainWindow.cpp.
     void changeEvent(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     // Drag & drop entry points - accepts a local video file or a web
     // video URL dropped anywhere on the window, with the video preview
     // area as the visual target (see dragEnterEvent's hint text). Feeds
@@ -116,6 +118,15 @@ private:
     void buildTray();
     void restoreSettingsToUi();
     void updatePlayPauseLabel();
+    // Enables Play/Pause (button + tray) only for media that actually
+    // plays - disabled for a still image. Called whenever the current
+    // media changes.
+    void updatePlayPauseAvailability();
+    // Scales the player's current frame into the preview label at its
+    // current size. Called per decoded frame and on the label's own
+    // Show/Resize (see eventFilter) - a still image has only one frame,
+    // so it can't rely on a later frame to correct the preview size.
+    void renderPreviewFrame();
     void applyVideoInfoUi();
     void setUiState(WallpaperUiState state);
     void updateStatusUi();

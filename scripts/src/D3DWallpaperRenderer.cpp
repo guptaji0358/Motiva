@@ -288,7 +288,13 @@ bool D3DWallpaperRenderer::createShaderPipeline() {
 }
 
 void D3DWallpaperRenderer::setScalingMode(ScalingMode mode) {
+    if (mode == m_scalingMode) {
+        return;
+    }
     m_scalingMode = mode;
+    // Video picks the new mode up on its next frame anyway; a still image
+    // has no next frame, so re-present it with the new UV transform now.
+    presentLastFrame();
 }
 
 void D3DWallpaperRenderer::releaseSizeDependentResources() {
@@ -325,7 +331,11 @@ void D3DWallpaperRenderer::resize(int width, int height) {
     if (FAILED(hr)) {
         qWarning() << "[D3DWallpaperRenderer] resize: CreateRenderTargetView failed, hr=0x"
                     << Qt::hex << (unsigned)hr;
+        return;
     }
+    // ResizeBuffers discarded the old back buffer contents - redraw the
+    // current frame at the new size/aspect (matters for still images).
+    presentLastFrame();
 }
 
 void D3DWallpaperRenderer::computeUvTransform(const QSize& imgSize, float outScale[2], float outOffset[2]) const {
@@ -423,6 +433,7 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
         return;
     }
     StartupDiagnostics::instance().mark("firstFrameSubmitted");
+    m_lastFrame = frame;
 
     updateSourceTexture(*frame);
     if (!m_sourceSrv) {
@@ -471,6 +482,12 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
     }
     if (presentedFrameCount.fetch_add(1, std::memory_order_relaxed) == 0) {
         StartupDiagnostics::instance().mark("firstFramePresented");
+    }
+}
+
+void D3DWallpaperRenderer::presentLastFrame() {
+    if (m_initialized && m_lastFrame && m_rtv) {
+        presentFrame(m_lastFrame);
     }
 }
 
@@ -548,6 +565,7 @@ void D3DWallpaperRenderer::shutdown() {
     SafeRelease(reinterpret_cast<IUnknown**>(&m_context));
     SafeRelease(reinterpret_cast<IUnknown**>(&m_device));
     m_initialized = false;
+    m_lastFrame.reset();
     m_sourceTextureSize = QSize();
     qInfo() << "[D3DWallpaperRenderer] shutdown complete, all D3D/DComp resources released.";
 }
