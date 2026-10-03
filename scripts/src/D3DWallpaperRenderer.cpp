@@ -1,6 +1,7 @@
 #include "D3DWallpaperRenderer.h"
 #include "StartupDiagnostics.h"
 #include <QDebug>
+#include <QTimer>
 #include <d3dcompiler.h>
 
 namespace {
@@ -24,17 +25,46 @@ VSOut VSMain(uint vid : SV_VertexID) {
 }
 
 Texture2D tex : register(t0);
+Texture2D prevTex : register(t1);
 SamplerState samp : register(s0);
-cbuffer UVTransform : register(b0) { float2 scale; float2 offset; };
+// mixAmount: 1 = only `tex` (normal path); < 1 while crossfading from
+// `prevTex` (the previous still image, with its own scaling transform).
+cbuffer UVTransform : register(b0) {
+    float2 scale; float2 offset;
+    float2 prevScale; float2 prevOffset;
+    float mixAmount; float3 padding;
+};
 
-float4 PSMain(VSOut i) : SV_TARGET {
-    float2 uv = i.uv * scale + offset;
+float4 SampleScaled(Texture2D t, float2 uv) {
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         return float4(0, 0, 0, 1);
     }
-    return tex.Sample(samp, uv);
+    return t.Sample(samp, uv);
+}
+
+float4 PSMain(VSOut i) : SV_TARGET {
+    float4 current = SampleScaled(tex, i.uv * scale + offset);
+    if (mixAmount >= 1.0) {
+        return current;
+    }
+    float4 previous = SampleScaled(prevTex, i.uv * prevScale + prevOffset);
+    return lerp(previous, current, mixAmount);
 }
 )";
+
+// Long enough to read as a deliberate transition, short enough that the
+// fade's run of vsync-paced Present()s is a brief burst.
+constexpr int kStillCrossfadeMs = 650;
+constexpr const char* kStillTagKey = "motiva-still";
+
+struct UvTransformConstants {
+    float scale[2];
+    float offset[2];
+    float prevScale[2];
+    float prevOffset[2];
+    float mixAmount;
+    float padding[3]; // constant buffers are sized in 16-byte multiples
+};
 
 void SafeRelease(IUnknown** obj) {
     if (*obj) {
@@ -271,9 +301,8 @@ bool D3DWallpaperRenderer::createShaderPipeline() {
         return false;
     }
 
-    struct UvTransform { float scale[2]; float offset[2]; };
     D3D11_BUFFER_DESC cbDesc{};
-    cbDesc.ByteWidth = sizeof(UvTransform);
+    cbDesc.ByteWidth = sizeof(UvTransformConstants);
     cbDesc.Usage = D3D11_USAGE_DYNAMIC;
     cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -428,28 +457,110 @@ void D3DWallpaperRenderer::updateSourceTexture(const QImage& img) {
                                   static_cast<UINT>(img.bytesPerLine()), 0);
 }
 
+void D3DWallpaperRenderer::tagAsStill(QImage& image) {
+    image.setText(QLatin1String(kStillTagKey), QStringLiteral("1"));
+}
+
+bool D3DWallpaperRenderer::isTaggedStill(const QImage& image) {
+    return image.text(QLatin1String(kStillTagKey)) == QLatin1String("1");
+}
+
 void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
     if (!m_initialized || !frame || frame->isNull()) {
         return;
     }
     StartupDiagnostics::instance().mark("firstFrameSubmitted");
+
+    const bool replacingStillWithStill = m_lastFrame && m_lastFrame.get() != frame.get() && m_sourceSrv &&
+        isTaggedStill(*m_lastFrame) && isTaggedStill(*frame);
+    if (m_fading) {
+        if (frame.get() == m_lastFrame.get()) {
+            return; // same image re-published mid-fade - the fade keeps presenting it
+        }
+        endFade(); // a newer frame supersedes an in-progress fade
+    }
+    if (replacingStillWithStill) {
+        // Keep the outgoing image's texture as the fade source; the new
+        // image gets a fresh texture from updateSourceTexture() below.
+        m_prevTexture = m_sourceTexture;
+        m_prevSrv = m_sourceSrv;
+        m_prevImageSize = m_lastFrame->size();
+        m_sourceTexture = nullptr;
+        m_sourceSrv = nullptr;
+        m_sourceTextureSize = QSize();
+    }
     m_lastFrame = frame;
 
     updateSourceTexture(*frame);
     if (!m_sourceSrv) {
+        endFade();
         return;
     }
 
-    float scale[2], offset[2];
-    computeUvTransform(frame->size(), scale, offset);
+    if (replacingStillWithStill) {
+        if (!m_fadeTimer) {
+            m_fadeTimer = new QTimer(this); // created on, and fires on, this render thread
+            m_fadeTimer->setTimerType(Qt::PreciseTimer);
+            m_fadeTimer->setInterval(16);
+            connect(m_fadeTimer, &QTimer::timeout, this, &D3DWallpaperRenderer::onFadeTick);
+        }
+        m_fading = true;
+        m_fadeStartFrameCount = presentedFrameCount.load(std::memory_order_relaxed);
+        qInfo() << "[DComp] Crossfading to new still image" << frame->size() << "over" << kStillCrossfadeMs << "ms";
+        m_fadeClock.start();
+        m_fadeTimer->start();
+        drawAndPresent(0.0f);
+        return;
+    }
+    drawAndPresent(1.0f);
+}
+
+void D3DWallpaperRenderer::onFadeTick() {
+    if (!m_fading || !m_initialized) {
+        endFade();
+        return;
+    }
+    const float t = qMin(1.0f, static_cast<float>(m_fadeClock.elapsed()) / kStillCrossfadeMs);
+    // Smoothstep easing - starts and lands gently.
+    const float eased = t * t * (3.0f - 2.0f * t);
+    if (t >= 1.0f) {
+        qInfo() << "[DComp] Crossfade complete -"
+                << (presentedFrameCount.load(std::memory_order_relaxed) - m_fadeStartFrameCount + 1)
+                << "frames presented in" << m_fadeClock.elapsed() << "ms";
+        endFade();
+        drawAndPresent(1.0f);
+        return;
+    }
+    drawAndPresent(eased);
+}
+
+void D3DWallpaperRenderer::endFade() {
+    if (m_fadeTimer) {
+        m_fadeTimer->stop();
+    }
+    m_fading = false;
+    SafeRelease(reinterpret_cast<IUnknown**>(&m_prevSrv));
+    SafeRelease(reinterpret_cast<IUnknown**>(&m_prevTexture));
+    m_prevImageSize = QSize();
+}
+
+void D3DWallpaperRenderer::drawAndPresent(float mix) {
+    if (!m_initialized || !m_lastFrame || !m_sourceSrv || !m_rtv) {
+        return;
+    }
+    const bool blending = mix < 1.0f && m_prevSrv;
+
+    UvTransformConstants constants{};
+    computeUvTransform(m_lastFrame->size(), constants.scale, constants.offset);
+    if (blending) {
+        computeUvTransform(m_prevImageSize, constants.prevScale, constants.prevOffset);
+    }
+    constants.mixAmount = blending ? mix : 1.0f;
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     HRESULT hr = m_context->Map(m_uvTransformBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
     if (SUCCEEDED(hr)) {
-        struct UvTransform { float scale[2]; float offset[2]; };
-        auto* dst = static_cast<UvTransform*>(mapped.pData);
-        dst->scale[0] = scale[0]; dst->scale[1] = scale[1];
-        dst->offset[0] = offset[0]; dst->offset[1] = offset[1];
+        *static_cast<UvTransformConstants*>(mapped.pData) = constants;
         m_context->Unmap(m_uvTransformBuffer, 0);
     }
 
@@ -467,7 +578,8 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     m_context->VSSetShader(m_vertexShader, nullptr, 0);
     m_context->PSSetShader(m_pixelShader, nullptr, 0);
-    m_context->PSSetShaderResources(0, 1, &m_sourceSrv);
+    ID3D11ShaderResourceView* srvs[2] = {m_sourceSrv, blending ? m_prevSrv : nullptr};
+    m_context->PSSetShaderResources(0, 2, srvs);
     m_context->PSSetSamplers(0, 1, &m_sampler);
     m_context->PSSetConstantBuffers(0, 1, &m_uvTransformBuffer);
     m_context->Draw(4, 0);
@@ -486,7 +598,18 @@ void D3DWallpaperRenderer::presentFrame(std::shared_ptr<const QImage> frame) {
 }
 
 void D3DWallpaperRenderer::presentLastFrame() {
-    if (m_initialized && m_lastFrame && m_rtv) {
+    if (!m_initialized || !m_lastFrame || !m_rtv) {
+        return;
+    }
+    if (m_fading) {
+        // A crossfade is already presenting every vsync; let it finish
+        // (with the new scaling/size applied) rather than cutting it short.
+        drawAndPresent(qMin(1.0f, static_cast<float>(m_fadeClock.elapsed()) / kStillCrossfadeMs));
+        return;
+    }
+    if (m_sourceSrv) {
+        drawAndPresent(1.0f);
+    } else {
         presentFrame(m_lastFrame);
     }
 }
@@ -547,6 +670,9 @@ void D3DWallpaperRenderer::shutdown() {
     if (!m_initialized && !m_device) {
         return;
     }
+    endFade();
+    delete m_fadeTimer;
+    m_fadeTimer = nullptr;
     SafeRelease(reinterpret_cast<IUnknown**>(&m_sourceSrv));
     SafeRelease(reinterpret_cast<IUnknown**>(&m_sourceTexture));
     SafeRelease(reinterpret_cast<IUnknown**>(&m_uvTransformBuffer));

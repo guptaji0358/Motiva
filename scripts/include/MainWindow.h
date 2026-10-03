@@ -18,6 +18,9 @@
 
 class QVideoWidget;
 class SettingsDialog;
+class ImagePlaylist;
+class PlaylistRotation;
+class PlaylistDialog;
 class ThemeTransitionOverlay;
 class QDragEnterEvent;
 class QDragMoveEvent;
@@ -34,8 +37,10 @@ public:
     // applied at the end of construction via the same
     // handleExplorerRequestedFile() helper the InstanceIpc::fileReceived
     // path uses - see MainWindow.cpp.
+    // initialPlaylistFile: same, for Explorer's "Add to Motiva playlist"
+    // verb - added to the image playlist instead of becoming current media.
     explicit MainWindow(bool startMinimized, const QString& initialExplorerFile = QString(),
-        QWidget* parent = nullptr);
+        const QString& initialPlaylistFile = QString(), QWidget* parent = nullptr);
     ~MainWindow() override;
 
     // Every extension Explorer's "Set as background" verb should be
@@ -112,6 +117,13 @@ private slots:
     // handling of a file handed off from Explorer's "Set as background"
     // verb while it's already running (see main.cpp/InstanceIpc.h).
     void onExplorerFileReceived(const QString& path);
+    // Explorer "Add to Motiva playlist" (command line or InstanceIpc).
+    void onAddToPlaylistReceived(const QString& path);
+    void openPlaylist();
+    // "Set Playlist as Wallpaper" from PlaylistDialog: turns the playlist on,
+    // makes its current image the current media, and runs the normal
+    // Set as Wallpaper path if the wallpaper isn't already active.
+    void onApplyPlaylistToDesktop();
 
 private:
     void buildUi();
@@ -142,7 +154,18 @@ private:
     // isUsableVideoSource. Centralizes the "load + persist + update UI"
     // sequence so drag & drop is strictly an additional input method into
     // the existing pipeline, not a parallel one.
-    void loadVideoSource(const QString& source);
+    // fromPlaylist: the image playlist is supplying this source. Any other
+    // caller is an explicit single-media pick (Open Media, drop, paste,
+    // Explorer "Set as background"), which switches the playlist off so
+    // automatic rotation can't replace what the user just chose.
+    void loadVideoSource(const QString& source, bool fromPlaylist = false);
+    // Makes the playlist's current image the current media (and so the
+    // wallpaper, if one is active) - the only place the playlist reaches
+    // the wallpaper pipeline. Skips missing files via ImagePlaylist::advance.
+    void applyPlaylistImage();
+    // The playlist is on AND its current image is what's loaded.
+    bool isPlaylistDrivingMedia() const;
+    void syncPlaylistDialogState();
     // True if source is either an existing local file or a syntactically
     // valid http(s) URL - the same check used to decide whether a
     // drag-and-dropped or persisted/recovered source is still usable.
@@ -180,6 +203,9 @@ private:
     SettingsManager m_settings;
     RecoveryState m_recoveryState;
     InstanceIpc m_ipc;
+    ImagePlaylist* m_playlist = nullptr;
+    PlaylistRotation* m_rotation = nullptr;
+    PlaylistDialog* m_playlistDialog = nullptr;
     SettingsDialog* m_settingsDialog = nullptr;
     // Mirrors SettingsDialog's own overlay whenever a theme transition it
     // starts also restyles MainWindow (see its themeTransitionStarted/
@@ -219,6 +245,7 @@ private:
     QString m_lastVideoDetailsText;
     QLabel* m_statusLabel = nullptr;
     QToolButton* m_settingsButton = nullptr;
+    QToolButton* m_playlistButton = nullptr;
     IconButton* m_openVideoButton = nullptr;
     IconButton* m_removeVideoButton = nullptr;
     IconButton* m_pasteLinkButton = nullptr;

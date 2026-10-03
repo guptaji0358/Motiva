@@ -38,5 +38,7 @@
         <file alias="wallpaper/dark/remove-wallpaper-pressed.svg">../Assets/wallpaper/dark/remove-wallpaper-pressed.svg</file>
         <file alias="wallpaper/dark/remove-wallpaper-disabled.svg">../Assets/wallpaper/dark/remove-wallpaper-disabled.svg</file>
         <file alias="checkbox/check.svg">../Assets/checkbox/check.svg</file>
+        <file alias="playlist/light/playlist.svg">../Assets/playlist/light/playlist.svg</file>
+        <file alias="playlist/dark/playlist.svg">../Assets/playlist/dark/playlist.svg</file>
     </qresource>
 </RCC>

@@ -5,6 +5,9 @@
 #include "WindowsDesktopWallpaper.h"
 #include "WindowsShellIntegration.h"
 #include "Theme.h"
+#include "ImagePlaylist.h"
+#include "PlaylistRotation.h"
+#include "PlaylistDialog.h"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -55,6 +58,9 @@ constexpr const char* kAppIconResourcePath = ":/application/motiva.ico";
 // re-resolves against whichever Motiva Theme is active right now.
 QString settingsIconPath() {
     return QStringLiteral(":/settings-icon/%1/settings.svg").arg(Theme::iconVariant(Theme::currentTheme()));
+}
+QString playlistIconPath() {
+    return QStringLiteral(":/playlist/%1/playlist.svg").arg(Theme::iconVariant(Theme::currentTheme()));
 }
 QString wallpaperIconPath(const char* name) {
     return QStringLiteral(":/wallpaper/%1/").arg(Theme::iconVariant(Theme::currentTheme())) + QLatin1String(name);
@@ -217,7 +223,8 @@ QStringList MainWindow::explorerIntegrationExtensions() {
     return exts;
 }
 
-MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, QWidget* parent)
+MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
+    const QString& initialPlaylistFile, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
     qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
     setWindowTitle("Motiva");
@@ -228,6 +235,11 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, 
     // preview area is the visual focus of the drag hint, but the actual
     // Qt drop target is the window so a drop anywhere on it still works.
     setAcceptDrops(true);
+
+    // Image playlist (v1.1.0): data/persistence + rotation triggers. Built
+    // before the UI so PlaylistDialog (created in buildUi) can bind to them.
+    m_playlist = new ImagePlaylist(&m_settings, this);
+    m_rotation = new PlaylistRotation(m_playlist, &m_settings, this);
 
     buildUi();
     buildTray();
@@ -253,6 +265,27 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, 
     // verb while this instance is already running - see main.cpp/
     // InstanceIpc::sendSetBackgroundRequest.
     connect(&m_ipc, &InstanceIpc::fileReceived, this, &MainWindow::onExplorerFileReceived);
+    connect(&m_ipc, &InstanceIpc::addToPlaylistReceived, this, &MainWindow::onAddToPlaylistReceived);
+
+    // Whenever the playlist's current image changes (any rotation trigger,
+    // Show now, removal of the current image) or the playlist is switched
+    // on, that image becomes the current media - through the same
+    // loadVideoSource() every other input uses, so an active wallpaper
+    // switches in place (no window/HWND rebuild; the renderer crossfades).
+    connect(m_playlist, &ImagePlaylist::currentChanged, this, [this] {
+        if (m_playlist->isEnabled()) {
+            applyPlaylistImage();
+        }
+        syncPlaylistDialogState();
+    });
+    connect(m_playlist, &ImagePlaylist::enabledChanged, this, [this](bool on) {
+        if (on) {
+            applyPlaylistImage();
+        }
+        applyVideoInfoUi();
+        updateStatusUi();
+        syncPlaylistDialogState();
+    });
 
     connect(m_manager.get(), &WallpaperManager::errorOccurred, this, &MainWindow::onWallpaperError);
     // wallpaperActivated fires as soon as attach is REQUESTED, not once
@@ -315,6 +348,24 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, 
     }
     updatePlayPauseAvailability();
 
+    // Image playlist startup. A new Windows logon session since Motiva last
+    // ran (restart, power-on, sign-in) is the "After Windows restarts"
+    // trigger; Explorer restarts and Motiva relaunches within the same
+    // session never count (see PlaylistRotation::consumeNewWindowsSession).
+    // Per the user's decision, only in that case - playlist on, trigger
+    // enabled, and the wallpaper was active when the previous session
+    // ended - is the wallpaper re-applied automatically (further below).
+    // Every other launch keeps the "never auto-attach" rule.
+    const bool newWindowsSession = m_rotation->consumeNewWindowsSession();
+    bool autoApplyPlaylistWallpaper = false;
+    if (m_playlist->isEnabled()) {
+        if (newWindowsSession && m_rotation->rotateOnWindowsStart()) {
+            m_rotation->fire(PlaylistRotation::Trigger::WindowsStart);
+            autoApplyPlaylistWallpaper = m_settings.wasWallpaperActive();
+        }
+        applyPlaylistImage(); // the playlist decides the current media
+    }
+
     // A fresh process launch - whether a normal double-click or a
     // Start-with-Windows autostart - NEVER auto-attaches the wallpaper on
     // its own, even if wasWallpaperActive() is true from a previous
@@ -359,6 +410,8 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, 
     if (m_settings.explorerIntegrationEnabled()) {
         WindowsShellIntegration::RegisterSetBackgroundVerb(
             SettingsManager::motivaExecutablePath(), explorerIntegrationExtensions());
+        WindowsShellIntegration::RegisterAddToPlaylistVerb(
+            SettingsManager::motivaExecutablePath(), VideoPlayer::supportedStaticImageExtensions().values());
     }
 
     // A file handed off from Explorer's "Set as background" verb, when
@@ -368,6 +421,17 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, 
     // a previous session.
     if (!initialExplorerFile.isEmpty()) {
         handleExplorerRequestedFile(initialExplorerFile);
+    }
+    if (!initialPlaylistFile.isEmpty()) {
+        onAddToPlaylistReceived(initialPlaylistFile);
+    }
+    // An explicit Explorer "Set as background" above switches the playlist
+    // off, so this only ever re-applies the playlist itself.
+    if (autoApplyPlaylistWallpaper && m_playlist->isEnabled() && isPlaylistDrivingMedia()) {
+        qInfo() << "[Playlist] New Windows session, playlist was the active wallpaper - re-applying it.";
+        m_hasCurrentVideo = true;
+        updateRemoveVideoButtonUi();
+        onSetWallpaper();
     }
 
     // Force the native HWND to actually exist even when starting
@@ -387,6 +451,8 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile, 
     // that call exists: the native HWND must be real before anything can
     // register against it.
     m_manager->registerPowerNotifications(reinterpret_cast<HWND>(winId()));
+    // Lock -> Unlock playlist trigger, on the same stable HWND.
+    m_rotation->registerSessionNotifications(reinterpret_cast<HWND>(winId()));
 
     if (startMinimized) {
         hide();
@@ -423,6 +489,18 @@ void MainWindow::buildUi() {
     m_settingsButton->setToolTip(tr("Open settings"));
     m_settingsButton->setAutoRaise(true);
     connect(m_settingsButton, &QToolButton::clicked, this, &MainWindow::openSettings);
+
+    // Same flat header-button styling as Settings (Theme's
+    // QToolButton#settingsButton rule), placed beside it.
+    m_playlistButton = new QToolButton(central);
+    m_playlistButton->setObjectName(QStringLiteral("settingsButton"));
+    m_playlistButton->setIcon(QIcon(playlistIconPath()));
+    m_playlistButton->setText(tr("Image Playlist"));
+    m_playlistButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_playlistButton->setToolTip(tr("Build an ordered set of images that change automatically"));
+    m_playlistButton->setAutoRaise(true);
+    connect(m_playlistButton, &QToolButton::clicked, this, &MainWindow::openPlaylist);
+    header->addWidget(m_playlistButton);
     header->addWidget(m_settingsButton);
     root->addLayout(header);
 
@@ -578,6 +656,9 @@ void MainWindow::buildUi() {
 
     setCentralWidget(central);
 
+    m_playlistDialog = new PlaylistDialog(m_playlist, m_rotation, this);
+    connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
+
     m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, this);
     connect(m_settingsDialog, &SettingsDialog::mutedChanged, this, [this](bool muted) {
         if (m_trayMuteAction) {
@@ -615,6 +696,7 @@ void MainWindow::buildTray() {
 
     menu->addSeparator();
     menu->addAction(QIcon(settingsIconPath()), tr("Settings"), this, &MainWindow::openSettings);
+    menu->addAction(QIcon(playlistIconPath()), tr("Image Playlist"), this, &MainWindow::openPlaylist);
     menu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Media"), this, &MainWindow::onChooseVideo);
     menu->addAction(QIcon(removeWallpaperIconPath()), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
     menu->addSeparator();
@@ -659,6 +741,9 @@ void MainWindow::applyVideoInfoUi() {
     if (isWebSource) {
         parts << tr("Web video");
     }
+    if (isPlaylistDrivingMedia()) {
+        parts << tr("Image playlist %1 of %2").arg(m_playlist->currentIndex() + 1).arg(m_playlist->count());
+    }
     const QSize size = m_manager->player()->videoNativeSize();
     if (size.isValid() && !size.isEmpty()) {
         parts << QStringLiteral("%1×%2").arg(size.width()).arg(size.height());
@@ -688,6 +773,7 @@ void MainWindow::setUiState(WallpaperUiState state) {
     m_uiState = state;
     updateStatusUi();
     updatePrimaryButtonUi();
+    syncPlaylistDialogState();
 }
 
 void MainWindow::updateStatusUi() {
@@ -724,6 +810,10 @@ void MainWindow::updateStatusUi() {
         text = m_lastErrorMessage.isEmpty() ? tr("Unable to apply wallpaper") : m_lastErrorMessage;
         color = kStatusErrorColor;
         break;
+    }
+    // Makes it obvious whether one image or the playlist is in use.
+    if (isPlaylistDrivingMedia() && (m_uiState == WallpaperUiState::Ready || m_uiState == WallpaperUiState::Active)) {
+        text += tr("  •  Image playlist on");
     }
     m_statusLabel->setText(QStringLiteral("●  ") + text);
     m_statusLabel->setStyleSheet(QStringLiteral("color: %1; font-weight: 600; padding: 2px 0;").arg(color));
@@ -927,7 +1017,12 @@ bool MainWindow::isUsableVideoSource(const QString& source) {
     return QFileInfo::exists(source) && isSupportedLocalMediaFile(source);
 }
 
-void MainWindow::loadVideoSource(const QString& source) {
+void MainWindow::loadVideoSource(const QString& source, bool fromPlaylist) {
+    if (!fromPlaylist && m_playlist && m_playlist->isEnabled()) {
+        qInfo() << "[Playlist] Single media chosen explicitly - turning the image playlist off "
+                    "(the playlist itself is kept).";
+        m_playlist->setEnabled(false);
+    }
     m_selectedVideoPath = source;
     m_settings.setVideoPath(source);
     // Open Video, drag & drop, and Paste Video URL all converge on this
@@ -1204,6 +1299,12 @@ void MainWindow::onRemoveVideo() {
     // Ready. Done before unload() below so the media change can't first
     // trigger a battery re-evaluation against a wallpaper that is about to
     // be removed anyway.
+    // Removing the current media while the playlist supplies it also turns
+    // the playlist off - otherwise the next trigger would bring an image
+    // straight back. The playlist itself is kept.
+    if (m_playlist->isEnabled()) {
+        m_playlist->setEnabled(false);
+    }
     const bool wallpaperWasOurs =
         m_uiState == WallpaperUiState::Active || m_uiState == WallpaperUiState::Applying;
     if (wallpaperWasOurs) {
@@ -1365,6 +1466,7 @@ void MainWindow::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
         m_settingsButton->setIcon(QIcon(settingsIconPath()));
+        m_playlistButton->setIcon(QIcon(playlistIconPath()));
         updatePrimaryButtonUi();
     }
 }
@@ -1413,6 +1515,76 @@ void MainWindow::handleExplorerRequestedFile(const QString& path) {
 
 void MainWindow::onExplorerFileReceived(const QString& path) {
     handleExplorerRequestedFile(path);
+}
+
+void MainWindow::onAddToPlaylistReceived(const QString& path) {
+    qInfo() << "[Explorer] \"Add to Motiva playlist\":" << path;
+    // Untrusted command-line/IPC input: ImagePlaylist::addImages only
+    // accepts an existing file with a supported image extension.
+    m_playlistDialog->addFiles({path});
+    openPlaylist();
+}
+
+void MainWindow::openPlaylist() {
+    if (!m_playlistDialog) {
+        return;
+    }
+    syncPlaylistDialogState();
+    m_playlistDialog->show();
+    m_playlistDialog->raise();
+    m_playlistDialog->activateWindow();
+}
+
+bool MainWindow::isPlaylistDrivingMedia() const {
+    return m_playlist && m_playlist->isEnabled() && !m_selectedVideoPath.isEmpty() &&
+        QDir::toNativeSeparators(m_selectedVideoPath).compare(m_playlist->currentPath(), Qt::CaseInsensitive) == 0;
+}
+
+void MainWindow::syncPlaylistDialogState() {
+    if (m_playlistDialog) {
+        m_playlistDialog->setPlaylistOnDesktop(
+            isPlaylistDrivingMedia() &&
+            (m_uiState == WallpaperUiState::Active || m_uiState == WallpaperUiState::Applying));
+    }
+}
+
+void MainWindow::applyPlaylistImage() {
+    const QString path = m_playlist->currentPath();
+    if (path.isEmpty()) {
+        return;
+    }
+    if (!QFileInfo(path).isFile()) {
+        // Missing file: move on to the next available one (that emits
+        // currentChanged, which re-enters here). If none is available, keep
+        // whatever is showing - never blank the wallpaper over it.
+        qInfo() << "[Playlist] Current image is missing:" << path;
+        m_playlist->refreshAvailability();
+        if (!m_playlist->advance()) {
+            qWarning() << "[Playlist] No available playlist image - keeping the current media.";
+        }
+        return;
+    }
+    if (isPlaylistDrivingMedia() && m_manager->player()->isStaticImage()) {
+        return; // already showing exactly this image
+    }
+    qInfo() << "[Playlist] Presenting playlist image" << (m_playlist->currentIndex() + 1) << "of"
+            << m_playlist->count() << ":" << path;
+    loadVideoSource(path, /*fromPlaylist=*/true);
+    syncPlaylistDialogState();
+}
+
+void MainWindow::onApplyPlaylistToDesktop() {
+    if (!m_playlist->isEnabled() && !m_playlist->setEnabled(true)) {
+        return; // nothing available - PlaylistDialog keeps its button disabled for this
+    }
+    applyPlaylistImage();
+    if (!isPlaylistDrivingMedia()) {
+        return;
+    }
+    if (m_uiState != WallpaperUiState::Active && m_uiState != WallpaperUiState::Applying) {
+        onSetWallpaper();
+    }
+    syncPlaylistDialogState();
 }
 
 void MainWindow::onExitRequested() {

@@ -55,6 +55,12 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/InstanceIpc.cpp
     scripts/include/InstanceIpc.h
     scripts/src/WindowsShellIntegration.cpp
+    scripts/src/ImagePlaylist.cpp
+    scripts/include/ImagePlaylist.h
+    scripts/src/PlaylistRotation.cpp
+    scripts/include/PlaylistRotation.h
+    scripts/src/PlaylistDialog.cpp
+    scripts/include/PlaylistDialog.h
     scripts/include/WindowsShellIntegration.h
 )
 
@@ -80,6 +86,7 @@ target_link_libraries(Motiva PRIVATE
     dcomp
     d3dcompiler
     ole32
+    Wtsapi32
 )
 
 target_include_directories(Motiva PRIVATE scripts/include)

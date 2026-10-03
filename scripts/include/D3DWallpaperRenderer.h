@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QImage>
+#include <QElapsedTimer>
 #include <QSize>
 #include <memory>
 #include <atomic>
@@ -63,6 +64,14 @@ public slots:
     // verifies via presentedFrameCount. For video this is only ever an
     // extra present of a frame that was already showing.
     void presentLastFrame();
+
+    // Marks a QImage as a still image (VideoPlayer's StaticImage path).
+    // When a tagged frame replaces a DIFFERENT tagged frame (playlist
+    // advance, picking another image), presentFrame() crossfades from the
+    // old image to the new one instead of cutting. Video/GIF frames are
+    // never tagged and are always presented immediately, exactly as before.
+    static void tagAsStill(QImage& image);
+    static bool isTaggedStill(const QImage& image);
 
     // Releases every D3D11/DXGI/DirectComposition object in dependency
     // order. Must be called on this object's own thread before the thread
@@ -131,6 +140,11 @@ private:
     void updateSourceTexture(const QImage& img);
     void computeUvTransform(const QSize& imgSize, float outScale[2], float outOffset[2]) const;
     void releaseSizeDependentResources();
+    // Draws the current source texture (blended over m_prevSrv by
+    // `mix` < 1 while a crossfade runs) and presents it.
+    void drawAndPresent(float mix);
+    void onFadeTick();
+    void endFade();
 
     HWND m_hwnd;
     ScalingMode m_scalingMode = ScalingMode::Fill;
@@ -154,6 +168,19 @@ private:
 
     // Kept for presentLastFrame(); only touched on this object's thread.
     std::shared_ptr<const QImage> m_lastFrame;
+
+    // Crossfade state (render thread only). The previous still image's
+    // texture is kept alive just for the fade, then released. The fade is
+    // driven by a QTimer living on this render thread - each tick is one
+    // vsync-paced Present(); nothing blocks or sleeps, and the GUI thread
+    // is never involved.
+    ID3D11Texture2D* m_prevTexture = nullptr;
+    ID3D11ShaderResourceView* m_prevSrv = nullptr;
+    QSize m_prevImageSize;
+    class QTimer* m_fadeTimer = nullptr;
+    QElapsedTimer m_fadeClock;
+    bool m_fading = false;
+    quint64 m_fadeStartFrameCount = 0; // diagnostics only
 
     ID3D11Texture2D* m_sourceTexture = nullptr;
     ID3D11ShaderResourceView* m_sourceSrv = nullptr;

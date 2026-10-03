@@ -804,7 +804,7 @@ begin
   Result := '';
 end;
 
-// Removes ONLY Motiva's own Explorer verb (MotivaSetBackground) under each
+// Removes ONLY Motiva's own Explorer verbs (MotivaSetBackground, MotivaAddToPlaylist) under each
 // per-user SystemFileAssociations extension, and its autostart value.
 // User settings (HKCU\Software\Motiva), recovery state and media are kept.
 procedure CleanMotivaShellRegistration;
@@ -813,8 +813,12 @@ begin
   Base := 'Software\Classes\SystemFileAssociations';
   if RegGetSubkeyNames(HKCU, Base, Names) then
     for I := 0 to GetArrayLength(Names) - 1 do
+    begin
       if RegKeyExists(HKCU, Base + '\' + Names[I] + '\shell\MotivaSetBackground') then
         RegDeleteKeyIncludingSubkeys(HKCU, Base + '\' + Names[I] + '\shell\MotivaSetBackground');
+      if RegKeyExists(HKCU, Base + '\' + Names[I] + '\shell\MotivaAddToPlaylist') then
+        RegDeleteKeyIncludingSubkeys(HKCU, Base + '\' + Names[I] + '\shell\MotivaAddToPlaylist');
+    end;
   RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Motiva');
 end;
 

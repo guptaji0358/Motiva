@@ -34,4 +34,11 @@ bool RegisterSetBackgroundVerb(const QString& exePath, const QStringList& extens
 // (returns true) for any extension that was never registered.
 bool UnregisterSetBackgroundVerb(const QStringList& extensions);
 
+// Same mechanism for the image playlist: an "Add to Motiva playlist" verb
+// (HKCU\Software\Classes\SystemFileAssociations\.<ext>\shell\MotivaAddToPlaylist,
+// command "--add-to-playlist %1") for still-image extensions. Governed by
+// the same Explorer-integration setting as "Set as background".
+bool RegisterAddToPlaylistVerb(const QString& exePath, const QStringList& imageExtensions);
+bool UnregisterAddToPlaylistVerb(const QStringList& imageExtensions);
+
 } // namespace WindowsShellIntegration

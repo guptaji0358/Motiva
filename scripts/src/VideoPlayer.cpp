@@ -1,5 +1,6 @@
 #include "VideoPlayer.h"
 #include "StartupDiagnostics.h"
+#include "D3DWallpaperRenderer.h"
 #include <QFileInfo>
 #include <QVideoFrame>
 #include <QImageReader>
@@ -220,6 +221,9 @@ bool VideoPlayer::loadStaticImage(const QString& path) {
 
     m_mediaKind = MediaKind::StaticImage;
     m_lastFrameSize = img.size();
+    // Lets the renderer crossfade when one still image replaces another
+    // (see D3DWallpaperRenderer::tagAsStill) - video/GIF frames stay untagged.
+    D3DWallpaperRenderer::tagAsStill(img);
     m_currentFrame = std::make_shared<const QImage>(std::move(img));
     qInfo() << "[Media] Loaded still image" << path << "size=" << m_lastFrameSize
             << "decode took" << timer.elapsed() << "ms";

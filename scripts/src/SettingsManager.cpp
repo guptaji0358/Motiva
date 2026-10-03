@@ -1,6 +1,7 @@
 #include "SettingsManager.h"
 #include "WindowsShellIntegration.h"
 #include "MainWindow.h"
+#include "VideoPlayer.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -172,10 +173,13 @@ bool SettingsManager::explorerIntegrationEnabled() const {
 void SettingsManager::setExplorerIntegrationEnabled(bool enabled) {
     m_settings.setValue("app/explorerIntegrationEnabled", enabled);
     const QStringList extensions = MainWindow::explorerIntegrationExtensions();
+    const QStringList imageExtensions = VideoPlayer::supportedStaticImageExtensions().values();
     if (enabled) {
         WindowsShellIntegration::RegisterSetBackgroundVerb(motivaExecutablePath(), extensions);
+        WindowsShellIntegration::RegisterAddToPlaylistVerb(motivaExecutablePath(), imageExtensions);
     } else {
         WindowsShellIntegration::UnregisterSetBackgroundVerb(extensions);
+        WindowsShellIntegration::UnregisterAddToPlaylistVerb(imageExtensions);
     }
 }
 
@@ -197,4 +201,60 @@ Theme::AppTheme SettingsManager::theme() const {
 }
 void SettingsManager::setTheme(Theme::AppTheme theme) {
     m_settings.setValue("app/theme", Theme::themeSettingsKey(theme));
+}
+
+QStringList SettingsManager::playlistPaths() const {
+    return m_settings.value("playlist/paths").toStringList();
+}
+void SettingsManager::setPlaylistPaths(const QStringList& paths) {
+    m_settings.setValue("playlist/paths", paths);
+}
+
+int SettingsManager::playlistCurrentIndex() const {
+    return m_settings.value("playlist/currentIndex", -1).toInt();
+}
+void SettingsManager::setPlaylistCurrentIndex(int index) {
+    m_settings.setValue("playlist/currentIndex", index);
+}
+
+bool SettingsManager::playlistEnabled() const {
+    return m_settings.value("playlist/enabled", false).toBool();
+}
+void SettingsManager::setPlaylistEnabled(bool enabled) {
+    m_settings.setValue("playlist/enabled", enabled);
+}
+
+bool SettingsManager::playlistRotateOnUnlock() const {
+    return m_settings.value("playlist/rotateOnUnlock", true).toBool();
+}
+void SettingsManager::setPlaylistRotateOnUnlock(bool enabled) {
+    m_settings.setValue("playlist/rotateOnUnlock", enabled);
+}
+
+bool SettingsManager::playlistRotateOnWindowsStart() const {
+    return m_settings.value("playlist/rotateOnWindowsStart", true).toBool();
+}
+void SettingsManager::setPlaylistRotateOnWindowsStart(bool enabled) {
+    m_settings.setValue("playlist/rotateOnWindowsStart", enabled);
+}
+
+bool SettingsManager::playlistRotateOnInterval() const {
+    return m_settings.value("playlist/rotateOnInterval", false).toBool();
+}
+void SettingsManager::setPlaylistRotateOnInterval(bool enabled) {
+    m_settings.setValue("playlist/rotateOnInterval", enabled);
+}
+
+int SettingsManager::playlistIntervalMinutes() const {
+    return m_settings.value("playlist/intervalMinutes", 30).toInt();
+}
+void SettingsManager::setPlaylistIntervalMinutes(int minutes) {
+    m_settings.setValue("playlist/intervalMinutes", minutes);
+}
+
+qint64 SettingsManager::lastWindowsSessionStamp() const {
+    return m_settings.value("playlist/lastWindowsSessionStamp", 0).toLongLong();
+}
+void SettingsManager::setLastWindowsSessionStamp(qint64 stamp) {
+    m_settings.setValue("playlist/lastWindowsSessionStamp", stamp);
 }

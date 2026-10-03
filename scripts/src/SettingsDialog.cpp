@@ -196,7 +196,7 @@ void SettingsDialog::buildUi() {
     m_explorerIntegrationCheck = new QCheckBox(tr("Set as background for supported media"), this);
     m_explorerIntegrationCheck->setToolTip(
         tr("Adds a \"Set as background\" option to the right-click menu for supported video, "
-           "GIF and image files in File Explorer. On Windows 11 this may appear under \"Show more "
+           "GIF and image files in File Explorer, plus \"Add to Motiva playlist\" for images. On Windows 11 this may appear under \"Show more "
            "options\"."));
     connect(m_explorerIntegrationCheck, &QCheckBox::toggled, this,
         &SettingsDialog::onExplorerIntegrationToggled);

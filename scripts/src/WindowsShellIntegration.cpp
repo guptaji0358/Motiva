@@ -44,10 +44,12 @@ constexpr const wchar_t* kShellClassesRoot = L"Software\\Classes";
 constexpr const wchar_t* kVerbName = L"MotivaSetBackground";
 constexpr const wchar_t* kVerbDisplayName = L"Set as background";
 
-QString verbKeyPath(const QString& extension) {
-    return QStringLiteral("Software\\Classes\\SystemFileAssociations\\.%1\\shell\\MotivaSetBackground")
-        .arg(extension);
+QString verbKeyPath(const QString& extension, const QString& verb = QStringLiteral("MotivaSetBackground")) {
+    return QStringLiteral("Software\\Classes\\SystemFileAssociations\\.%1\\shell\\%2")
+        .arg(extension, verb);
 }
+
+constexpr const char* kAddToPlaylistVerbName = "MotivaAddToPlaylist";
 
 bool setStringValue(HKEY key, const wchar_t* valueName, const QString& value) {
     const std::wstring w = value.toStdWString();
@@ -176,6 +178,58 @@ bool RegisterSetBackgroundVerb(const QString& exePath, const QStringList& extens
             allOk = false;
         }
         RegCloseKey(commandKey);
+    }
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    return allOk;
+}
+
+bool RegisterAddToPlaylistVerb(const QString& exePath, const QStringList& imageExtensions) {
+    if (!isRunnableTarget(exePath)) {
+        qWarning() << "[ShellIntegration] Refusing to register playlist verb: not a runnable deployment:" << exePath;
+        UnregisterAddToPlaylistVerb(imageExtensions);
+        return false;
+    }
+    const QString verb = QString::fromLatin1(kAddToPlaylistVerbName);
+    const QString command =
+        QStringLiteral("\"%1\" --add-to-playlist \"%2\"").arg(QDir::toNativeSeparators(exePath), "%1");
+    bool allOk = true;
+    for (const QString& ext : imageExtensions) {
+        HKEY verbKey = nullptr;
+        const std::wstring verbPathW = verbKeyPath(ext, verb).toStdWString();
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, verbPathW.c_str(), 0, nullptr, 0, KEY_WRITE, nullptr,
+                             &verbKey, nullptr) != ERROR_SUCCESS) {
+            allOk = false;
+            continue;
+        }
+        setStringValue(verbKey, nullptr, QStringLiteral("Add to Motiva playlist"));
+        setStringValue(verbKey, L"Icon", QDir::toNativeSeparators(iconSourceFor(exePath)));
+        RegCloseKey(verbKey);
+
+        HKEY commandKey = nullptr;
+        const std::wstring commandPathW = (verbKeyPath(ext, verb) + QStringLiteral("\\command")).toStdWString();
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, commandPathW.c_str(), 0, nullptr, 0, KEY_WRITE, nullptr,
+                             &commandKey, nullptr) != ERROR_SUCCESS) {
+            allOk = false;
+            continue;
+        }
+        if (!setStringValue(commandKey, nullptr, command)) {
+            allOk = false;
+        }
+        RegCloseKey(commandKey);
+    }
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    return allOk;
+}
+
+bool UnregisterAddToPlaylistVerb(const QStringList& imageExtensions) {
+    const QString verb = QString::fromLatin1(kAddToPlaylistVerbName);
+    bool allOk = true;
+    for (const QString& ext : imageExtensions) {
+        const std::wstring verbPathW = verbKeyPath(ext, verb).toStdWString();
+        const LSTATUS status = RegDeleteTreeW(HKEY_CURRENT_USER, verbPathW.c_str());
+        if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND) {
+            allOk = false;
+        }
     }
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return allOk;

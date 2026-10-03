@@ -102,6 +102,7 @@ int main(int argc, char* argv[]) {
     // one via IPC) depends on the very next check.
     bool startMinimized = false;
     QString explorerSelectedFile;
+    QString explorerPlaylistFile;
     // QCoreApplication::arguments() (rather than a raw argv scan) handles
     // Windows' own command-line quoting correctly - Explorer's "Set as
     // background" verb supplies the selected path quoted, since it may
@@ -113,6 +114,8 @@ int main(int argc, char* argv[]) {
             startMinimized = true;
         } else if (args[i] == QLatin1String("--set-background") && i + 1 < args.size()) {
             explorerSelectedFile = args[++i];
+        } else if (args[i] == QLatin1String("--add-to-playlist") && i + 1 < args.size()) {
+            explorerPlaylistFile = args[++i];
         }
     }
 
@@ -131,6 +134,8 @@ int main(int argc, char* argv[]) {
         // ever created for this.
         if (!explorerSelectedFile.isEmpty()) {
             InstanceIpc::sendSetBackgroundRequest(explorerSelectedFile);
+        } else if (!explorerPlaylistFile.isEmpty()) {
+            InstanceIpc::sendAddToPlaylistRequest(explorerPlaylistFile);
         } else {
             InstanceIpc::sendRecoverRequest();
         }
@@ -142,7 +147,7 @@ int main(int argc, char* argv[]) {
             "No system tray was detected on this system. The application will still run.");
     }
 
-    MainWindow window(startMinimized, explorerSelectedFile);
+    MainWindow window(startMinimized, explorerSelectedFile, explorerPlaylistFile);
     if (!startMinimized) {
         window.show();
     }

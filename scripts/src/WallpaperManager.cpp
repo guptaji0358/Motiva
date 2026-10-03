@@ -257,6 +257,13 @@ void WallpaperManager::onPossibleExternalWallpaperChange() {
         return;
     }
     const std::wstring current = WindowsDesktopWallpaper::GetCurrentWallpaperPath();
+    // Re-check: the query above is a COM call during which Windows can
+    // deliver the same change via another notification (e.g. the
+    // WM_SETTINGCHANGE broadcast), whose nested call may already have
+    // stepped aside.
+    if (!m_active) {
+        return;
+    }
     if (current.empty() || current == m_wallpaperBaselineAtAttach) {
         return;
     }
