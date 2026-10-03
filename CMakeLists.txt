@@ -15,7 +15,9 @@ if(NOT WIN32)
     message(FATAL_ERROR "Motiva only builds for Windows (uses Win32 desktop APIs).")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Concurrent Svg)
+# Sql: the playlist library (.mtv) uses Qt SQL's bundled SQLite driver
+# (qsqlite) - no separate SQLite dependency; windeployqt ships the plugin.
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Concurrent Svg Sql)
 
 qt_standard_project_setup()
 
@@ -55,8 +57,14 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/InstanceIpc.cpp
     scripts/include/InstanceIpc.h
     scripts/src/WindowsShellIntegration.cpp
-    scripts/src/ImagePlaylist.cpp
-    scripts/include/ImagePlaylist.h
+    scripts/src/LibraryDatabase.cpp
+    scripts/include/LibraryDatabase.h
+    scripts/src/PlaylistModel.cpp
+    scripts/include/PlaylistModel.h
+    scripts/src/PlaylistLibrary.cpp
+    scripts/include/PlaylistLibrary.h
+    scripts/src/MediaRecovery.cpp
+    scripts/include/MediaRecovery.h
     scripts/src/PlaylistRotation.cpp
     scripts/include/PlaylistRotation.h
     scripts/src/PlaylistDialog.cpp
@@ -76,6 +84,7 @@ target_link_libraries(Motiva PRIVATE
     Qt6::MultimediaWidgets
     Qt6::Concurrent
     Qt6::Svg
+    Qt6::Sql
     Dwmapi
     Shell32
     User32

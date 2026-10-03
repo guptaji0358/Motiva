@@ -9,7 +9,7 @@
 ; cancel confirmation are still Inno's own. Progress and step status are
 ; driven by Inno's real install events - nothing is simulated.
 #define AppName "Motiva"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #define AppPublisher "Robin Gupta Studios"
 #define StagingDir "..\release\staging"
 
@@ -20,7 +20,7 @@ AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppCopyright=Copyright © Robin Gupta
-VersionInfoVersion=1.1.0.0
+VersionInfoVersion=1.2.0.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoCopyright=Copyright © Robin Gupta
 VersionInfoProductName={#AppName}

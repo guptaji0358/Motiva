@@ -4,6 +4,8 @@
 #include <QFileInfo>
 #include <QVideoFrame>
 #include <QImageReader>
+#include <QMediaFormat>
+#include <QMimeType>
 #include <QPainter>
 #include <QElapsedTimer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -42,6 +44,54 @@ const QSet<QString>& VideoPlayer::supportedStaticImageExtensions() {
         return exts;
     }();
     return cached;
+}
+
+// Derived from the actual installed Qt Multimedia backend's own reported
+// decode capability (QMediaFormat::supportedFileFormats), NOT a hardcoded
+// guess list - see the "Expand Motiva Media File Support" task. Filtered
+// to the video-container formats only (the enum also lists audio-only
+// containers like MP3/AAC/WAV, which aren't relevant here). Computed once
+// and cached: the installed backend doesn't change at runtime, and this
+// is called from hot paths (drag-over, every dropped file).
+const QSet<QString>& VideoPlayer::supportedVideoExtensions() {
+    static const QSet<QString> cached = [] {
+        QSet<QString> exts;
+        QMediaFormat probe;
+        const QList<QMediaFormat::FileFormat> formats = probe.supportedFileFormats(QMediaFormat::Decode);
+        for (QMediaFormat::FileFormat format : formats) {
+            switch (format) {
+            case QMediaFormat::WMV:
+            case QMediaFormat::AVI:
+            case QMediaFormat::Matroska:
+            case QMediaFormat::MPEG4:
+            case QMediaFormat::Ogg:
+            case QMediaFormat::QuickTime:
+            case QMediaFormat::WebM:
+                break;
+            default:
+                continue; // audio-only container (MP3/AAC/FLAC/WAV/...) - not a video format.
+            }
+            QMediaFormat mf(format);
+#if QT_CONFIG(mimetype)
+            for (const QString& suffix : mf.mimeType().suffixes()) {
+                exts.insert(suffix.toLower());
+            }
+#endif
+        }
+        // Defensive fallback only - every backend build tested so far
+        // already reports mp4 via QMediaFormat::MPEG4's mime type, but if
+        // some future/stripped backend build ever reported zero decodable
+        // formats, this must not silently regress to "nothing works".
+        if (exts.isEmpty()) {
+            exts.insert(QStringLiteral("mp4"));
+        }
+        return exts;
+    }();
+    return cached;
+}
+
+bool VideoPlayer::hasVideoExtension(const QString& fileNameOrPath) {
+    return supportedVideoExtensions().contains(QFileInfo(fileNameOrPath).suffix().toLower());
 }
 
 bool VideoPlayer::hasStaticImageExtension(const QString& fileNameOrPath) {
@@ -291,7 +341,31 @@ void VideoPlayer::unload() {
 
 void VideoPlayer::setLooping(bool loop) {
     m_looping = loop;
-    m_player.setLoops(loop ? QMediaPlayer::Infinite : 1);
+    applyLoopMode();
+}
+
+void VideoPlayer::setSequencedPlayback(bool sequenced) {
+    if (sequenced == m_sequenced) {
+        return;
+    }
+    m_sequenced = sequenced;
+    applyLoopMode();
+}
+
+void VideoPlayer::applyLoopMode() {
+    // While a video playlist drives playback, each video plays exactly once
+    // so EndOfMedia fires and the playlist can move on; the user's "Loop
+    // video" preference (m_looping) is kept and decides whether the
+    // playlist itself wraps around (see MainWindow::onPlayerEndOfMedia).
+    m_player.setLoops((m_looping && !m_sequenced) ? QMediaPlayer::Infinite : 1);
+}
+
+void VideoPlayer::restartFromBeginning() {
+    if (m_mediaKind != MediaKind::Video) {
+        return;
+    }
+    m_player.setPosition(0);
+    m_player.play();
 }
 
 void VideoPlayer::setVolume(int percent) {
@@ -421,8 +495,11 @@ void VideoPlayer::onMediaStatusChanged(QMediaPlayer::MediaStatus status) {
     }
     if (status == QMediaPlayer::InvalidMedia) {
         emit errorOccurred(tr("Unable to play this video. The file may be corrupted or unsupported."));
-    } else if (status == QMediaPlayer::EndOfMedia && !m_looping) {
-        // QMediaPlayer::setLoops(1) already stops after one play-through.
+    } else if (status == QMediaPlayer::EndOfMedia && m_mediaKind == MediaKind::Video) {
+        // Only reachable when the player is not looping infinitely (Loop
+        // video off, or sequenced playlist playback) - QMediaPlayer's own
+        // event, no position polling.
+        emit endOfMedia();
     }
 }
 

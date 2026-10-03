@@ -58,6 +58,11 @@ public:
     // formats that aren't meaningful raster wallpapers (icon containers,
     // vector SVG) - see the .cpp. Requires a QGuiApplication to exist.
     static const QSet<QString>& supportedStaticImageExtensions();
+    // Lowercase extensions of the video containers the installed Qt
+    // Multimedia backend reports it can decode (QMediaFormat), not a
+    // hardcoded list. GIF is not included (it is an AnimatedImage).
+    static const QSet<QString>& supportedVideoExtensions();
+    static bool hasVideoExtension(const QString& fileNameOrPath);
     static bool hasStaticImageExtension(const QString& fileNameOrPath);
 
     bool loadFile(const QString& path);
@@ -67,6 +72,13 @@ public:
 
     void setLooping(bool loop);
     bool isLooping() const { return m_looping; }
+    // Video playlist mode: play each video once (ignoring the Loop
+    // preference) so endOfMedia() fires and the playlist can advance.
+    void setSequencedPlayback(bool sequenced);
+    bool isSequencedPlayback() const { return m_sequenced; }
+    // Seeks a loaded video back to 0 and plays (single-item video playlist
+    // that should repeat).
+    void restartFromBeginning();
 
     void setVolume(int percent); // 0-100
     int volume() const { return m_volumePercent; }
@@ -106,6 +118,8 @@ signals:
     // mediaKind() may have changed. Lets WallpaperManager re-evaluate
     // anything that depends on the media type (the battery policy).
     void mediaChanged();
+    // A video played to its end (only when it isn't looping infinitely).
+    void endOfMedia();
     void playbackStateChanged(QMediaPlayer::PlaybackState state);
 
 private slots:
@@ -137,6 +151,8 @@ private:
     MediaKind m_mediaKind = MediaKind::None;
 
     bool m_looping = true;
+    bool m_sequenced = false;
+    void applyLoopMode();
     int m_volumePercent = 0;
     bool m_muted = true;
 

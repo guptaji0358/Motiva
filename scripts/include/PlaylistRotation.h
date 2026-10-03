@@ -5,13 +5,14 @@
 #include <QTimer>
 #include <windows.h>
 
-class ImagePlaylist;
+class PlaylistLibrary;
 class SettingsManager;
 
-// Decides WHEN the image playlist moves to its next image. Three
-// independent, user-selectable triggers; any enabled one may advance the
-// playlist, and none of them resets it (each just calls
-// ImagePlaylist::advance(), which continues from the current image):
+// Decides WHEN an IMAGE playlist moves to its next image. Applies only to
+// the library's active playlist, using that playlist's own settings (each
+// playlist has its own in the .mtv). Video playlists don't use these
+// triggers at all - they advance when a video ends (MainWindow handles
+// VideoPlayer::endOfMedia) - so the two kinds never share rules by accident.
 //
 //  - Lock -> Unlock: WM_WTSSESSION_CHANGE (WTSRegisterSessionNotification)
 //    - purely event-driven. Advances only on an UNLOCK that follows a LOCK
@@ -21,18 +22,18 @@ class SettingsManager;
 //    Explorer, Motiva being relaunched or recovering via IPC all happen
 //    inside the SAME logon session, so none of them can look like a
 //    Windows restart. See consumeNewWindowsSession().
-//  - Interval: one QTimer, armed only while the playlist is on and this
-//    trigger is enabled; restarted whenever the current image changes so
-//    each image gets the full interval. No polling anywhere.
+//  - Interval: one QTimer, armed only while the active playlist is an image
+//    playlist with this trigger enabled; restarted whenever the current
+//    image changes so each image gets the full interval. No polling.
 //
 // Explorer-restart recovery is not a trigger and is not observed here at
-// all - WallpaperManager re-presents whatever image is current.
+// all - WallpaperManager re-presents whatever item is current.
 class PlaylistRotation : public QObject, public QAbstractNativeEventFilter {
     Q_OBJECT
 public:
     enum class Trigger { LockUnlock, WindowsStart, Interval };
 
-    PlaylistRotation(ImagePlaylist* playlist, SettingsManager* settings, QObject* parent = nullptr);
+    PlaylistRotation(PlaylistLibrary* library, SettingsManager* settings, QObject* parent = nullptr);
     ~PlaylistRotation() override;
 
     // Registers for session lock/unlock notifications on a stable,
@@ -46,17 +47,8 @@ public:
     // Call exactly once per process, at startup.
     bool consumeNewWindowsSession();
 
-    bool rotateOnUnlock() const { return m_rotateOnUnlock; }
-    bool rotateOnWindowsStart() const { return m_rotateOnWindowsStart; }
-    bool rotateOnInterval() const { return m_rotateOnInterval; }
-    int intervalMinutes() const { return m_intervalMinutes; }
-    void setRotateOnUnlock(bool enabled);
-    void setRotateOnWindowsStart(bool enabled);
-    void setRotateOnInterval(bool enabled);
-    void setIntervalMinutes(int minutes);
-
-    // Advances the playlist for `trigger` if the playlist is on. Returns
-    // whether the image changed.
+    // Advances the active playlist for `trigger` if it is an image playlist
+    // with that trigger enabled. Returns whether the image changed.
     bool fire(Trigger trigger);
 
     // QAbstractNativeEventFilter
@@ -70,14 +62,9 @@ private:
     // falling back to the system boot time if unavailable. 0 on failure.
     static qint64 currentWindowsSessionStamp();
 
-    ImagePlaylist* m_playlist;
+    PlaylistLibrary* m_library;
     SettingsManager* m_settings;
     QTimer m_intervalTimer;
     HWND m_sessionHwnd = nullptr;
     bool m_lockObserved = false;
-
-    bool m_rotateOnUnlock = true;
-    bool m_rotateOnWindowsStart = true;
-    bool m_rotateOnInterval = false;
-    int m_intervalMinutes = 30;
 };

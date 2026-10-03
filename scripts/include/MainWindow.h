@@ -18,7 +18,7 @@
 
 class QVideoWidget;
 class SettingsDialog;
-class ImagePlaylist;
+class PlaylistLibrary;
 class PlaylistRotation;
 class PlaylistDialog;
 class ThemeTransitionOverlay;
@@ -120,10 +120,13 @@ private slots:
     // Explorer "Add to Motiva playlist" (command line or InstanceIpc).
     void onAddToPlaylistReceived(const QString& path);
     void openPlaylist();
-    // "Set Playlist as Wallpaper" from PlaylistDialog: turns the playlist on,
-    // makes its current image the current media, and runs the normal
-    // Set as Wallpaper path if the wallpaper isn't already active.
-    void onApplyPlaylistToDesktop();
+    // "Set as Wallpaper" from PlaylistDialog: makes `playlistId` the active
+    // playlist, makes its current item the current media, and runs the
+    // normal Set as Wallpaper path if the wallpaper isn't already active.
+    void onApplyPlaylistToDesktop(qint64 playlistId);
+    // A video finished (VideoPlayer::endOfMedia). Advances an active video
+    // playlist; does nothing for standalone media.
+    void onPlayerEndOfMedia();
 
 private:
     void buildUi();
@@ -159,12 +162,15 @@ private:
     // Explorer "Set as background"), which switches the playlist off so
     // automatic rotation can't replace what the user just chose.
     void loadVideoSource(const QString& source, bool fromPlaylist = false);
-    // Makes the playlist's current image the current media (and so the
-    // wallpaper, if one is active) - the only place the playlist reaches
-    // the wallpaper pipeline. Skips missing files via ImagePlaylist::advance.
-    void applyPlaylistImage();
-    // The playlist is on AND its current image is what's loaded.
+    // Makes the active playlist's current item the current media (and so
+    // the wallpaper, if one is active) - the only place a playlist reaches
+    // the wallpaper pipeline. Skips missing files via PlaylistModel::advance.
+    void applyPlaylistItem();
+    // A playlist is active AND its current item is what's loaded.
     bool isPlaylistDrivingMedia() const;
+    // Video playlists play each video once (so endOfMedia fires); anything
+    // else uses the normal Loop video behavior. See VideoPlayer::setSequencedPlayback.
+    void updatePlayerSequencing();
     void syncPlaylistDialogState();
     // True if source is either an existing local file or a syntactically
     // valid http(s) URL - the same check used to decide whether a
@@ -203,7 +209,7 @@ private:
     SettingsManager m_settings;
     RecoveryState m_recoveryState;
     InstanceIpc m_ipc;
-    ImagePlaylist* m_playlist = nullptr;
+    PlaylistLibrary* m_library = nullptr;
     PlaylistRotation* m_rotation = nullptr;
     PlaylistDialog* m_playlistDialog = nullptr;
     SettingsDialog* m_settingsDialog = nullptr;

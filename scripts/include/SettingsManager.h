@@ -75,26 +75,18 @@ public:
     Theme::AppTheme theme() const;
     void setTheme(Theme::AppTheme theme);
 
-    // --- Image playlist (see ImagePlaylist / PlaylistRotation) ---
-    // Ordered image paths; the list order IS the playback order.
+    // --- Legacy (Motiva 1.1) single image playlist ---
+    // Read once by PlaylistLibrary to migrate into the .mtv library, then
+    // cleared - playlists now live only in the library (one source of truth).
     QStringList playlistPaths() const;
-    void setPlaylistPaths(const QStringList& paths);
-    // Index into playlistPaths() of the image currently shown (or, while
-    // the playlist is off, the one it resumes from). -1 = none.
     int playlistCurrentIndex() const;
-    void setPlaylistCurrentIndex(int index);
-    // "Use image playlist" - while on, the playlist drives the current
-    // media and the rotation triggers below are live.
     bool playlistEnabled() const;
-    void setPlaylistEnabled(bool enabled);
     bool playlistRotateOnUnlock() const;
-    void setPlaylistRotateOnUnlock(bool enabled);
     bool playlistRotateOnWindowsStart() const;
-    void setPlaylistRotateOnWindowsStart(bool enabled);
     bool playlistRotateOnInterval() const;
-    void setPlaylistRotateOnInterval(bool enabled);
     int playlistIntervalMinutes() const;
-    void setPlaylistIntervalMinutes(int minutes);
+    void clearLegacyPlaylistSettings();
+
     // Identity (logon time) of the Windows session Motiva last ran in -
     // see PlaylistRotation::currentWindowsSessionStamp(). 0 = never seen.
     qint64 lastWindowsSessionStamp() const;

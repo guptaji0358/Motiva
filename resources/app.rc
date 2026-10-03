@@ -14,8 +14,8 @@
 1 ICON "../Assets/application/motiva.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,1,0,0
- PRODUCTVERSION 1,1,0,0
+ FILEVERSION 1,2,0,0
+ PRODUCTVERSION 1,2,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -31,11 +31,11 @@ BEGIN
             VALUE "LegalCopyright", "Copyright © Robin Gupta"
             VALUE "LegalTrademarks", "RGS"
             VALUE "FileDescription", "Motiva - live desktop wallpaper"
-            VALUE "FileVersion", "1.1.0.0"
+            VALUE "FileVersion", "1.2.0.0"
             VALUE "InternalName", "Motiva"
             VALUE "OriginalFilename", "Motiva.exe"
             VALUE "ProductName", "Motiva"
-            VALUE "ProductVersion", "1.1.0.0"
+            VALUE "ProductVersion", "1.2.0.0"
         END
     END
     BLOCK "VarFileInfo"

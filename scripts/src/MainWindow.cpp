@@ -5,7 +5,8 @@
 #include "WindowsDesktopWallpaper.h"
 #include "WindowsShellIntegration.h"
 #include "Theme.h"
-#include "ImagePlaylist.h"
+#include "PlaylistLibrary.h"
+#include "PlaylistModel.h"
 #include "PlaylistRotation.h"
 #include "PlaylistDialog.h"
 
@@ -117,48 +118,8 @@ const QString kPreviewSurfaceStyle = QStringLiteral(
     .arg(Theme::kRadiusMedium)
     .arg(Theme::kPreviewText);
 
-// Derived from the actual installed Qt Multimedia backend's own reported
-// decode capability (QMediaFormat::supportedFileFormats), NOT a hardcoded
-// guess list - see the "Expand Motiva Media File Support" task. Filtered
-// to the video-container formats only (the enum also lists audio-only
-// containers like MP3/AAC/WAV, which aren't relevant here). Computed once
-// and cached: the installed backend doesn't change at runtime, and this
-// is called from hot paths (drag-over, every dropped file).
 const QSet<QString>& supportedVideoContainerExtensions() {
-    static const QSet<QString> cached = [] {
-        QSet<QString> exts;
-        QMediaFormat probe;
-        const QList<QMediaFormat::FileFormat> formats = probe.supportedFileFormats(QMediaFormat::Decode);
-        for (QMediaFormat::FileFormat format : formats) {
-            switch (format) {
-            case QMediaFormat::WMV:
-            case QMediaFormat::AVI:
-            case QMediaFormat::Matroska:
-            case QMediaFormat::MPEG4:
-            case QMediaFormat::Ogg:
-            case QMediaFormat::QuickTime:
-            case QMediaFormat::WebM:
-                break;
-            default:
-                continue; // audio-only container (MP3/AAC/FLAC/WAV/...) - not a video format.
-            }
-            QMediaFormat mf(format);
-#if QT_CONFIG(mimetype)
-            for (const QString& suffix : mf.mimeType().suffixes()) {
-                exts.insert(suffix.toLower());
-            }
-#endif
-        }
-        // Defensive fallback only - every backend build tested so far
-        // already reports mp4 via QMediaFormat::MPEG4's mime type, but if
-        // some future/stripped backend build ever reported zero decodable
-        // formats, this must not silently regress to "nothing works".
-        if (exts.isEmpty()) {
-            exts.insert(QStringLiteral("mp4"));
-        }
-        return exts;
-    }();
-    return cached;
+    return VideoPlayer::supportedVideoExtensions();
 }
 
 // A GIF is never routed through QMediaFormat/QMediaPlayer (Qt Multimedia
@@ -236,10 +197,11 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // Qt drop target is the window so a drop anywhere on it still works.
     setAcceptDrops(true);
 
-    // Image playlist (v1.1.0): data/persistence + rotation triggers. Built
+    // Playlist library (.mtv, SQLite) + image-rotation triggers. Built
     // before the UI so PlaylistDialog (created in buildUi) can bind to them.
-    m_playlist = new ImagePlaylist(&m_settings, this);
-    m_rotation = new PlaylistRotation(m_playlist, &m_settings, this);
+    m_library = new PlaylistLibrary(&m_settings, this);
+    m_library->open();
+    m_rotation = new PlaylistRotation(m_library, &m_settings, this);
 
     buildUi();
     buildTray();
@@ -272,20 +234,37 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // on, that image becomes the current media - through the same
     // loadVideoSource() every other input uses, so an active wallpaper
     // switches in place (no window/HWND rebuild; the renderer crossfades).
-    connect(m_playlist, &ImagePlaylist::currentChanged, this, [this] {
-        if (m_playlist->isEnabled()) {
-            applyPlaylistImage();
-        }
+    connect(m_library, &PlaylistLibrary::activeCurrentChanged, this, [this] {
+        applyPlaylistItem();
         syncPlaylistDialogState();
     });
-    connect(m_playlist, &ImagePlaylist::enabledChanged, this, [this](bool on) {
-        if (on) {
-            applyPlaylistImage();
+    // Switching the active playlist safely switches the wallpaper source:
+    // the new playlist's current item replaces the current media in place.
+    // Only one playlist is ever active (PlaylistLibrary), so two playlists
+    // can never fight over the wallpaper.
+    connect(m_library, &PlaylistLibrary::activeChanged, this, [this](qint64 id) {
+        if (id > 0) {
+            applyPlaylistItem();
         }
+        updatePlayerSequencing();
         applyVideoInfoUi();
         updateStatusUi();
         syncPlaylistDialogState();
     });
+    connect(m_library, &PlaylistLibrary::playlistsChanged, this, [this] {
+        applyVideoInfoUi(); // playlist renamed / count changed
+        updateStatusUi();
+    });
+    connect(m_manager->player(), &VideoPlayer::endOfMedia, this, &MainWindow::onPlayerEndOfMedia);
+    if (!m_library->openNotice().isEmpty()) {
+        QTimer::singleShot(0, this, [this] {
+            if (isVisible()) {
+                QMessageBox::warning(this, tr("Motiva playlists"), m_library->openNotice());
+            } else if (m_tray) {
+                m_tray->showMessage(tr("Motiva playlists"), m_library->openNotice(), QSystemTrayIcon::Warning, 8000);
+            }
+        });
+    }
 
     connect(m_manager.get(), &WallpaperManager::errorOccurred, this, &MainWindow::onWallpaperError);
     // wallpaperActivated fires as soon as attach is REQUESTED, not once
@@ -358,12 +337,15 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // Every other launch keeps the "never auto-attach" rule.
     const bool newWindowsSession = m_rotation->consumeNewWindowsSession();
     bool autoApplyPlaylistWallpaper = false;
-    if (m_playlist->isEnabled()) {
-        if (newWindowsSession && m_rotation->rotateOnWindowsStart()) {
-            m_rotation->fire(PlaylistRotation::Trigger::WindowsStart);
+    if (PlaylistModel* active = m_library->activePlaylist()) {
+        // Only image playlists have this trigger; fire() checks the active
+        // playlist's own setting. Video playlists never advance on startup.
+        if (newWindowsSession && m_rotation->fire(PlaylistRotation::Trigger::WindowsStart)) {
             autoApplyPlaylistWallpaper = m_settings.wasWallpaperActive();
+        } else if (newWindowsSession && !active->isVideo() && active->rotation().onWindowsStart) {
+            autoApplyPlaylistWallpaper = m_settings.wasWallpaperActive(); // single-image playlist
         }
-        applyPlaylistImage(); // the playlist decides the current media
+        applyPlaylistItem(); // the active playlist decides the current media
     }
 
     // A fresh process launch - whether a normal double-click or a
@@ -427,7 +409,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     }
     // An explicit Explorer "Set as background" above switches the playlist
     // off, so this only ever re-applies the playlist itself.
-    if (autoApplyPlaylistWallpaper && m_playlist->isEnabled() && isPlaylistDrivingMedia()) {
+    if (autoApplyPlaylistWallpaper && m_library->activeId() > 0 && isPlaylistDrivingMedia()) {
         qInfo() << "[Playlist] New Windows session, playlist was the active wallpaper - re-applying it.";
         m_hasCurrentVideo = true;
         updateRemoveVideoButtonUi();
@@ -495,9 +477,9 @@ void MainWindow::buildUi() {
     m_playlistButton = new QToolButton(central);
     m_playlistButton->setObjectName(QStringLiteral("settingsButton"));
     m_playlistButton->setIcon(QIcon(playlistIconPath()));
-    m_playlistButton->setText(tr("Image Playlist"));
+    m_playlistButton->setText(tr("Playlists"));
     m_playlistButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_playlistButton->setToolTip(tr("Build an ordered set of images that change automatically"));
+    m_playlistButton->setToolTip(tr("Image and video playlists that change your wallpaper automatically"));
     m_playlistButton->setAutoRaise(true);
     connect(m_playlistButton, &QToolButton::clicked, this, &MainWindow::openPlaylist);
     header->addWidget(m_playlistButton);
@@ -656,7 +638,7 @@ void MainWindow::buildUi() {
 
     setCentralWidget(central);
 
-    m_playlistDialog = new PlaylistDialog(m_playlist, m_rotation, this);
+    m_playlistDialog = new PlaylistDialog(m_library, this);
     connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
 
     m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, this);
@@ -696,7 +678,7 @@ void MainWindow::buildTray() {
 
     menu->addSeparator();
     menu->addAction(QIcon(settingsIconPath()), tr("Settings"), this, &MainWindow::openSettings);
-    menu->addAction(QIcon(playlistIconPath()), tr("Image Playlist"), this, &MainWindow::openPlaylist);
+    menu->addAction(QIcon(playlistIconPath()), tr("Playlists"), this, &MainWindow::openPlaylist);
     menu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Media"), this, &MainWindow::onChooseVideo);
     menu->addAction(QIcon(removeWallpaperIconPath()), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
     menu->addSeparator();
@@ -742,7 +724,8 @@ void MainWindow::applyVideoInfoUi() {
         parts << tr("Web video");
     }
     if (isPlaylistDrivingMedia()) {
-        parts << tr("Image playlist %1 of %2").arg(m_playlist->currentIndex() + 1).arg(m_playlist->count());
+        const PlaylistModel* active = m_library->activePlaylist();
+        parts << tr("Playlist \"%1\" %2 of %3").arg(active->name()).arg(active->currentIndex() + 1).arg(active->count());
     }
     const QSize size = m_manager->player()->videoNativeSize();
     if (size.isValid() && !size.isEmpty()) {
@@ -813,7 +796,7 @@ void MainWindow::updateStatusUi() {
     }
     // Makes it obvious whether one image or the playlist is in use.
     if (isPlaylistDrivingMedia() && (m_uiState == WallpaperUiState::Ready || m_uiState == WallpaperUiState::Active)) {
-        text += tr("  •  Image playlist on");
+        text += tr("  •  Active playlist: %1").arg(m_library->activePlaylist()->name());
     }
     m_statusLabel->setText(QStringLiteral("●  ") + text);
     m_statusLabel->setStyleSheet(QStringLiteral("color: %1; font-weight: 600; padding: 2px 0;").arg(color));
@@ -1018,12 +1001,13 @@ bool MainWindow::isUsableVideoSource(const QString& source) {
 }
 
 void MainWindow::loadVideoSource(const QString& source, bool fromPlaylist) {
-    if (!fromPlaylist && m_playlist && m_playlist->isEnabled()) {
-        qInfo() << "[Playlist] Single media chosen explicitly - turning the image playlist off "
+    if (!fromPlaylist && m_library && m_library->activeId() > 0) {
+        qInfo() << "[Playlist] Single media chosen explicitly - deactivating the active playlist "
                     "(the playlist itself is kept).";
-        m_playlist->setEnabled(false);
+        m_library->setActive(0);
     }
     m_selectedVideoPath = source;
+    updatePlayerSequencing();
     m_settings.setVideoPath(source);
     // Open Video, drag & drop, and Paste Video URL all converge on this
     // one function - so this is the single place that can honestly say
@@ -1302,8 +1286,8 @@ void MainWindow::onRemoveVideo() {
     // Removing the current media while the playlist supplies it also turns
     // the playlist off - otherwise the next trigger would bring an image
     // straight back. The playlist itself is kept.
-    if (m_playlist->isEnabled()) {
-        m_playlist->setEnabled(false);
+    if (m_library->activeId() > 0) {
+        m_library->setActive(0);
     }
     const bool wallpaperWasOurs =
         m_uiState == WallpaperUiState::Active || m_uiState == WallpaperUiState::Applying;
@@ -1519,9 +1503,12 @@ void MainWindow::onExplorerFileReceived(const QString& path) {
 
 void MainWindow::onAddToPlaylistReceived(const QString& path) {
     qInfo() << "[Explorer] \"Add to Motiva playlist\":" << path;
-    // Untrusted command-line/IPC input: ImagePlaylist::addImages only
-    // accepts an existing file with a supported image extension.
-    m_playlistDialog->addFiles({path});
+    // Untrusted command-line/IPC input: PlaylistModel::addFiles only accepts
+    // an existing file of the playlist's media type. Never auto-activates.
+    const qint64 target = m_library->imagePlaylistForExplorerAdd();
+    if (target > 0) {
+        m_playlistDialog->addFilesTo(target, {path});
+    }
     openPlaylist();
 }
 
@@ -1536,20 +1523,30 @@ void MainWindow::openPlaylist() {
 }
 
 bool MainWindow::isPlaylistDrivingMedia() const {
-    return m_playlist && m_playlist->isEnabled() && !m_selectedVideoPath.isEmpty() &&
-        QDir::toNativeSeparators(m_selectedVideoPath).compare(m_playlist->currentPath(), Qt::CaseInsensitive) == 0;
+    const PlaylistModel* active = m_library ? m_library->activePlaylist() : nullptr;
+    return active && !m_selectedVideoPath.isEmpty() &&
+        QDir::toNativeSeparators(m_selectedVideoPath).compare(active->currentPath(), Qt::CaseInsensitive) == 0;
+}
+
+void MainWindow::updatePlayerSequencing() {
+    const PlaylistModel* active = m_library ? m_library->activePlaylist() : nullptr;
+    m_manager->player()->setSequencedPlayback(active && active->isVideo() && isPlaylistDrivingMedia());
 }
 
 void MainWindow::syncPlaylistDialogState() {
     if (m_playlistDialog) {
-        m_playlistDialog->setPlaylistOnDesktop(
+        m_playlistDialog->setActiveOnDesktop(
             isPlaylistDrivingMedia() &&
             (m_uiState == WallpaperUiState::Active || m_uiState == WallpaperUiState::Applying));
     }
 }
 
-void MainWindow::applyPlaylistImage() {
-    const QString path = m_playlist->currentPath();
+void MainWindow::applyPlaylistItem() {
+    PlaylistModel* active = m_library->activePlaylist();
+    if (!active) {
+        return;
+    }
+    const QString path = active->currentPath();
     if (path.isEmpty()) {
         return;
     }
@@ -1557,27 +1554,51 @@ void MainWindow::applyPlaylistImage() {
         // Missing file: move on to the next available one (that emits
         // currentChanged, which re-enters here). If none is available, keep
         // whatever is showing - never blank the wallpaper over it.
-        qInfo() << "[Playlist] Current image is missing:" << path;
-        m_playlist->refreshAvailability();
-        if (!m_playlist->advance()) {
-            qWarning() << "[Playlist] No available playlist image - keeping the current media.";
+        qInfo() << "[Playlist] Current item is missing:" << path;
+        active->refreshAvailability();
+        if (!active->advance(true)) {
+            qWarning() << "[Playlist] No available item in" << active->name() << "- keeping the current media.";
         }
         return;
     }
-    if (isPlaylistDrivingMedia() && m_manager->player()->isStaticImage()) {
-        return; // already showing exactly this image
+    const VideoPlayer::MediaKind kind = m_manager->player()->mediaKind();
+    const bool alreadyLoaded = isPlaylistDrivingMedia() &&
+        (active->isVideo() ? kind == VideoPlayer::MediaKind::Video : kind == VideoPlayer::MediaKind::StaticImage);
+    if (alreadyLoaded) {
+        updatePlayerSequencing(); // e.g. the same video was open as standalone media
+        return;
     }
-    qInfo() << "[Playlist] Presenting playlist image" << (m_playlist->currentIndex() + 1) << "of"
-            << m_playlist->count() << ":" << path;
+    qInfo() << "[Playlist] Presenting" << active->name() << "item" << (active->currentIndex() + 1) << "of"
+            << active->count() << ":" << path;
     loadVideoSource(path, /*fromPlaylist=*/true);
     syncPlaylistDialogState();
 }
 
-void MainWindow::onApplyPlaylistToDesktop() {
-    if (!m_playlist->isEnabled() && !m_playlist->setEnabled(true)) {
+void MainWindow::onPlayerEndOfMedia() {
+    PlaylistModel* active = m_library->activePlaylist();
+    if (!active || !active->isVideo() || !isPlaylistDrivingMedia()) {
+        return; // standalone media keeps its existing behavior
+    }
+    // The existing "Loop video" preference decides what happens after the
+    // last video: on -> start the playlist again from the first, off ->
+    // stop on the last video.
+    const bool loop = m_manager->player()->isLooping();
+    qInfo() << "[Playlist]" << active->name() << "- video" << (active->currentIndex() + 1) << "ended.";
+    if (active->advance(loop)) {
+        return; // currentChanged -> applyPlaylistItem loads the next video
+    }
+    if (loop) {
+        m_manager->player()->restartFromBeginning(); // only one available video
+    } else {
+        qInfo() << "[Playlist]" << active->name() << "- reached the last video (Loop video is off).";
+    }
+}
+
+void MainWindow::onApplyPlaylistToDesktop(qint64 playlistId) {
+    if (m_library->activeId() != playlistId && !m_library->setActive(playlistId)) {
         return; // nothing available - PlaylistDialog keeps its button disabled for this
     }
-    applyPlaylistImage();
+    applyPlaylistItem();
     if (!isPlaylistDrivingMedia()) {
         return;
     }

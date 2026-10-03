@@ -106,7 +106,11 @@ $stagedExe = Join-Path $stageDir "Motiva.exe"
 Copy-Item $realExe $stagedExe -Force
 
 Write-Host "Running windeployqt against a staged copy..."
-& $windeployqt --release --no-translations --no-system-d3d-compiler $stagedExe
+# Motiva's playlist library (.mtv) only uses SQLite (qsqlite, which has
+# SQLite compiled in). Linking Qt6Sql makes windeployqt add every SQL
+# driver; the client-server ones are excluded - they'd be dead weight.
+& $windeployqt --release --no-translations --no-system-d3d-compiler `
+    --exclude-plugins qsqlibase,qsqlmimer,qsqloci,qsqlodbc,qsqlpsql $stagedExe
 if ($LASTEXITCODE -ne 0) {
     throw "windeployqt failed with exit code $LASTEXITCODE"
 }

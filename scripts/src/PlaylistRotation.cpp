@@ -1,5 +1,6 @@
 #include "PlaylistRotation.h"
-#include "ImagePlaylist.h"
+#include "PlaylistLibrary.h"
+#include "PlaylistModel.h"
 #include "SettingsManager.h"
 
 #include <QCoreApplication>
@@ -13,22 +14,21 @@
 #define WTS_SESSION_UNLOCK 0x8
 #endif
 
-PlaylistRotation::PlaylistRotation(ImagePlaylist* playlist, SettingsManager* settings, QObject* parent)
-    : QObject(parent), m_playlist(playlist), m_settings(settings) {
-    m_rotateOnUnlock = m_settings->playlistRotateOnUnlock();
-    m_rotateOnWindowsStart = m_settings->playlistRotateOnWindowsStart();
-    m_rotateOnInterval = m_settings->playlistRotateOnInterval();
-    m_intervalMinutes = qBound(1, m_settings->playlistIntervalMinutes(), 24 * 60);
-
+PlaylistRotation::PlaylistRotation(PlaylistLibrary* library, SettingsManager* settings, QObject* parent)
+    : QObject(parent), m_library(library), m_settings(settings) {
     m_intervalTimer.setSingleShot(false);
     m_intervalTimer.setTimerType(Qt::VeryCoarseTimer); // minute-scale; no precision needed
     connect(&m_intervalTimer, &QTimer::timeout, this, [this]() { fire(Trigger::Interval); });
 
-    connect(m_playlist, &ImagePlaylist::enabledChanged, this, &PlaylistRotation::reconfigureTimer);
-    connect(m_playlist, &ImagePlaylist::contentsChanged, this, &PlaylistRotation::reconfigureTimer);
+    connect(m_library, &PlaylistLibrary::activeChanged, this, &PlaylistRotation::reconfigureTimer);
+    connect(m_library, &PlaylistLibrary::activeSettingsChanged, this, [this] {
+        m_intervalTimer.stop(); // a changed interval starts counting from now
+        reconfigureTimer();
+    });
+    connect(m_library, &PlaylistLibrary::playlistsChanged, this, &PlaylistRotation::reconfigureTimer);
     // Whatever changed the image (any trigger, Show now, removal), the new
     // image gets a full interval before the timer moves on from it.
-    connect(m_playlist, &ImagePlaylist::currentChanged, this, [this]() {
+    connect(m_library, &PlaylistLibrary::activeCurrentChanged, this, [this]() {
         if (m_intervalTimer.isActive()) {
             m_intervalTimer.start();
         }
@@ -88,7 +88,7 @@ bool PlaylistRotation::nativeEventFilter(const QByteArray& eventType, void* mess
         const bool wasLocked = m_lockObserved;
         m_lockObserved = false;
         qInfo() << "[Rotation] Session unlocked (lock observed=" << wasLocked << ").";
-        if (wasLocked && m_rotateOnUnlock) {
+        if (wasLocked) {
             fire(Trigger::LockUnlock);
         }
     }
@@ -96,11 +96,19 @@ bool PlaylistRotation::nativeEventFilter(const QByteArray& eventType, void* mess
 }
 
 bool PlaylistRotation::fire(Trigger trigger) {
-    if (!m_playlist->isEnabled()) {
+    PlaylistModel* active = m_library->activePlaylist();
+    if (!active || active->isVideo()) {
+        return false; // video playlists advance on end-of-video, not on these triggers
+    }
+    const RotationSettings r = active->rotation();
+    const bool enabled = (trigger == Trigger::LockUnlock && r.onUnlock) ||
+                         (trigger == Trigger::WindowsStart && r.onWindowsStart) ||
+                         (trigger == Trigger::Interval && r.onInterval);
+    if (!enabled) {
         return false;
     }
-    qInfo() << "[Rotation] Trigger fired:" << triggerName(trigger);
-    return m_playlist->advance();
+    qInfo() << "[Rotation] Trigger fired:" << triggerName(trigger) << "- playlist" << active->name();
+    return active->advance(true);
 }
 
 qint64 PlaylistRotation::currentWindowsSessionStamp() {
@@ -140,35 +148,9 @@ bool PlaylistRotation::consumeNewWindowsSession() {
     return isNew;
 }
 
-void PlaylistRotation::setRotateOnUnlock(bool enabled) {
-    m_rotateOnUnlock = enabled;
-    m_settings->setPlaylistRotateOnUnlock(enabled);
-}
-
-void PlaylistRotation::setRotateOnWindowsStart(bool enabled) {
-    m_rotateOnWindowsStart = enabled;
-    m_settings->setPlaylistRotateOnWindowsStart(enabled);
-}
-
-void PlaylistRotation::setRotateOnInterval(bool enabled) {
-    m_rotateOnInterval = enabled;
-    m_settings->setPlaylistRotateOnInterval(enabled);
-    reconfigureTimer();
-}
-
-void PlaylistRotation::setIntervalMinutes(int minutes) {
-    minutes = qBound(1, minutes, 24 * 60);
-    if (minutes == m_intervalMinutes) {
-        return;
-    }
-    m_intervalMinutes = minutes;
-    m_settings->setPlaylistIntervalMinutes(minutes);
-    m_intervalTimer.stop(); // new interval starts counting from now
-    reconfigureTimer();
-}
-
 void PlaylistRotation::reconfigureTimer() {
-    const bool shouldRun = m_rotateOnInterval && m_playlist->isEnabled() && m_playlist->count() > 1;
+    PlaylistModel* active = m_library->activePlaylist();
+    const bool shouldRun = active && !active->isVideo() && active->rotation().onInterval && active->count() > 1;
     if (!shouldRun) {
         if (m_intervalTimer.isActive()) {
             qInfo() << "[Rotation] Interval timer stopped.";
@@ -176,10 +158,11 @@ void PlaylistRotation::reconfigureTimer() {
         m_intervalTimer.stop();
         return;
     }
-    const int intervalMs = m_intervalMinutes * 60 * 1000;
+    const int minutes = qBound(1, active->rotation().intervalMinutes, 24 * 60);
+    const int intervalMs = minutes * 60 * 1000;
     if (m_intervalTimer.isActive() && m_intervalTimer.interval() == intervalMs) {
         return; // already counting toward the next change - don't reset it
     }
     m_intervalTimer.start(intervalMs);
-    qInfo() << "[Rotation] Interval timer running - every" << m_intervalMinutes << "minute(s).";
+    qInfo() << "[Rotation] Interval timer running - every" << minutes << "minute(s) for" << active->name();
 }
