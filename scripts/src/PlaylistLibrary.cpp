@@ -367,3 +367,45 @@ qint64 PlaylistLibrary::imagePlaylistForExplorerAdd() {
     }
     return createPlaylist(tr("Images"), PlaylistType::Image);
 }
+
+void PlaylistLibrary::closeForCleanup() {
+    emit aboutToReset();
+    const bool hadActive = m_activeId > 0;
+    qDeleteAll(m_models);
+    m_models.clear();
+    m_activeId = 0;
+    m_selectedId = 0;
+    m_list.beginResetModel();
+    m_list.m_rows.clear();
+    m_list.m_activeId = 0;
+    m_list.endResetModel();
+    m_db.close();
+    qInfo() << "[Library] Closed for Cleanup & Reset.";
+    if (hadActive) {
+        emit activeChanged(0);
+    }
+    emit playlistsChanged();
+}
+
+bool PlaylistLibrary::reopenAfterCleanup() {
+    m_openNotice.clear();
+    open();
+    emit resetFinished();
+    return m_db.isPersistent();
+}
+
+int PlaylistLibrary::clearThumbnailCache() {
+    int dropped = 0;
+    for (PlaylistModel* m : std::as_const(m_models)) {
+        dropped += m->clearThumbnailCache();
+    }
+    return dropped;
+}
+
+int PlaylistLibrary::cachedThumbnailCount() const {
+    int count = 0;
+    for (PlaylistModel* m : std::as_const(m_models)) {
+        count += m->m_thumbnails.size();
+    }
+    return count;
+}

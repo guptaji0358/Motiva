@@ -55,12 +55,35 @@ public:
     // --- startup{} diagnostics block (see StartupDiagnostics) ---
     void setStartupDiagnostics(const QJsonObject& diagnostics);
 
+    // The state file and its atomic-replace temp file (see save()) - the
+    // only files this class ever writes. Used by CleanupManager to size and
+    // remove recovery state without re-deriving these paths.
+    static QString stateFilePath();
+    static QString tempFilePath();
+
+    // Cleanup & Reset (see CleanupManager). Neither is a crash/recovery
+    // signal: previousSession() is only ever logged, never used to decide
+    // whether to re-attach anything, so a missing file just reads as
+    // "first run" on the next launch.
+    //
+    // resetHistory(): clears the accumulated history (Explorer-recovery
+    // counter, last failure, startup diagnostics, previous-session
+    // snapshot) and any stale temp file, keeping only this running
+    // session's own lastSession facts, then saves. Returns an error
+    // message, empty on success.
+    QString resetHistory();
+    // removeForFactoryReset(): deletes the state files and stops all
+    // further writes for the rest of this process (it is about to restart),
+    // so nothing re-creates the file that was just removed. Returns an
+    // error message, empty on success.
+    QString removeForFactoryReset();
+
 private:
-    QString statePath() const;
-    QString tempPath() const;
     void load();
     void save();
+    static QString removeIfPresent(const QString& path);
 
     QJsonObject m_root;
     PreviousSession m_previous;
+    bool m_writesSuspended = false;
 };

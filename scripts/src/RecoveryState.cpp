@@ -2,6 +2,7 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QDebug>
 #include <windows.h>
@@ -14,18 +15,16 @@ RecoveryState::RecoveryState() {
     load();
 }
 
-QString RecoveryState::statePath() const {
-    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dir);
-    return dir + "/recovery-state.json";
+QString RecoveryState::stateFilePath() {
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recovery-state.json";
 }
 
-QString RecoveryState::tempPath() const {
-    return statePath() + ".tmp";
+QString RecoveryState::tempFilePath() {
+    return stateFilePath() + ".tmp";
 }
 
 void RecoveryState::load() {
-    QFile f(statePath());
+    QFile f(stateFilePath());
     if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QJsonParseError err{};
         QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
@@ -97,17 +96,21 @@ void RecoveryState::load() {
 }
 
 void RecoveryState::save() {
-    QFile tmp(tempPath());
+    if (m_writesSuspended) {
+        return;
+    }
+    QDir().mkpath(QFileInfo(stateFilePath()).absolutePath());
+    QFile tmp(tempFilePath());
     if (!tmp.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        qWarning() << "[RecoveryState] Failed to open temp state file for writing:" << tempPath();
+        qWarning() << "[RecoveryState] Failed to open temp state file for writing:" << tempFilePath();
         return;
     }
     tmp.write(QJsonDocument(m_root).toJson(QJsonDocument::Indented));
     tmp.flush();
     tmp.close();
 
-    const std::wstring wTmp = QDir::toNativeSeparators(tempPath()).toStdWString();
-    const std::wstring wFinal = QDir::toNativeSeparators(statePath()).toStdWString();
+    const std::wstring wTmp = QDir::toNativeSeparators(tempFilePath()).toStdWString();
+    const std::wstring wFinal = QDir::toNativeSeparators(stateFilePath()).toStdWString();
     // Observed in testing: an occasional transient ERROR_ACCESS_DENIED on
     // the very first save of a fresh process (plausibly antivirus/indexing
     // briefly holding the destination open right after the previous
@@ -195,4 +198,46 @@ void RecoveryState::recordFailure(const QString& reason, qint64 hresult) {
 void RecoveryState::setStartupDiagnostics(const QJsonObject& diagnostics) {
     m_root["startup"] = diagnostics;
     save();
+}
+
+QString RecoveryState::removeIfPresent(const QString& path) {
+    QFile f(path);
+    if (!f.exists() || f.remove()) {
+        return QString();
+    }
+    return QStringLiteral("%1: %2").arg(QDir::toNativeSeparators(path), f.errorString());
+}
+
+QString RecoveryState::resetHistory() {
+    QJsonObject fresh;
+    fresh["schemaVersion"] = kSchemaVersion;
+    // lastSession describes THIS running process (live facts WallpaperManager
+    // keeps updating) - not history, so it is kept as-is.
+    fresh["lastSession"] = m_root.value("lastSession").toObject();
+    QJsonObject rec;
+    rec["explorerRecoveryCount"] = 0;
+    rec["lastFailure"] = QString();
+    rec["lastHRESULT"] = 0.0;
+    fresh["recovery"] = rec;
+    m_root = fresh;
+    m_previous = PreviousSession{};
+    const QString error = removeIfPresent(tempFilePath());
+    save();
+    qInfo() << "[RecoveryState] Recovery history reset by Cleanup & Reset.";
+    return error;
+}
+
+QString RecoveryState::removeForFactoryReset() {
+    m_writesSuspended = true;
+    m_root = QJsonObject();
+    m_previous = PreviousSession{};
+    QStringList errors;
+    for (const QString& path : {stateFilePath(), tempFilePath()}) {
+        const QString error = removeIfPresent(path);
+        if (!error.isEmpty()) {
+            errors << error;
+        }
+    }
+    qInfo() << "[RecoveryState] State files removed by Factory Reset; further writes suspended until restart.";
+    return errors.join(QLatin1Char('\n'));
 }

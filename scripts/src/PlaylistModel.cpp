@@ -116,6 +116,16 @@ void PlaylistModel::reloadFromDatabase() {
     emit contentsChanged();
 }
 
+int PlaylistModel::clearThumbnailCache() {
+    const int dropped = m_thumbnails.size() + m_noThumbnail.size();
+    m_thumbnails.clear();
+    m_noThumbnail.clear();
+    if (!m_items.isEmpty()) {
+        emit dataChanged(index(0), index(m_items.size() - 1), {ThumbnailRole, ThumbnailPendingRole});
+    }
+    return dropped;
+}
+
 qint64 PlaylistModel::mediaIdAt(int row) const {
     return (row >= 0 && row < m_items.size()) ? m_items[row].mediaId : 0;
 }

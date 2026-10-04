@@ -3,6 +3,8 @@
 #include "SettingsManager.h"
 #include "Theme.h"
 #include "ThemeTransitionOverlay.h"
+#include "CleanupManager.h"
+#include "CleanupSection.h"
 
 #include <QFormLayout>
 #include <QVBoxLayout>
@@ -18,8 +20,9 @@
 #include <QSizePolicy>
 #include <QTimer>
 
-SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* settings, QWidget* parent)
-    : QDialog(parent), m_manager(manager), m_settings(settings) {
+SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* settings, CleanupManager* cleanup,
+                               QWidget* parent)
+    : QDialog(parent), m_manager(manager), m_settings(settings), m_cleanup(cleanup) {
     setWindowTitle(tr("Settings"));
     m_transitionOverlay = new ThemeTransitionOverlay(this);
     // Embedded via resources/app.qrc (Assets/settings-icon/settings.svg)
@@ -56,8 +59,10 @@ SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* setti
     // ~760x380 range on this content, comfortably inside the requested
     // 720-800 x 360-450 range, and the dialog stays freely resizable
     // larger or smaller (down to this floor) afterward.
+    // Height: the Cleanup & Reset section below the two columns.
     setMinimumSize(860, 380);
-    resize(880, 400);
+    resize(880, 660);
+    connect(m_cleanup, &CleanupManager::preferencesChanged, this, &SettingsDialog::onPreferencesChangedExternally);
 }
 
 void SettingsDialog::buildUi() {
@@ -207,6 +212,9 @@ void SettingsDialog::buildUi() {
     columns->addWidget(leftPanel, 1);
     columns->addWidget(rightPanel, 1);
     root->addLayout(columns);
+
+    root->addSpacing(6);
+    root->addWidget(new CleanupSection(m_cleanup, this));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
@@ -363,6 +371,15 @@ void SettingsDialog::onThemeChanged(int index) {
         setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg")
                                  .arg(Theme::iconVariant(theme))));
     });
+}
+
+void SettingsDialog::onPreferencesChangedExternally() {
+    const Theme::AppTheme theme = m_settings->theme();
+    if (theme != Theme::currentTheme()) {
+        Theme::applyTheme(theme);
+        setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg").arg(Theme::iconVariant(theme))));
+    }
+    restoreFromSettings();
 }
 
 void SettingsDialog::requestThemeTransition(std::function<void()> applyFn) {

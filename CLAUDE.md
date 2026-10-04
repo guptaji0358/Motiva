@@ -2,6 +2,31 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-04, Settings → Cleanup & Reset)
+
+`CleanupManager` (`scripts/{include,src}/CleanupManager.*`) is the only code
+that deletes Motiva data; `CleanupSection` is its UI inside `SettingsDialog`.
+Levels: Delete Cache (log truncated in place, stale recovery `.tmp`,
+in-memory thumbnails - there is no on-disk thumbnail cache), Delete Data
+(library closed via `PlaylistLibrary::closeForCleanup()`, `.mtv` +
+`-journal` + `*.unreadable-*.mtv` removed, fresh library re-created via the
+normal schema path, saved media references cleared), Cache + Data, Factory
+Reset (also turns off Run key/Start Menu shortcut/Explorer verbs, clears
+all QSettings, `RecoveryState::removeForFactoryReset()` suspends writes,
+then restarts with `--after-reset`, which waits for the single-instance
+lock). "More…" only lists operations whose data exists. Deletion is
+exact-path only, inside approved roots, rmdir-only for folders.
+
+**Testing gotcha - Claude Desktop is an MSIX package**: any process launched
+from this tool session (including `build/Motiva.exe`) sees *virtualized*
+`%APPDATA%`/`%LOCALAPPDATA%`/HKCU - writes land in
+`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\...`, and deleting
+an overlay copy reveals the real file underneath. Earlier sessions' "verified"
+storage results were partly against that overlay. To test against real
+storage, launch outside the package via WMI
+(`Invoke-CimMethod Win32_Process -MethodName Create`), and back up / inspect
+real state the same way.
+
 ## Assets folder layout (2026-09-12e, reorganized by feature)
 
 `Assets/` is organized by feature/component, NOT by generic file-type

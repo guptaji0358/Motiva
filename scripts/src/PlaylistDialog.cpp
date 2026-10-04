@@ -487,6 +487,10 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     });
 
     connect(m_library, &PlaylistLibrary::playlistsChanged, this, &PlaylistDialog::updateUi);
+    // Cleanup & Reset closes the library and destroys every playlist model;
+    // let go of ours first, then bind to whatever the reopened library has.
+    connect(m_library, &PlaylistLibrary::aboutToReset, this, [this] { m_view->setPlaylist(nullptr); });
+    connect(m_library, &PlaylistLibrary::resetFinished, this, [this] { selectPlaylist(m_library->selectedId()); });
     connect(m_library, &PlaylistLibrary::activeChanged, this, [this] { bindSelectedPlaylist(); });
     connect(m_library, &PlaylistLibrary::activeCurrentChanged, this, &PlaylistDialog::updateUi);
     connect(m_library, &PlaylistLibrary::errorOccurred, this, [this](const QString& message) {

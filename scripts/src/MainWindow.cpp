@@ -9,6 +9,7 @@
 #include "PlaylistModel.h"
 #include "PlaylistRotation.h"
 #include "PlaylistDialog.h"
+#include "CleanupManager.h"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -41,6 +42,7 @@
 #include <QMediaFormat>
 #include <QMimeType>
 #include <QSet>
+#include <QProcess>
 
 namespace {
 // Embedded via resources/app.qrc - loading via the Qt resource path keeps
@@ -202,6 +204,11 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     m_library = new PlaylistLibrary(&m_settings, this);
     m_library->open();
     m_rotation = new PlaylistRotation(m_library, &m_settings, this);
+    // Cleanup & Reset (Settings). Built before the UI so SettingsDialog can
+    // bind to it; it reaches the wallpaper only through these two hooks.
+    m_cleanup = new CleanupManager(&m_settings, &m_recoveryState, m_library, this);
+    connect(m_cleanup, &CleanupManager::releaseMediaRequested, this, &MainWindow::releaseMediaForCleanup);
+    connect(m_cleanup, &CleanupManager::restartRequested, this, &MainWindow::restartAfterFactoryReset);
 
     buildUi();
     buildTray();
@@ -641,7 +648,7 @@ void MainWindow::buildUi() {
     m_playlistDialog = new PlaylistDialog(m_library, this);
     connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
 
-    m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, this);
+    m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, this);
     connect(m_settingsDialog, &SettingsDialog::mutedChanged, this, [this](bool muted) {
         if (m_trayMuteAction) {
             m_trayMuteAction->blockSignals(true);
@@ -1606,6 +1613,51 @@ void MainWindow::onApplyPlaylistToDesktop(qint64 playlistId) {
         onSetWallpaper();
     }
     syncPlaylistDialogState();
+}
+
+void MainWindow::releaseMediaForCleanup() {
+    // Cleanup & Reset is about to remove the library and saved media
+    // references: detach Motiva's wallpaper through the normal
+    // WallpaperManager path (tears down the render windows - no orphaned
+    // HWND, no D3D/DirectComposition code here) and unload the player, so
+    // nothing still points at data that is about to disappear. The media
+    // files themselves are never touched.
+    qInfo() << "[Cleanup] Releasing wallpaper and current media before cleanup.";
+    m_manager->removeWallpaper();
+    m_settings.setWasWallpaperActive(false);
+    m_selectedVideoPath.clear();
+    m_hasCurrentVideo = false;
+    m_manager->player()->unload();
+    updateRemoveVideoButtonUi();
+    updatePlayPauseAvailability();
+    applyVideoInfoUi();
+    m_previewLabel->clear();
+    refreshDropZoneVisual();
+    setUiState(WallpaperUiState::NoVideo);
+}
+
+void MainWindow::restartAfterFactoryReset() {
+    // Everything on disk is back to fresh-install state; restarting rebuilds
+    // every in-memory object (theme, dialogs, library, recovery state) from
+    // it rather than patching each one in place. Deliberately NOT
+    // onExitRequested(): that writes settings/recovery state back, which
+    // would re-create part of what Factory Reset just removed.
+    qInfo() << "[Cleanup] Factory Reset complete - restarting Motiva.";
+    if (m_manager) {
+        m_manager->removeWallpaper(); // already released; idempotent
+    }
+    if (m_tray) {
+        m_tray->hide();
+    }
+    // --after-reset: the new process waits for this one to release the
+    // single-instance lock instead of handing off to it (see main.cpp).
+    // Same executable and inherited environment as this process, so a
+    // deployed install still finds its DLLs.
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--after-reset")})) {
+        QMessageBox::information(this, tr("Motiva"),
+                                 tr("Motiva has been reset. Please start Motiva again."));
+    }
+    qApp->quit();
 }
 
 void MainWindow::onExitRequested() {

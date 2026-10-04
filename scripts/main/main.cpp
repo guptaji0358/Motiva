@@ -101,6 +101,7 @@ int main(int argc, char* argv[]) {
     // instance ends up handling it (this one, directly, vs. an existing
     // one via IPC) depends on the very next check.
     bool startMinimized = false;
+    bool afterReset = false;
     QString explorerSelectedFile;
     QString explorerPlaylistFile;
     // QCoreApplication::arguments() (rather than a raw argv scan) handles
@@ -112,6 +113,8 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < args.size(); ++i) {
         if (args[i] == QLatin1String("--autostart")) {
             startMinimized = true;
+        } else if (args[i] == QLatin1String("--after-reset")) {
+            afterReset = true;
         } else if (args[i] == QLatin1String("--set-background") && i + 1 < args.size()) {
             explorerSelectedFile = args[++i];
         } else if (args[i] == QLatin1String("--add-to-playlist") && i + 1 < args.size()) {
@@ -123,7 +126,15 @@ int main(int argc, char* argv[]) {
     // the desktop (fighting over z-order every health-check tick), so only
     // ever allow one to run at a time.
     QSharedMemory singleInstanceLock("Motiva-SingleInstanceLock");
-    if (!singleInstanceLock.create(1)) {
+    bool ownsLock = singleInstanceLock.create(1);
+    // Relaunched by Factory Reset (MainWindow::restartAfterFactoryReset):
+    // the previous process is still shutting down and holds the lock for a
+    // moment - wait for it (bounded) instead of handing off to it via IPC.
+    for (int attempt = 0; afterReset && !ownsLock && attempt < 100; ++attempt) {
+        Sleep(100);
+        ownsLock = singleInstanceLock.create(1);
+    }
+    if (!ownsLock) {
         // Another instance is already running. Instead of silently exiting
         // (which previously left the user no way to recover a stuck
         // instance short of End Task), ask it to recover/activate itself

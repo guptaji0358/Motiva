@@ -21,6 +21,7 @@ class SettingsDialog;
 class PlaylistLibrary;
 class PlaylistRotation;
 class PlaylistDialog;
+class CleanupManager;
 class ThemeTransitionOverlay;
 class QDragEnterEvent;
 class QDragMoveEvent;
@@ -127,6 +128,10 @@ private slots:
     // A video finished (VideoPlayer::endOfMedia). Advances an active video
     // playlist; does nothing for standalone media.
     void onPlayerEndOfMedia();
+    // Cleanup & Reset hooks (see CleanupManager): release the wallpaper and
+    // current media before data is removed; restart after a Factory Reset.
+    void releaseMediaForCleanup();
+    void restartAfterFactoryReset();
 
 private:
     void buildUi();
@@ -213,6 +218,7 @@ private:
     PlaylistRotation* m_rotation = nullptr;
     PlaylistDialog* m_playlistDialog = nullptr;
     SettingsDialog* m_settingsDialog = nullptr;
+    CleanupManager* m_cleanup = nullptr;
     // Mirrors SettingsDialog's own overlay whenever a theme transition it
     // starts also restyles MainWindow (see its themeTransitionStarted/
     // Finished signals) - both top-level windows repaint from the same

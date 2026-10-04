@@ -73,6 +73,11 @@ public:
     // database, so nothing about the playlist itself changes.
     void reloadFromDatabase();
 
+    // Drops the in-memory preview thumbnails (Cleanup & Reset's "Delete
+    // Cache"); cards re-request them lazily the next time they paint.
+    // Returns how many cached previews were dropped.
+    int clearThumbnailCache();
+
     // Whether `path` is a supported, existing file for this playlist's type.
     bool acceptsFile(const QString& path) const;
     static bool isImageFile(const QString& path);

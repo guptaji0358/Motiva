@@ -244,3 +244,40 @@ qint64 SettingsManager::lastWindowsSessionStamp() const {
 void SettingsManager::setLastWindowsSessionStamp(qint64 stamp) {
     m_settings.setValue("playlist/lastWindowsSessionStamp", stamp);
 }
+
+bool SettingsManager::hasWindowsIntegration() const {
+    return startWithWindows() || showInWindowsSearch() || explorerIntegrationEnabled();
+}
+
+void SettingsManager::disableWindowsIntegration() {
+    // Called unconditionally (not only when the flag reads true): each
+    // setter's "off" branch is idempotent, and this also removes an entry
+    // left behind by an install whose flag was lost.
+    setStartWithWindows(false);
+    setShowInWindowsSearch(false);
+    setExplorerIntegrationEnabled(false);
+}
+
+void SettingsManager::clearDataReferences() {
+    m_settings.remove(QStringLiteral("video/path"));
+    m_settings.remove(QStringLiteral("app/wasWallpaperActive"));
+    clearLegacyPlaylistSettings();
+    m_settings.sync();
+}
+
+void SettingsManager::resetPreferences() {
+    disableWindowsIntegration();
+    for (const char* key : {"video/volume", "video/muted", "video/loop", "video/scalingMode",
+                            "display/monitorSelection", "display/specificMonitorIndex", "app/startWithWindows",
+                            "app/showVideoOnBattery", "app/showInWindowsSearch", "app/explorerIntegrationEnabled",
+                            "app/theme", "app/uiStyle", "app/appearance"}) {
+        m_settings.remove(QLatin1String(key));
+    }
+    m_settings.sync();
+}
+
+void SettingsManager::resetAll() {
+    disableWindowsIntegration();
+    m_settings.clear();
+    m_settings.sync();
+}

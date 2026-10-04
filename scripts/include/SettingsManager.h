@@ -92,6 +92,31 @@ public:
     qint64 lastWindowsSessionStamp() const;
     void setLastWindowsSessionStamp(qint64 stamp);
 
+    // --- Cleanup & Reset (see CleanupManager) ---
+    // All of these go through this one QSettings instance - Motiva's only
+    // settings store (HKCU\Software\Motiva\Motiva) - never raw registry
+    // deletes, and never anything outside Motiva's own keys besides the
+    // integration entries the setters below already own.
+
+    // True if any Windows integration this app installs is switched on
+    // (Start with Windows, Start Menu shortcut, Explorer verbs).
+    bool hasWindowsIntegration() const;
+    // Switches all three off through their own setters, so the Run value,
+    // Start Menu shortcut and Explorer verbs are actually removed.
+    void disableWindowsIntegration();
+    // "Delete Data": removes saved media references (the current media
+    // path, the wallpaper-was-active flag, legacy v1.1 playlist keys).
+    // Preferences (theme, volume, scaling...) are untouched.
+    void clearDataReferences();
+    // "Reset preferences": Windows integration off, then every user
+    // preference back to its default. Saved media references and app
+    // state (session stamp) are untouched.
+    void resetPreferences();
+    // "Factory Reset": Windows integration off, then every Motiva setting
+    // removed - the next read of any key returns its built-in default,
+    // exactly like a fresh install.
+    void resetAll();
+
 private:
     QSettings m_settings;
 };

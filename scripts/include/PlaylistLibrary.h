@@ -87,6 +87,24 @@ public:
     int importLibrary(const QString& path);
     QString lastError() const { return m_db.lastError(); }
 
+    // --- Cleanup & Reset (see CleanupManager) ---
+    // Closes the library through LibraryDatabase's own lifecycle so its
+    // files can be removed safely: emits aboutToReset() (views drop their
+    // playlist models), destroys every playlist model, empties the list
+    // and closes the SQLite connection. The active playlist is cleared
+    // locally only - nothing is written to the file that is about to go.
+    void closeForCleanup();
+    // Re-opens the default library after cleanup (creating a fresh, empty
+    // one with the normal schema initialization if the file was removed)
+    // and emits resetFinished(). Returns false if the library could only
+    // be opened in memory (see openNotice()).
+    bool reopenAfterCleanup();
+    // Drops every open playlist's in-memory preview thumbnails. Returns
+    // how many cached previews were dropped.
+    int clearThumbnailCache();
+    // Number of preview thumbnails currently held in memory.
+    int cachedThumbnailCount() const;
+
     // The image playlist Explorer's "Add to Motiva playlist" should add to:
     // the selected or active image playlist, else the first one, else a new
     // "Images" playlist.
@@ -100,6 +118,10 @@ signals:
     void activeSettingsChanged();
     void playlistsChanged();
     void errorOccurred(const QString& message);
+    // Around closeForCleanup()/reopenAfterCleanup(): every PlaylistModel*
+    // handed out before aboutToReset() is destroyed right after it.
+    void aboutToReset();
+    void resetFinished();
 
 private:
     void reloadList();

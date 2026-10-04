@@ -69,6 +69,10 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/PlaylistRotation.h
     scripts/src/PlaylistDialog.cpp
     scripts/include/PlaylistDialog.h
+    scripts/src/CleanupManager.cpp
+    scripts/include/CleanupManager.h
+    scripts/src/CleanupSection.cpp
+    scripts/include/CleanupSection.h
     scripts/include/WindowsShellIntegration.h
 )
 

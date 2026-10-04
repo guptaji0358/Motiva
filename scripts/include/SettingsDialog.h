@@ -9,6 +9,7 @@ class QCheckBox;
 class WallpaperManager;
 class SettingsManager;
 class ThemeTransitionOverlay;
+class CleanupManager;
 
 // Houses the settings users rarely change (scaling, monitor selection,
 // volume, mute, loop, start-with-Windows) separately from the main
@@ -18,7 +19,9 @@ class ThemeTransitionOverlay;
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit SettingsDialog(WallpaperManager* manager, SettingsManager* settings, QWidget* parent = nullptr);
+    // cleanup: drives the "Cleanup & Reset" section (see CleanupSection).
+    SettingsDialog(WallpaperManager* manager, SettingsManager* settings, CleanupManager* cleanup,
+                   QWidget* parent = nullptr);
 
     // Applies the persisted values from SettingsManager to both the UI
     // controls here and the live WallpaperManager - call once at startup,
@@ -76,9 +79,13 @@ private:
     // - only the latest selection ends up applied and persisted.
     void requestThemeTransition(std::function<void()> applyFn);
     void runPendingThemeApply();
+    // Cleanup & Reset changed preferences underneath this dialog: applies
+    // the (possibly default) theme and re-reads every control.
+    void onPreferencesChangedExternally();
 
     WallpaperManager* m_manager;
     SettingsManager* m_settings;
+    CleanupManager* m_cleanup;
 
     ThemeTransitionOverlay* m_transitionOverlay = nullptr;
     bool m_themeTransitionActive = false;
