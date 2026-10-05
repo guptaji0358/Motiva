@@ -2,10 +2,15 @@
 
 #include <QDialog>
 #include <QListView>
+#include <QSet>
 #include <QStringList>
 
 class PlaylistLibrary;
 class PlaylistModel;
+class PlaylistTreeModel;
+class QLineEdit;
+class QTimer;
+class QTreeView;
 class QCheckBox;
 class QComboBox;
 class QFrame;
@@ -70,6 +75,14 @@ public:
     // the desktop right now, so the apply button never claims otherwise.
     void setActiveOnDesktop(bool onDesktop);
 
+    // "New Image Playlist" (Ctrl+Alt+N) / "New Video Playlist"
+    // (Ctrl+Shift+N): the normal name-then-create flow, no type menu first.
+    // Also used by MainWindow's copies of the same shortcuts.
+    void createPlaylist(bool video);
+    // True while a text field has keyboard focus - shortcuts then leave the
+    // keys to normal text editing.
+    static bool isTextInputFocused();
+
 signals:
     // "Set as Wallpaper": MainWindow activates the playlist and applies its
     // current item through the normal Set as Wallpaper path.
@@ -77,7 +90,7 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
-    // Delete / D on the My Playlists list (only while the list itself has
+    // Delete / D on the playlist tree (only while the tree itself has
     // focus - an inline rename editor or any text field keeps its keys).
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -92,6 +105,14 @@ private:
     void startInlineRename();
     void onDeletePlaylist();
     void showPlaylistMenu(const QPoint& pos);
+    // --- playlist categories (organize playlists; never hold media) ---
+    QModelIndex selectedTreeIndex() const;
+    qint64 selectedPlaylistId() const;
+    qint64 selectedCategoryId() const;
+    void onBuildCategory(qint64 categoryId, const QList<qint64>& preselected = {});
+    void onDeleteCategory(qint64 categoryId);
+    void saveTreeState();
+    void restoreTreeState();
     void showItemMenu(const QPoint& pos);
     // "Find File" for a missing item (see MediaRecoveryDialog).
     void onFindFile(int row);
@@ -119,8 +140,18 @@ private:
     bool m_onDesktop = false;
     bool m_binding = false;
 
-    QListView* m_playlistList = nullptr;
-    QPushButton* m_newButton = nullptr;
+    QTreeView* m_tree = nullptr;
+    PlaylistTreeModel* m_treeModel = nullptr;
+    QLineEdit* m_searchEdit = nullptr;
+    QTimer* m_searchTimer = nullptr;
+    // Collapsed categories survive tree rebuilds (session only).
+    QSet<qint64> m_collapsedCategories;
+    // Selection remembered across a tree rebuild: node kind, id, and the
+    // category a playlist node sat under.
+    int m_savedKind = 0;
+    qint64 m_savedId = 0;
+    qint64 m_savedParentCategory = -1;
+    bool m_restoringTree = false;
 
     QStackedWidget* m_editorStack = nullptr;
     QLabel* m_emptyLabel = nullptr;

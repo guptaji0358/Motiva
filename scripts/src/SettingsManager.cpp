@@ -172,15 +172,24 @@ bool SettingsManager::explorerIntegrationEnabled() const {
 }
 void SettingsManager::setExplorerIntegrationEnabled(bool enabled) {
     m_settings.setValue("app/explorerIntegrationEnabled", enabled);
-    const QStringList extensions = MainWindow::explorerIntegrationExtensions();
-    const QStringList imageExtensions = VideoPlayer::supportedStaticImageExtensions().values();
-    if (enabled) {
-        WindowsShellIntegration::RegisterSetBackgroundVerb(motivaExecutablePath(), extensions);
-        WindowsShellIntegration::RegisterAddToPlaylistVerb(motivaExecutablePath(), imageExtensions);
-    } else {
-        WindowsShellIntegration::UnregisterSetBackgroundVerb(extensions);
-        WindowsShellIntegration::UnregisterAddToPlaylistVerb(imageExtensions);
+    if (!enabled) {
+        WindowsShellIntegration::UnregisterExplorerMenu();
+        return;
     }
+    // Every extension Explorer gets the menu for, grouped by which playlist
+    // type can hold it (PlaylistModel::isVideoFile/isImageFile); anything
+    // else (GIF) only gets "Set as background".
+    QStringList videos, images, backgroundOnly;
+    for (const QString& ext : MainWindow::explorerIntegrationExtensions()) {
+        if (VideoPlayer::supportedVideoExtensions().contains(ext)) {
+            videos << ext;
+        } else if (VideoPlayer::supportedStaticImageExtensions().contains(ext)) {
+            images << ext;
+        } else {
+            backgroundOnly << ext;
+        }
+    }
+    WindowsShellIntegration::RegisterExplorerMenu(motivaExecutablePath(), videos, images, backgroundOnly);
 }
 
 Theme::AppTheme SettingsManager::theme() const {

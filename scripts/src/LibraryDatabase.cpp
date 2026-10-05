@@ -192,6 +192,10 @@ LibraryDatabase::OpenResult LibraryDatabase::open(const QString& path) {
         QSqlQuery qc(db());
         const bool readable = qc.exec(QStringLiteral("PRAGMA quick_check")) && qc.next() &&
                               qc.value(0).toString() == QLatin1String("ok");
+        const QString readError = qc.lastError().isValid() ? qc.lastError().text() : QString();
+        // Finish the statement now: an active one blocks schema changes
+        // (a migration's DROP TABLE fails with "database table is locked").
+        qc.finish();
         const int appId = queryInt(QStringLiteral("PRAGMA application_id"), -1);
         const int version = queryInt(QStringLiteral("PRAGMA user_version"), -1);
         const bool foreignSqlite = existed && readable && appId != 0 && appId != kApplicationId;
@@ -213,7 +217,7 @@ LibraryDatabase::OpenResult LibraryDatabase::open(const QString& path) {
         } else if (!readable) {
             fail(QStringLiteral("%1 is damaged or is not a Motiva library (%2).")
                      .arg(QDir::toNativeSeparators(path),
-                          qc.lastError().isValid() ? qc.lastError().text() : QStringLiteral("integrity check failed")));
+                          !readError.isEmpty() ? readError : QStringLiteral("integrity check failed")));
         } else {
             fail(QStringLiteral("%1 is a SQLite database but not a Motiva library.").arg(QDir::toNativeSeparators(path)));
         }
@@ -249,7 +253,7 @@ LibraryDatabase::OpenResult LibraryDatabase::open(const QString& path) {
 }
 
 bool LibraryDatabase::initializeOrMigrate(bool freshFile) {
-    const int version = queryInt(QStringLiteral("PRAGMA user_version"), 0);
+    int version = queryInt(QStringLiteral("PRAGMA user_version"), 0);
     if (version == kSchemaVersion) {
         return true;
     }
@@ -259,11 +263,18 @@ bool LibraryDatabase::initializeOrMigrate(bool freshFile) {
         if (!freshFile && queryInt(QStringLiteral("SELECT count(*) FROM sqlite_master"), 0) > 0) {
             return fail(QStringLiteral("Unrecognized library contents (no schema version)."));
         }
-        return createSchemaV1();
+        if (!createSchemaV1()) {
+            return false;
+        }
+        version = 1;
     }
-    // Future migrations go here, one step per version inside its own
-    // transaction, e.g.:
-    //   if (version < 2 && !migrateV1toV2()) return false;
+    // One step per version, each inside its own transaction.
+    if (version == 1) {
+        return migrateV1toV3();
+    }
+    if (version == 2) {
+        return migrateV2toV3();
+    }
     return fail(QStringLiteral("No migration path from library schema %1.").arg(version));
 }
 
@@ -323,7 +334,7 @@ bool LibraryDatabase::createSchemaV1() {
     meta.prepare(QStringLiteral("INSERT INTO library_metadata(key, value) VALUES (?, ?)"));
     const QString now = nowIso();
     const QList<QPair<QString, QString>> rows = {
-        {QStringLiteral("schema_version"), QString::number(kSchemaVersion)},
+        {QStringLiteral("schema_version"), QStringLiteral("1")},
         {QStringLiteral("created_at"), now},
         {QStringLiteral("updated_at"), now},
         {QStringLiteral("format"), QStringLiteral("Motiva playlist library (.mtv, SQLite)")},
@@ -336,7 +347,7 @@ bool LibraryDatabase::createSchemaV1() {
         }
     }
     if (!q.exec(QStringLiteral("PRAGMA application_id = %1").arg(kApplicationId)) ||
-        !q.exec(QStringLiteral("PRAGMA user_version = %1").arg(kSchemaVersion))) {
+        !q.exec(QStringLiteral("PRAGMA user_version = 1"))) {
         return fail(QStringLiteral("Cannot stamp schema version: %1").arg(q.lastError().text()));
     }
     if (!tx.commit()) {
@@ -788,6 +799,292 @@ qint64 LibraryDatabase::relocateMedia(qint64 mediaId, const QString& newPath) {
     }
     qInfo() << "[Library] Media" << mediaId << "relocated to" << native << (existing ? "(merged)" : "");
     return result;
+}
+
+bool LibraryDatabase::createCategoryTables(QSqlQuery& q) {
+    // Categories only reference playlists (playlists/playlist_items/media
+    // stay the source of truth). Deleting either side removes just the link.
+    const QStringList statements = {
+        QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS categories ("
+            "  id          INTEGER PRIMARY KEY,"
+            "  name        TEXT NOT NULL,"
+            "  position    INTEGER NOT NULL,"
+            "  created_at  TEXT NOT NULL,"
+            "  updated_at  TEXT NOT NULL)"),
+        QStringLiteral(
+            "CREATE TABLE category_playlists ("
+            "  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,"
+            "  playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,"
+            "  added_at    TEXT NOT NULL,"
+            "  PRIMARY KEY (category_id, playlist_id))"),
+        QStringLiteral("CREATE INDEX idx_category_playlists_playlist ON category_playlists(playlist_id)"),
+    };
+    for (const QString& sql : statements) {
+        if (!q.exec(sql)) {
+            return fail(QStringLiteral("Library upgrade failed: %1").arg(q.lastError().text()));
+        }
+    }
+    return true;
+}
+
+bool LibraryDatabase::migrateV1toV3() {
+    Transaction tx(db());
+    QSqlQuery q(db());
+    if (!tx.started() || !createCategoryTables(q) ||
+        !q.exec(QStringLiteral("UPDATE library_metadata SET value = '3' WHERE key = 'schema_version'")) ||
+        !q.exec(QStringLiteral("PRAGMA user_version = 3"))) {
+        return fail(QStringLiteral("Library upgrade to schema 3 failed: %1").arg(q.lastError().text()));
+    }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
+    }
+    qInfo() << "[Library] Upgraded library schema 1 -> 3 (playlist categories).";
+    return true;
+}
+
+// Schema 2 (an unreleased development build) grouped MEDIA into categories
+// (category_items). Nothing is lost moving to playlist categories: each
+// such category's media becomes a real playlist of the same name (split
+// into images/videos if mixed - a playlist has one type), filed under that
+// same category. Then the media-membership table goes.
+bool LibraryDatabase::migrateV2toV3() {
+    Transaction tx(db());
+    QSqlQuery q(db());
+    if (!tx.started() || !createCategoryTables(q)) {
+        return fail(QStringLiteral("Library upgrade to schema 3 failed: %1").arg(q.lastError().text()));
+    }
+    const QString now = nowIso();
+    QVector<QPair<qint64, QString>> oldCategories;
+    if (!q.exec(QStringLiteral("SELECT id, name FROM categories ORDER BY position, id"))) {
+        return fail(QStringLiteral("Library upgrade failed: %1").arg(q.lastError().text()));
+    }
+    while (q.next()) {
+        oldCategories.push_back({q.value(0).toLongLong(), q.value(1).toString()});
+    }
+    int converted = 0;
+    for (const auto& category : oldCategories) {
+        QSqlQuery members(db());
+        members.prepare(QStringLiteral("SELECT m.id, m.type FROM category_items ci JOIN media m ON m.id = ci.media_id"
+                                       " WHERE ci.category_id = ? ORDER BY ci.position, ci.media_id"));
+        members.addBindValue(category.first);
+        if (!check(members, "upgrade (category media)")) {
+            return false;
+        }
+        QVector<qint64> images, videos;
+        while (members.next()) {
+            (members.value(1).toString() == QLatin1String("video") ? videos : images) << members.value(0).toLongLong();
+        }
+        members.finish();
+        for (const bool video : {false, true}) {
+            const QVector<qint64>& ids = video ? videos : images;
+            if (ids.isEmpty()) {
+                continue;
+            }
+            QString name = category.second;
+            if (!images.isEmpty() && !videos.isEmpty()) {
+                name += video ? QStringLiteral(" (Videos)") : QStringLiteral(" (Images)");
+            }
+            QSqlQuery pl(db());
+            pl.prepare(QStringLiteral("INSERT INTO playlists(name, type, position, created_at, updated_at)"
+                                      " VALUES (?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM playlists), ?, ?)"));
+            pl.addBindValue(uniquePlaylistName(name));
+            pl.addBindValue(video ? QStringLiteral("video") : QStringLiteral("image"));
+            pl.addBindValue(now);
+            pl.addBindValue(now);
+            if (!check(pl, "upgrade (playlist)")) {
+                return false;
+            }
+            const qint64 playlistId = pl.lastInsertId().toLongLong();
+            QSqlQuery item(db());
+            item.prepare(QStringLiteral("INSERT INTO playlist_items(playlist_id, media_id, position, added_at) VALUES (?, ?, ?, ?)"));
+            for (int i = 0; i < ids.size(); ++i) {
+                item.addBindValue(playlistId);
+                item.addBindValue(ids[i]);
+                item.addBindValue(i);
+                item.addBindValue(now);
+                if (!check(item, "upgrade (playlist item)")) {
+                    return false;
+                }
+            }
+            QSqlQuery link(db());
+            link.prepare(QStringLiteral("INSERT INTO category_playlists(category_id, playlist_id, added_at) VALUES (?, ?, ?)"));
+            link.addBindValue(category.first);
+            link.addBindValue(playlistId);
+            link.addBindValue(now);
+            if (!check(link, "upgrade (link)")) {
+                return false;
+            }
+            ++converted;
+        }
+    }
+    if (!q.exec(QStringLiteral("DROP TABLE IF EXISTS category_items")) ||
+        !q.exec(QStringLiteral("UPDATE library_metadata SET value = '3' WHERE key = 'schema_version'")) ||
+        !q.exec(QStringLiteral("PRAGMA user_version = 3"))) {
+        return fail(QStringLiteral("Library upgrade to schema 3 failed: %1").arg(q.lastError().text()));
+    }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
+    }
+    qInfo() << "[Library] Upgraded library schema 2 -> 3:" << oldCategories.size() << "category(ies) kept,"
+            << converted << "media group(s) converted to playlists inside them.";
+    return true;
+}
+
+QVector<CategoryInfo> LibraryDatabase::categories() {
+    QVector<CategoryInfo> result;
+    QSqlQuery q(db());
+    if (!q.exec(QStringLiteral("SELECT id, name FROM categories ORDER BY position, id"))) {
+        fail(QStringLiteral("Reading categories failed: %1").arg(q.lastError().text()));
+        return result;
+    }
+    while (q.next()) {
+        result.push_back({q.value(0).toLongLong(), q.value(1).toString()});
+    }
+    return result;
+}
+
+QVector<QPair<qint64, qint64>> LibraryDatabase::categoryLinks() {
+    QVector<QPair<qint64, qint64>> result;
+    QSqlQuery q(db());
+    if (!q.exec(QStringLiteral("SELECT category_id, playlist_id FROM category_playlists"))) {
+        fail(QStringLiteral("Reading categories failed: %1").arg(q.lastError().text()));
+        return result;
+    }
+    while (q.next()) {
+        result.push_back({q.value(0).toLongLong(), q.value(1).toLongLong()});
+    }
+    return result;
+}
+
+QString LibraryDatabase::uniqueCategoryName(const QString& wanted) {
+    const QString base = wanted.trimmed().isEmpty() ? QStringLiteral("Category") : wanted.trimmed();
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT count(*) FROM categories WHERE name = ? COLLATE NOCASE"));
+    QString candidate = base;
+    for (int n = 2;; ++n) {
+        q.addBindValue(candidate);
+        if (!q.exec() || !q.next() || q.value(0).toInt() == 0) {
+            return candidate;
+        }
+        q.finish();
+        candidate = QStringLiteral("%1 (%2)").arg(base).arg(n);
+    }
+}
+
+qint64 LibraryDatabase::createCategory(const QString& name) {
+    const QString now = nowIso();
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("INSERT INTO categories(name, position, created_at, updated_at)"
+                             " VALUES (?, (SELECT COALESCE(MAX(position), -1) + 1 FROM categories), ?, ?)"));
+    q.addBindValue(uniqueCategoryName(name));
+    q.addBindValue(now);
+    q.addBindValue(now);
+    if (!check(q, "createCategory")) {
+        return 0;
+    }
+    touch();
+    return q.lastInsertId().toLongLong();
+}
+
+bool LibraryDatabase::renameCategory(qint64 id, const QString& name) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("UPDATE categories SET name = ?, updated_at = ? WHERE id = ?"));
+    q.addBindValue(name.trimmed());
+    q.addBindValue(nowIso());
+    q.addBindValue(id);
+    if (!check(q, "renameCategory")) {
+        return false;
+    }
+    touch();
+    return true;
+}
+
+bool LibraryDatabase::deleteCategory(qint64 id) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("DELETE FROM categories WHERE id = ?")); // links cascade; playlists untouched
+    q.addBindValue(id);
+    if (!check(q, "deleteCategory")) {
+        return false;
+    }
+    touch();
+    return true;
+}
+
+bool LibraryDatabase::addPlaylistToCategory(qint64 categoryId, qint64 playlistId) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("INSERT OR IGNORE INTO category_playlists(category_id, playlist_id, added_at) VALUES (?, ?, ?)"));
+    q.addBindValue(categoryId);
+    q.addBindValue(playlistId);
+    q.addBindValue(nowIso());
+    if (!check(q, "addPlaylistToCategory")) {
+        return false;
+    }
+    touch();
+    return true;
+}
+
+bool LibraryDatabase::removePlaylistFromCategory(qint64 categoryId, qint64 playlistId) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("DELETE FROM category_playlists WHERE category_id = ? AND playlist_id = ?"));
+    q.addBindValue(categoryId);
+    q.addBindValue(playlistId);
+    if (!check(q, "removePlaylistFromCategory")) {
+        return false;
+    }
+    touch();
+    return true;
+}
+
+QSet<qint64> LibraryDatabase::searchPlaylists(const QString& text, QSet<qint64>* matchedCategories) {
+    QSet<qint64> playlists;
+    const QStringList terms = text.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts).mid(0, 8);
+    auto like = [](QString term) {
+        term.replace(QLatin1Char('\\'), QStringLiteral("\\\\"))
+            .replace(QLatin1Char('%'), QStringLiteral("\\%"))
+            .replace(QLatin1Char('_'), QStringLiteral("\\_"));
+        return QLatin1Char('%') + term + QLatin1Char('%');
+    };
+    // Playlist metadata only (names, type, category names) - no media.
+    QStringList where;
+    for (int i = 0; i < terms.size(); ++i) {
+        where << QStringLiteral(
+            "(p.name LIKE ? ESCAPE '\\' OR p.type LIKE ? ESCAPE '\\'"
+            " OR EXISTS (SELECT 1 FROM category_playlists cp JOIN categories c ON c.id = cp.category_id"
+            "            WHERE cp.playlist_id = p.id AND c.name LIKE ? ESCAPE '\\'))");
+    }
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT p.id FROM playlists p") +
+              (where.isEmpty() ? QString() : QStringLiteral(" WHERE ") + where.join(QStringLiteral(" AND "))));
+    for (const QString& term : terms) {
+        for (int i = 0; i < 3; ++i) {
+            q.addBindValue(like(term));
+        }
+    }
+    if (check(q, "searchPlaylists")) {
+        while (q.next()) {
+            playlists.insert(q.value(0).toLongLong());
+        }
+    }
+    if (matchedCategories) {
+        matchedCategories->clear();
+        QStringList catWhere;
+        for (int i = 0; i < terms.size(); ++i) {
+            catWhere << QStringLiteral("name LIKE ? ESCAPE '\\'");
+        }
+        QSqlQuery c(db());
+        c.prepare(QStringLiteral("SELECT id FROM categories") +
+                  (catWhere.isEmpty() ? QString() : QStringLiteral(" WHERE ") + catWhere.join(QStringLiteral(" AND "))));
+        for (const QString& term : terms) {
+            c.addBindValue(like(term));
+        }
+        if (check(c, "searchPlaylists (categories)")) {
+            while (c.next()) {
+                matchedCategories->insert(c.value(0).toLongLong());
+            }
+        }
+    }
+    return playlists;
 }
 
 bool LibraryDatabase::exportTo(const QString& path) {

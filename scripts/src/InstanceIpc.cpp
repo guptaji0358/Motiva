@@ -10,8 +10,9 @@ constexpr DWORD kRecoverCommand = 1;
 // the first command this mechanism has ever sent one for; kRecoverCommand
 // above stays payload-less exactly as before.
 constexpr DWORD kSetBackgroundCommand = 2;
-// Same payload format as kSetBackgroundCommand.
-constexpr DWORD kAddToPlaylistCommand = 3;
+// Payload: "<playlist id>\n<path>" (UTF-16, no terminator). 3 was the
+// earlier path-only "Add to Motiva playlist" command, retired with it.
+constexpr DWORD kAddToPlaylistCommand = 4;
 ATOM g_classAtom = 0;
 
 void EnsureClassRegistered() {
@@ -94,7 +95,7 @@ bool InstanceIpc::sendSetBackgroundRequest(const QString& path) {
     return true;
 }
 
-bool InstanceIpc::sendAddToPlaylistRequest(const QString& path) {
+bool InstanceIpc::sendAddToPlaylistRequest(qint64 playlistId, const QString& path) {
     HWND target = FindWindowW(kClassName, nullptr);
     for (int attempt = 0; !target && attempt < 50; ++attempt) {
         Sleep(100); // up to ~5s, only in this sender process
@@ -104,14 +105,15 @@ bool InstanceIpc::sendAddToPlaylistRequest(const QString& path) {
         qWarning() << "[IPC] Add-to-playlist: no running instance's IPC window found - file not added:" << path;
         return false;
     }
-    const std::wstring pathW = path.toStdWString();
+    // A newline can't occur in a Windows path, so it safely separates the id.
+    const std::wstring payloadW = (QString::number(playlistId) + QLatin1Char('\n') + path).toStdWString();
     COPYDATASTRUCT cds{};
     cds.dwData = kAddToPlaylistCommand;
-    cds.cbData = static_cast<DWORD>(pathW.size() * sizeof(wchar_t));
-    cds.lpData = const_cast<wchar_t*>(pathW.c_str());
+    cds.cbData = static_cast<DWORD>(payloadW.size() * sizeof(wchar_t));
+    cds.lpData = const_cast<wchar_t*>(payloadW.c_str());
     LRESULT result = SendMessageW(target, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds));
     qInfo() << "[IPC] Add-to-playlist request sent to hwnd=" << reinterpret_cast<quintptr>(target)
-            << "result=" << result << ":" << path;
+            << "result=" << result << "playlist=" << playlistId << ":" << path;
     return true;
 }
 
@@ -141,11 +143,20 @@ LRESULT CALLBACK InstanceIpc::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 self, "fileReceived", Qt::QueuedConnection, Q_ARG(QString, path));
         } else if (cds && cds->dwData == kAddToPlaylistCommand && cds->lpData && cds->cbData > 0) {
             const int charCount = static_cast<int>(cds->cbData / sizeof(wchar_t));
-            const QString path = QString::fromWCharArray(
+            const QString payload = QString::fromWCharArray(
                 reinterpret_cast<const wchar_t*>(cds->lpData), charCount);
-            qInfo() << "[IPC] Existing instance received an Add-to-playlist file:" << path;
-            QMetaObject::invokeMethod(
-                self, "addToPlaylistReceived", Qt::QueuedConnection, Q_ARG(QString, path));
+            const int split = payload.indexOf(QLatin1Char('\n'));
+            bool idOk = false;
+            const qint64 playlistId = split > 0 ? payload.left(split).toLongLong(&idOk) : 0;
+            if (idOk && playlistId >= 0) {
+                const QString path = payload.mid(split + 1);
+                qInfo() << "[IPC] Existing instance received an Add-to-playlist file, playlist=" << playlistId
+                        << ":" << path;
+                QMetaObject::invokeMethod(self, "addToPlaylistReceived", Qt::QueuedConnection,
+                                          Q_ARG(qint64, playlistId), Q_ARG(QString, path));
+            } else {
+                qWarning() << "[IPC] Ignoring a malformed Add-to-playlist request.";
+            }
         }
         return TRUE;
     }

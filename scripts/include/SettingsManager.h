@@ -50,10 +50,11 @@ public:
     bool showInWindowsSearch() const;
     void setShowInWindowsSearch(bool enabled);
 
-    // Default false: an opt-in Explorer "Set as background" context-menu
-    // verb for supported media - see
-    // WindowsShellIntegration::Register/UnregisterSetBackgroundVerb, which
-    // the setter below actually invokes.
+    // Default false: the opt-in Explorer "Motiva >" context menu (Set as
+    // background / Add to playlist) for supported media - see
+    // WindowsShellIntegration::RegisterExplorerMenu/UnregisterExplorerMenu,
+    // which the setter below actually invokes. The playlist entries are
+    // kept in sync by MainWindow (it owns the library).
     bool explorerIntegrationEnabled() const;
     void setExplorerIntegrationEnabled(bool enabled);
 

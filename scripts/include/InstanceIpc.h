@@ -39,13 +39,15 @@ public:
     // "just exit either way" contract as sendRecoverRequest() above.
     static bool sendSetBackgroundRequest(const QString& path);
 
-    // Same hand-off for Explorer's "Add to Motiva playlist" verb. Explorer
-    // launches one process per selected file, so with several files and
-    // Motiva not yet running, the losers of the single-instance race may
-    // start before the winner has created its receiver window - this
-    // waits briefly (bounded, in this short-lived sender process only) for
-    // that window instead of dropping the file.
-    static bool sendAddToPlaylistRequest(const QString& path);
+    // Same hand-off for Explorer's "Motiva > Add to playlist" submenu:
+    // playlistId is the exact playlists.id from the .mtv library (the menu
+    // entry's command carries it), or 0 for "Create New Playlist...".
+    // Explorer launches one process per selected file, so with several
+    // files and Motiva not yet running, the losers of the single-instance
+    // race may start before the winner has created its receiver window -
+    // this waits briefly (bounded, in this short-lived sender process only)
+    // for that window instead of dropping the file.
+    static bool sendAddToPlaylistRequest(qint64 playlistId, const QString& path);
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -58,8 +60,9 @@ signals:
     // path via Explorer's "Set as background" verb - see
     // sendSetBackgroundRequest() above and MainWindow::onExplorerFileReceived.
     void fileReceived(const QString& path);
-    // Emitted (queued) for a file handed off via "Add to Motiva playlist".
-    void addToPlaylistReceived(const QString& path);
+    // Emitted (queued) for a file handed off via "Add to playlist" - see
+    // sendAddToPlaylistRequest() for playlistId.
+    void addToPlaylistReceived(qint64 playlistId, const QString& path);
 
 private:
     HWND m_hwnd = nullptr;

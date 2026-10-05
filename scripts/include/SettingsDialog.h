@@ -10,6 +10,7 @@ class WallpaperManager;
 class SettingsManager;
 class ThemeTransitionOverlay;
 class CleanupManager;
+class CleanupWindow;
 
 // Houses the settings users rarely change (scaling, monitor selection,
 // volume, mute, loop, start-with-Windows) separately from the main
@@ -19,7 +20,8 @@ class CleanupManager;
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    // cleanup: drives the "Cleanup & Reset" section (see CleanupSection).
+    // cleanup: drives the separate Cleanup & Reset window (see
+    // CleanupWindow), opened from this dialog's compact "Open Cleanup" entry.
     SettingsDialog(WallpaperManager* manager, SettingsManager* settings, CleanupManager* cleanup,
                    QWidget* parent = nullptr);
 
@@ -45,6 +47,9 @@ signals:
     // Lets MainWindow keep the tray "Mute" action's checked state in sync
     // without needing direct access to this dialog's internal checkbox.
     void mutedChanged(bool muted);
+    // The Explorer menu was just (un)registered - MainWindow fills in the
+    // playlist entries from the library it owns.
+    void explorerIntegrationChanged(bool enabled);
 
     // Fired around a live Appearance/Visual Style change so MainWindow can
     // show/hide its own ThemeTransitionOverlay in lockstep with this
@@ -82,10 +87,13 @@ private:
     // Cleanup & Reset changed preferences underneath this dialog: applies
     // the (possibly default) theme and re-reads every control.
     void onPreferencesChangedExternally();
+    // One Cleanup window per dialog: created on first use, re-focused after.
+    void openCleanup();
 
     WallpaperManager* m_manager;
     SettingsManager* m_settings;
     CleanupManager* m_cleanup;
+    CleanupWindow* m_cleanupWindow = nullptr;
 
     ThemeTransitionOverlay* m_transitionOverlay = nullptr;
     bool m_themeTransitionActive = false;

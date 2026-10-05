@@ -104,6 +104,7 @@ int main(int argc, char* argv[]) {
     bool afterReset = false;
     QString explorerSelectedFile;
     QString explorerPlaylistFile;
+    qint64 explorerPlaylistId = 0; // 0 = "Create New Playlist..."
     // QCoreApplication::arguments() (rather than a raw argv scan) handles
     // Windows' own command-line quoting correctly - Explorer's "Set as
     // background" verb supplies the selected path quoted, since it may
@@ -117,7 +118,18 @@ int main(int argc, char* argv[]) {
             afterReset = true;
         } else if (args[i] == QLatin1String("--set-background") && i + 1 < args.size()) {
             explorerSelectedFile = args[++i];
-        } else if (args[i] == QLatin1String("--add-to-playlist") && i + 1 < args.size()) {
+        } else if (args[i] == QLatin1String("--add-to-playlist-id") && i + 2 < args.size()) {
+            // Explorer "Motiva > Add to playlist > <playlist>": the exact
+            // playlists.id - never a name lookup. Anything malformed is ignored.
+            bool ok = false;
+            const qint64 id = args[i + 1].toLongLong(&ok);
+            if (ok && id > 0) {
+                explorerPlaylistId = id;
+                explorerPlaylistFile = args[i + 2];
+            }
+            i += 2;
+        } else if (args[i] == QLatin1String("--add-to-new-playlist") && i + 1 < args.size()) {
+            explorerPlaylistId = 0;
             explorerPlaylistFile = args[++i];
         }
     }
@@ -146,7 +158,7 @@ int main(int argc, char* argv[]) {
         if (!explorerSelectedFile.isEmpty()) {
             InstanceIpc::sendSetBackgroundRequest(explorerSelectedFile);
         } else if (!explorerPlaylistFile.isEmpty()) {
-            InstanceIpc::sendAddToPlaylistRequest(explorerPlaylistFile);
+            InstanceIpc::sendAddToPlaylistRequest(explorerPlaylistId, explorerPlaylistFile);
         } else {
             InstanceIpc::sendRecoverRequest();
         }
@@ -158,7 +170,7 @@ int main(int argc, char* argv[]) {
             "No system tray was detected on this system. The application will still run.");
     }
 
-    MainWindow window(startMinimized, explorerSelectedFile, explorerPlaylistFile);
+    MainWindow window(startMinimized, explorerSelectedFile, explorerPlaylistId, explorerPlaylistFile);
     if (!startMinimized) {
         window.show();
     }

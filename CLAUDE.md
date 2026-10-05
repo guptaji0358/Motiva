@@ -2,10 +2,44 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-05, Explorer "Motiva >" menu + playlist categories)
+
+**Explorer menu**: one cascading `shell\Motiva` verb per extension
+(`ExtendedSubCommandsKey` → `Motiva.ExplorerMenu.{Video,Image,Background}`),
+replacing the old two flat root verbs. "Add to playlist" entries live in
+`Motiva.ExplorerMenu.{Image,Video}Playlists` and are rewritten by
+`MainWindow::syncExplorerPlaylistMenu()` whenever the library changes; each
+command carries the playlist **id** (`--add-to-playlist-id <id> "%1"`,
+`--add-to-new-playlist "%1"`), forwarded over `InstanceIpc` command 4
+(`"<id>\n<path>"`). GIF gets "Set as background" only (no playlist type
+accepts GIFs). Verified by building the real shell context menu with a
+scratch `IContextMenu` dump tool run outside the MSIX container.
+
+**Playlist categories** (library schema 3): `categories` +
+`category_playlists` (category id <-> playlist id, both FKs cascade) - an
+organizational layer over existing playlists only; categories hold no media
+and are never played. A playlist may be in several categories or none
+("Uncategorized"). Sidebar = `PlaylistTreeModel` (tree over
+`PlaylistListModel`, search via `LibraryDatabase::searchPlaylists` on
+playlist name/type/category name) + `CategoryBuilderDialog` (Build Category /
+Choose Playlists, real QCheckBoxes so screen-reader Toggle works). Schema 2
+existed only in an unreleased build (media-based "virtual categories");
+`migrateV2toV3` turns each such media group into a playlist of the same
+name inside the same-named category. `open()` must `finish()` its
+`quick_check` statement - an active statement makes a migration's
+`DROP TABLE` fail ("database table is locked"), and a failed migration
+makes `open()` set the library aside as unreadable. Shortcuts: Ctrl+Alt+N
+new image playlist, Ctrl+Shift+N new video playlist; Ctrl+N unbound.
+**Do not inject synthetic keyboard input to test shortcuts** - the user's
+PC is in use and keystrokes land in whatever app has the foreground.
+WMI-launched test processes need `Win32_ProcessStartup.ShowWindow=1`, or
+Windows applies SW_HIDE to their first default-shown window.
+
 ## Current status (2026-10-04, Settings → Cleanup & Reset)
 
 `CleanupManager` (`scripts/{include,src}/CleanupManager.*`) is the only code
-that deletes Motiva data; `CleanupSection` is its UI inside `SettingsDialog`.
+that deletes Motiva data; `CleanupWindow` is its UI - a separate window opened from Settings' compact
+"Open Cleanup" entry (one instance, re-focused when reopened).
 Levels: Delete Cache (log truncated in place, stale recovery `.tmp`,
 in-memory thumbnails - there is no on-disk thumbnail cache), Delete Data
 (library closed via `PlaylistLibrary::closeForCleanup()`, `.mtv` +

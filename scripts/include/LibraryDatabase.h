@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QDateTime>
+#include <QPair>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -49,6 +51,16 @@ struct PlaylistItemRecord {
     MediaFacts facts;
 };
 
+// A playlist category (schema 3): an organizational group of existing
+// playlists, for finding them when there are many. It holds no media and
+// is never played - category_playlists only links category ids to
+// playlist ids, so a playlist can be in several categories (or none) and a
+// rename shows everywhere.
+struct CategoryInfo {
+    qint64 id = 0;
+    QString name;
+};
+
 // The Motiva library: a .mtv file, which is a SQLite database (Qt SQL's
 // bundled SQLite driver - no separate SQLite dependency). It holds only
 // playlist structure, order, media REFERENCES (paths) and metadata - never
@@ -77,7 +89,10 @@ public:
         Failed           // could not open/create at all - in-memory session
     };
 
-    static constexpr int kSchemaVersion = 1;
+    // 1: playlists. 3: + playlist categories (categories,
+    // category_playlists). 2 only ever existed in an unreleased development
+    // build (media-based categories); it is migrated forward to 3.
+    static constexpr int kSchemaVersion = 3;
     // PRAGMA application_id marking a SQLite file as a Motiva library ("MTV1").
     static constexpr int kApplicationId = 0x4D545631;
 
@@ -129,6 +144,21 @@ public:
     // touches files on disk.
     qint64 relocateMedia(qint64 mediaId, const QString& newPath);
 
+    // --- playlist categories (schema 3) ---
+    QVector<CategoryInfo> categories(); // in creation order
+    // Every (category id, playlist id) link.
+    QVector<QPair<qint64, qint64>> categoryLinks();
+    qint64 createCategory(const QString& name); // name made unique; 0 on failure
+    bool renameCategory(qint64 id, const QString& name);
+    // Deletes the category and its links only - its playlists stay.
+    bool deleteCategory(qint64 id);
+    bool addPlaylistToCategory(qint64 categoryId, qint64 playlistId); // already linked = success
+    bool removePlaylistFromCategory(qint64 categoryId, qint64 playlistId);
+    // Ids of playlists whose name, type, or category name contains every
+    // whitespace-separated term (case-insensitive), and - via
+    // matchedCategories - categories whose own name matches.
+    QSet<qint64> searchPlaylists(const QString& text, QSet<qint64>* matchedCategories);
+
     // --- library-level key/value state (active playlist etc.) ---
     QString meta(const QString& key, const QString& fallback = QString());
     bool setMeta(const QString& key, const QString& value);
@@ -155,6 +185,10 @@ private:
     bool configureConnection();
     bool initializeOrMigrate(bool freshFile);
     bool createSchemaV1();
+    bool migrateV1toV3();
+    bool migrateV2toV3();
+    bool createCategoryTables(QSqlQuery& q);
+    QString uniqueCategoryName(const QString& wanted);
     int queryInt(const QString& sql, int fallback);
     bool check(QSqlQuery& query, const char* what);
     bool fail(const QString& message);

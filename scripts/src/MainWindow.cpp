@@ -43,6 +43,7 @@
 #include <QMimeType>
 #include <QSet>
 #include <QProcess>
+#include <QInputDialog>
 
 namespace {
 // Embedded via resources/app.qrc - loading via the Qt resource path keeps
@@ -187,7 +188,7 @@ QStringList MainWindow::explorerIntegrationExtensions() {
 }
 
 MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
-    const QString& initialPlaylistFile, QWidget* parent)
+    qint64 initialPlaylistId, const QString& initialPlaylistFile, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
     qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
     setWindowTitle("Motiva");
@@ -209,6 +210,10 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     m_cleanup = new CleanupManager(&m_settings, &m_recoveryState, m_library, this);
     connect(m_cleanup, &CleanupManager::releaseMediaRequested, this, &MainWindow::releaseMediaForCleanup);
     connect(m_cleanup, &CleanupManager::restartRequested, this, &MainWindow::restartAfterFactoryReset);
+    m_explorerMenuSyncTimer = new QTimer(this);
+    m_explorerMenuSyncTimer->setSingleShot(true);
+    m_explorerMenuSyncTimer->setInterval(250);
+    connect(m_explorerMenuSyncTimer, &QTimer::timeout, this, [this] { syncExplorerPlaylistMenu(); });
 
     buildUi();
     buildTray();
@@ -223,6 +228,18 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // no manual focus/widget-type checking needed to keep the two apart.
     auto* pasteShortcut = new QShortcut(QKeySequence::Paste, this);
     connect(pasteShortcut, &QShortcut::activated, this, &MainWindow::onPasteShortcut);
+    // New Image Playlist (Ctrl+Alt+N) / New Video Playlist (Ctrl+Shift+N),
+    // same as in the Playlists window. Ctrl+N is intentionally unbound.
+    for (const bool video : {false, true}) {
+        auto* shortcut = new QShortcut(
+            QKeySequence(video ? (Qt::CTRL | Qt::SHIFT | Qt::Key_N) : (Qt::CTRL | Qt::ALT | Qt::Key_N)), this);
+        connect(shortcut, &QShortcut::activated, this, [this, video] {
+            if (!PlaylistDialog::isTextInputFocused()) {
+                openPlaylist();
+                m_playlistDialog->createPlaylist(video);
+            }
+        });
+    }
 
     m_manager->setRecoveryState(&m_recoveryState);
     // The single-instance winner (only instance that ever reaches this
@@ -261,6 +278,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     connect(m_library, &PlaylistLibrary::playlistsChanged, this, [this] {
         applyVideoInfoUi(); // playlist renamed / count changed
         updateStatusUi();
+        m_explorerMenuSyncTimer->start(); // created / renamed / deleted / imported / reset
     });
     connect(m_manager->player(), &VideoPlayer::endOfMedia, this, &MainWindow::onPlayerEndOfMedia);
     if (!m_library->openNotice().isEmpty()) {
@@ -397,10 +415,10 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
         WindowsShellIntegration::CreateStartMenuShortcut(SettingsManager::motivaExecutablePath());
     }
     if (m_settings.explorerIntegrationEnabled()) {
-        WindowsShellIntegration::RegisterSetBackgroundVerb(
-            SettingsManager::motivaExecutablePath(), explorerIntegrationExtensions());
-        WindowsShellIntegration::RegisterAddToPlaylistVerb(
-            SettingsManager::motivaExecutablePath(), VideoPlayer::supportedStaticImageExtensions().values());
+        // Same registration the Settings toggle performs (also replaces the
+        // older flat verbs), then the playlist entries from this library.
+        m_settings.setExplorerIntegrationEnabled(true);
+        syncExplorerPlaylistMenu(true);
     }
 
     // A file handed off from Explorer's "Set as background" verb, when
@@ -412,7 +430,11 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
         handleExplorerRequestedFile(initialExplorerFile);
     }
     if (!initialPlaylistFile.isEmpty()) {
-        onAddToPlaylistReceived(initialPlaylistFile);
+        // After construction and main()'s show(), so a "Create New Playlist"
+        // name dialog has a visible parent window.
+        QTimer::singleShot(0, this, [this, initialPlaylistId, initialPlaylistFile] {
+            onAddToPlaylistReceived(initialPlaylistId, initialPlaylistFile);
+        });
     }
     // An explicit Explorer "Set as background" above switches the playlist
     // off, so this only ever re-applies the playlist itself.
@@ -659,6 +681,8 @@ void MainWindow::buildUi() {
     });
 
     m_themeTransitionOverlay = new ThemeTransitionOverlay(this);
+    connect(m_settingsDialog, &SettingsDialog::explorerIntegrationChanged, this,
+            [this](bool) { syncExplorerPlaylistMenu(true); });
     connect(m_settingsDialog, &SettingsDialog::themeTransitionStarted, this, [this] {
         m_themeTransitionOverlay->beginTransition();
     });
@@ -1508,15 +1532,105 @@ void MainWindow::onExplorerFileReceived(const QString& path) {
     handleExplorerRequestedFile(path);
 }
 
-void MainWindow::onAddToPlaylistReceived(const QString& path) {
-    qInfo() << "[Explorer] \"Add to Motiva playlist\":" << path;
-    // Untrusted command-line/IPC input: PlaylistModel::addFiles only accepts
-    // an existing file of the playlist's media type. Never auto-activates.
-    const qint64 target = m_library->imagePlaylistForExplorerAdd();
-    if (target > 0) {
-        m_playlistDialog->addFilesTo(target, {path});
+void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& path) {
+    qInfo() << "[Explorer] \"Add to playlist\" playlist=" << playlistId << ":" << path;
+    // Untrusted command-line/IPC input: only an existing file of a type a
+    // playlist can hold (PlaylistModel's own media detection).
+    const QFileInfo file(path);
+    const bool video = PlaylistModel::isVideoFile(path);
+    if (!file.isFile()) {
+        showExplorerPlaylistError(tr("\"%1\" was not found.").arg(QDir::toNativeSeparators(path)));
+        return;
     }
+    if (!video && !PlaylistModel::isImageFile(path)) {
+        showExplorerPlaylistError(
+            tr("\"%1\" can't be added to a playlist - playlists hold videos or still images.").arg(file.fileName()));
+        return;
+    }
+    if (playlistId <= 0) {
+        createPlaylistFromExplorer(path, video);
+        return;
+    }
+    PlaylistModel* target = m_library->playlist(playlistId);
+    if (!target) {
+        // The menu was out of date (e.g. written while this playlist still
+        // existed) - refresh it rather than guessing another playlist.
+        syncExplorerPlaylistMenu(true);
+        showExplorerPlaylistError(tr("That playlist no longer exists. \"%1\" was not added.").arg(file.fileName()));
+        return;
+    }
+    if (target->isVideo() != video) {
+        showExplorerPlaylistError(tr("\"%1\" is a %2 playlist, so \"%3\" can't be added to it.")
+                                      .arg(target->name(), target->isVideo() ? tr("video") : tr("image"),
+                                           file.fileName()));
+        return;
+    }
+    // The normal add path: one shared media record per file, a file already
+    // in this playlist is reported as such and not added twice.
+    m_playlistDialog->addFilesTo(playlistId, {path});
     openPlaylist();
+}
+
+void MainWindow::createPlaylistFromExplorer(const QString& path, bool video) {
+    showNormal();
+    raise();
+    activateWindow();
+    const QString fallback = video ? tr("Videos") : tr("Images");
+    bool accepted = false;
+    QString name = QInputDialog::getText(this, tr("New Playlist"),
+                                         video ? tr("Name of the new video playlist:")
+                                               : tr("Name of the new image playlist:"),
+                                         QLineEdit::Normal, fallback, &accepted)
+                       .trimmed();
+    if (!accepted) {
+        qInfo() << "[Explorer] New playlist cancelled - nothing added:" << path;
+        return;
+    }
+    if (name.isEmpty()) {
+        name = fallback;
+    }
+    // Same library call as Playlists > + New (names are made unique there).
+    const qint64 id = m_library->createPlaylist(name, video ? PlaylistType::Video : PlaylistType::Image);
+    if (id <= 0) {
+        showExplorerPlaylistError(tr("The playlist could not be created:\n%1").arg(m_library->lastError()));
+        return;
+    }
+    m_playlistDialog->addFilesTo(id, {path});
+    openPlaylist();
+}
+
+void MainWindow::showExplorerPlaylistError(const QString& message) {
+    qWarning() << "[Explorer] Add to playlist:" << message;
+    showNormal();
+    raise();
+    activateWindow();
+    QMessageBox::warning(this, tr("Add to playlist"), message);
+}
+
+void MainWindow::syncExplorerPlaylistMenu(bool force) {
+    if (!m_settings.explorerIntegrationEnabled()) {
+        m_explorerMenuSignature.clear();
+        return;
+    }
+    QVector<WindowsShellIntegration::ExplorerPlaylist> images, videos;
+    QString signature;
+    const PlaylistListModel* list = m_library->listModel();
+    for (int row = 0; row < list->rowCount(); ++row) {
+        const QModelIndex index = list->index(row);
+        const qint64 id = index.data(PlaylistListModel::IdRole).toLongLong();
+        const QString name = index.data(Qt::DisplayRole).toString();
+        const bool video = index.data(PlaylistListModel::TypeRole).toInt() == static_cast<int>(PlaylistType::Video);
+        (video ? videos : images).append({id, name});
+        signature += QStringLiteral("%1|%2|%3\n").arg(id).arg(video ? 'v' : 'i').arg(name);
+    }
+    if (!force && signature == m_explorerMenuSignature) {
+        return;
+    }
+    if (WindowsShellIntegration::UpdateExplorerPlaylistMenu(SettingsManager::motivaExecutablePath(), images, videos)) {
+        m_explorerMenuSignature = signature;
+        qInfo() << "[Explorer] Playlist submenu updated:" << images.size() << "image /" << videos.size()
+                << "video playlist(s).";
+    }
 }
 
 void MainWindow::openPlaylist() {

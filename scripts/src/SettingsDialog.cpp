@@ -4,7 +4,7 @@
 #include "Theme.h"
 #include "ThemeTransitionOverlay.h"
 #include "CleanupManager.h"
-#include "CleanupSection.h"
+#include "CleanupWindow.h"
 
 #include <QFormLayout>
 #include <QVBoxLayout>
@@ -19,6 +19,7 @@
 #include <QWidget>
 #include <QSizePolicy>
 #include <QTimer>
+#include <QPushButton>
 
 SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* settings, CleanupManager* cleanup,
                                QWidget* parent)
@@ -59,9 +60,8 @@ SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* setti
     // ~760x380 range on this content, comfortably inside the requested
     // 720-800 x 360-450 range, and the dialog stays freely resizable
     // larger or smaller (down to this floor) afterward.
-    // Height: the Cleanup & Reset section below the two columns.
     setMinimumSize(860, 380);
-    resize(880, 660);
+    resize(880, 400);
     connect(m_cleanup, &CleanupManager::preferencesChanged, this, &SettingsDialog::onPreferencesChangedExternally);
 }
 
@@ -200,21 +200,33 @@ void SettingsDialog::buildUi() {
 
     m_explorerIntegrationCheck = new QCheckBox(tr("Set as background for supported media"), this);
     m_explorerIntegrationCheck->setToolTip(
-        tr("Adds a \"Set as background\" option to the right-click menu for supported video, "
-           "GIF and image files in File Explorer, plus \"Add to Motiva playlist\" for images. On Windows 11 this may appear under \"Show more "
-           "options\"."));
+        tr("Adds one \"Motiva\" entry to the right-click menu for supported video, GIF and image files "
+           "in File Explorer, with \"Set as background\" and \"Add to playlist\" (videos and images). On "
+           "Windows 11 this may appear under \"Show more options\"."));
     connect(m_explorerIntegrationCheck, &QCheckBox::toggled, this,
         &SettingsDialog::onExplorerIntegrationToggled);
     rightCol->addWidget(m_explorerIntegrationCheck);
+
+    // Compact entry only - the cleanup levels live in their own window.
+    auto* cleanupSection = new QLabel(tr("Cleanup & Reset"));
+    cleanupSection->setObjectName(QStringLiteral("sectionLabel"));
+    cleanupSection->setFont(sectionFont);
+    rightCol->addWidget(cleanupSection);
+    auto* cleanupRow = new QHBoxLayout();
+    auto* cleanupDesc = new QLabel(tr("Manage cache, data, and factory reset."), this);
+    cleanupDesc->setObjectName(QStringLiteral("secondaryText"));
+    cleanupDesc->setWordWrap(true);
+    cleanupRow->addWidget(cleanupDesc, 1);
+    auto* openCleanupButton = new QPushButton(tr("Open Cleanup"), this);
+    connect(openCleanupButton, &QPushButton::clicked, this, &SettingsDialog::openCleanup);
+    cleanupRow->addWidget(openCleanupButton);
+    rightCol->addLayout(cleanupRow);
 
     rightCol->addStretch();
 
     columns->addWidget(leftPanel, 1);
     columns->addWidget(rightPanel, 1);
     root->addLayout(columns);
-
-    root->addSpacing(6);
-    root->addWidget(new CleanupSection(m_cleanup, this));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
@@ -347,6 +359,7 @@ void SettingsDialog::onExplorerIntegrationToggled(bool checked) {
     // Likewise, the actual Explorer verb register/unregister happens
     // inside the setter (see SettingsManager::setExplorerIntegrationEnabled).
     m_settings->setExplorerIntegrationEnabled(checked);
+    emit explorerIntegrationChanged(checked);
 }
 
 void SettingsDialog::onThemeChanged(int index) {
@@ -371,6 +384,13 @@ void SettingsDialog::onThemeChanged(int index) {
         setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg")
                                  .arg(Theme::iconVariant(theme))));
     });
+}
+
+void SettingsDialog::openCleanup() {
+    if (!m_cleanupWindow) {
+        m_cleanupWindow = new CleanupWindow(m_cleanup, this);
+    }
+    m_cleanupWindow->present();
 }
 
 void SettingsDialog::onPreferencesChangedExternally() {

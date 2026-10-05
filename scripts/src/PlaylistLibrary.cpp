@@ -108,6 +108,7 @@ LibraryDatabase::OpenResult PlaylistLibrary::open() {
     }
     migrateLegacyImagePlaylist();
     reloadList();
+    reloadCategories();
 
     m_selectedId = m_db.meta(QLatin1String(kSelectedKey)).toLongLong();
     const qint64 active = m_db.meta(QLatin1String(kActiveKey)).toLongLong();
@@ -288,6 +289,7 @@ bool PlaylistLibrary::deletePlaylist(qint64 id) {
         m_selectedId = 0;
     }
     reloadList();
+    reloadCategories(); // its category links went with it
     return true;
 }
 
@@ -349,25 +351,6 @@ int PlaylistLibrary::importLibrary(const QString& path) {
     return count;
 }
 
-qint64 PlaylistLibrary::imagePlaylistForExplorerAdd() {
-    auto isImage = [this](qint64 id) {
-        const int row = m_list.rowOf(id);
-        return row >= 0 && m_list.m_rows[row].type == PlaylistType::Image;
-    };
-    if (isImage(m_selectedId)) {
-        return m_selectedId;
-    }
-    if (isImage(m_activeId)) {
-        return m_activeId;
-    }
-    for (const PlaylistInfo& p : m_list.m_rows) {
-        if (p.type == PlaylistType::Image) {
-            return p.id;
-        }
-    }
-    return createPlaylist(tr("Images"), PlaylistType::Image);
-}
-
 void PlaylistLibrary::closeForCleanup() {
     emit aboutToReset();
     const bool hadActive = m_activeId > 0;
@@ -379,6 +362,9 @@ void PlaylistLibrary::closeForCleanup() {
     m_list.m_rows.clear();
     m_list.m_activeId = 0;
     m_list.endResetModel();
+    m_categories.clear();
+    m_categoryLinks.clear();
+    emit categoriesChanged();
     m_db.close();
     qInfo() << "[Library] Closed for Cleanup & Reset.";
     if (hadActive) {
@@ -408,4 +394,133 @@ int PlaylistLibrary::cachedThumbnailCount() const {
         count += m->m_thumbnails.size();
     }
     return count;
+}
+
+void PlaylistLibrary::reloadCategories() {
+    m_categories = m_db.categories();
+    m_categoryLinks = m_db.categoryLinks();
+    emit categoriesChanged();
+}
+
+QString PlaylistLibrary::categoryName(qint64 id) const {
+    for (const CategoryInfo& c : m_categories) {
+        if (c.id == id) {
+            return c.name;
+        }
+    }
+    return QString();
+}
+
+QList<qint64> PlaylistLibrary::categoriesOf(qint64 playlistId) const {
+    QList<qint64> result;
+    for (const CategoryInfo& c : m_categories) { // category order
+        for (const auto& link : m_categoryLinks) {
+            if (link.first == c.id && link.second == playlistId) {
+                result << c.id;
+            }
+        }
+    }
+    return result;
+}
+
+QList<qint64> PlaylistLibrary::playlistsIn(qint64 categoryId) const {
+    QList<qint64> result;
+    for (const PlaylistInfo& p : m_list.m_rows) { // library order
+        for (const auto& link : m_categoryLinks) {
+            if (link.first == categoryId && link.second == p.id) {
+                result << p.id;
+            }
+        }
+    }
+    return result;
+}
+
+qint64 PlaylistLibrary::createCategory(const QString& name, const QList<qint64>& playlistIds) {
+    const qint64 id = m_db.createCategory(name);
+    if (id <= 0) {
+        emit errorOccurred(m_db.lastError());
+        return 0;
+    }
+    for (qint64 playlistId : playlistIds) {
+        if (!m_db.addPlaylistToCategory(id, playlistId)) {
+            emit errorOccurred(m_db.lastError());
+            break;
+        }
+    }
+    reloadCategories();
+    qInfo() << "[Library] Category created:" << categoryName(id) << "with" << playlistIds.size() << "playlist(s)";
+    return id;
+}
+
+bool PlaylistLibrary::renameCategory(qint64 id, const QString& name) {
+    if (name.trimmed().isEmpty()) {
+        return false;
+    }
+    const bool ok = m_db.renameCategory(id, name);
+    if (!ok) {
+        emit errorOccurred(m_db.lastError());
+    }
+    reloadCategories();
+    return ok;
+}
+
+bool PlaylistLibrary::deleteCategory(qint64 id) {
+    const bool ok = m_db.deleteCategory(id);
+    if (!ok) {
+        emit errorOccurred(m_db.lastError());
+    }
+    reloadCategories();
+    return ok;
+}
+
+bool PlaylistLibrary::addPlaylistToCategory(qint64 categoryId, qint64 playlistId) {
+    const bool ok = m_db.addPlaylistToCategory(categoryId, playlistId);
+    if (!ok) {
+        emit errorOccurred(m_db.lastError());
+    }
+    reloadCategories();
+    return ok;
+}
+
+bool PlaylistLibrary::removePlaylistFromCategory(qint64 categoryId, qint64 playlistId) {
+    const bool ok = m_db.removePlaylistFromCategory(categoryId, playlistId);
+    if (!ok) {
+        emit errorOccurred(m_db.lastError());
+    }
+    reloadCategories();
+    return ok;
+}
+
+bool PlaylistLibrary::setPlaylistCategories(qint64 playlistId, const QList<qint64>& categoryIds) {
+    bool ok = true;
+    for (qint64 current : categoriesOf(playlistId)) {
+        if (!categoryIds.contains(current)) {
+            ok = m_db.removePlaylistFromCategory(current, playlistId) && ok;
+        }
+    }
+    for (qint64 wanted : categoryIds) {
+        ok = m_db.addPlaylistToCategory(wanted, playlistId) && ok;
+    }
+    if (!ok) {
+        emit errorOccurred(m_db.lastError());
+    }
+    reloadCategories();
+    return ok;
+}
+
+bool PlaylistLibrary::setCategoryPlaylists(qint64 categoryId, const QList<qint64>& playlistIds) {
+    bool ok = true;
+    for (qint64 current : playlistsIn(categoryId)) {
+        if (!playlistIds.contains(current)) {
+            ok = m_db.removePlaylistFromCategory(categoryId, current) && ok;
+        }
+    }
+    for (qint64 wanted : playlistIds) {
+        ok = m_db.addPlaylistToCategory(categoryId, wanted) && ok;
+    }
+    if (!ok) {
+        emit errorOccurred(m_db.lastError());
+    }
+    reloadCategories();
+    return ok;
 }

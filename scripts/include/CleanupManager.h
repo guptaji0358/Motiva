@@ -13,7 +13,7 @@ class PlaylistLibrary;
 
 // Cleanup & Reset: the one place that knows which files and settings Motiva
 // owns, and the only code that deletes any of them. The Settings UI
-// (CleanupSection) only asks for an Operation; it never touches the
+// (CleanupWindow) only asks for an Operation; it never touches the
 // filesystem itself.
 //
 // What Motiva actually stores (inspected, not assumed - every path comes

@@ -71,8 +71,12 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/PlaylistDialog.h
     scripts/src/CleanupManager.cpp
     scripts/include/CleanupManager.h
-    scripts/src/CleanupSection.cpp
-    scripts/include/CleanupSection.h
+    scripts/src/CleanupWindow.cpp
+    scripts/include/CleanupWindow.h
+    scripts/src/PlaylistTreeModel.cpp
+    scripts/include/PlaylistTreeModel.h
+    scripts/src/CategoryBuilderDialog.cpp
+    scripts/include/CategoryBuilderDialog.h
     scripts/include/WindowsShellIntegration.h
 )
 

@@ -804,8 +804,9 @@ begin
   Result := '';
 end;
 
-// Removes ONLY Motiva's own Explorer verbs (MotivaSetBackground, MotivaAddToPlaylist) under each
-// per-user SystemFileAssociations extension, and its autostart value.
+// Removes ONLY Motiva's own Explorer menu: the "Motiva" cascade verb (and the older flat
+// MotivaSetBackground / MotivaAddToPlaylist verbs) under each per-user SystemFileAssociations
+// extension, the shared Motiva.ExplorerMenu.* submenu keys, and its autostart value.
 // User settings (HKCU\Software\Motiva), recovery state and media are kept.
 procedure CleanMotivaShellRegistration;
 var Names: TArrayOfString; I: Integer; Base: String;
@@ -818,7 +819,14 @@ begin
         RegDeleteKeyIncludingSubkeys(HKCU, Base + '\' + Names[I] + '\shell\MotivaSetBackground');
       if RegKeyExists(HKCU, Base + '\' + Names[I] + '\shell\MotivaAddToPlaylist') then
         RegDeleteKeyIncludingSubkeys(HKCU, Base + '\' + Names[I] + '\shell\MotivaAddToPlaylist');
+      if RegKeyExists(HKCU, Base + '\' + Names[I] + '\shell\Motiva') then
+        RegDeleteKeyIncludingSubkeys(HKCU, Base + '\' + Names[I] + '\shell\Motiva');
     end;
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.Video');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.VideoPlaylists');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.Image');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.ImagePlaylists');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.Background');
   RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Motiva');
 end;
 

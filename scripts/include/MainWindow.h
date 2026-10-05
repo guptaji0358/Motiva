@@ -28,6 +28,7 @@ class QDragMoveEvent;
 class QDragLeaveEvent;
 class QDropEvent;
 class QMimeData;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -38,10 +39,12 @@ public:
     // applied at the end of construction via the same
     // handleExplorerRequestedFile() helper the InstanceIpc::fileReceived
     // path uses - see MainWindow.cpp.
-    // initialPlaylistFile: same, for Explorer's "Add to Motiva playlist"
-    // verb - added to the image playlist instead of becoming current media.
+    // initialPlaylistId/initialPlaylistFile: same, for Explorer's
+    // "Motiva > Add to playlist" submenu - the file is added to the playlist
+    // with that exact id (0 = "Create New Playlist...") instead of becoming
+    // current media. Empty file = no request.
     explicit MainWindow(bool startMinimized, const QString& initialExplorerFile = QString(),
-        const QString& initialPlaylistFile = QString(), QWidget* parent = nullptr);
+        qint64 initialPlaylistId = 0, const QString& initialPlaylistFile = QString(), QWidget* parent = nullptr);
     ~MainWindow() override;
 
     // Every extension Explorer's "Set as background" verb should be
@@ -118,8 +121,10 @@ private slots:
     // handling of a file handed off from Explorer's "Set as background"
     // verb while it's already running (see main.cpp/InstanceIpc.h).
     void onExplorerFileReceived(const QString& path);
-    // Explorer "Add to Motiva playlist" (command line or InstanceIpc).
-    void onAddToPlaylistReceived(const QString& path);
+    // Explorer "Motiva > Add to playlist" (command line or InstanceIpc):
+    // adds `path` to the playlist with exactly this id, or - for 0 - asks
+    // for a name and creates a new playlist of the file's type first.
+    void onAddToPlaylistReceived(qint64 playlistId, const QString& path);
     void openPlaylist();
     // "Set as Wallpaper" from PlaylistDialog: makes `playlistId` the active
     // playlist, makes its current item the current media, and runs the
@@ -132,6 +137,10 @@ private slots:
     // current media before data is removed; restart after a Factory Reset.
     void releaseMediaForCleanup();
     void restartAfterFactoryReset();
+    // Rewrites the Explorer "Add to playlist" entries from the library
+    // (only while Explorer integration is on). Unless forced, skipped when
+    // nothing shown in the menu (id, name, type, order) changed.
+    void syncExplorerPlaylistMenu(bool force = false);
 
 private:
     void buildUi();
@@ -209,6 +218,8 @@ private:
     // convergence point; anything else reuses the existing
     // onWallpaperError() warning/tray-message path rather than a new one.
     void handleExplorerRequestedFile(const QString& path);
+    void createPlaylistFromExplorer(const QString& path, bool video);
+    void showExplorerPlaylistError(const QString& message);
 
     std::unique_ptr<WallpaperManager> m_manager;
     SettingsManager m_settings;
@@ -219,6 +230,10 @@ private:
     PlaylistDialog* m_playlistDialog = nullptr;
     SettingsDialog* m_settingsDialog = nullptr;
     CleanupManager* m_cleanup = nullptr;
+    // Coalesces bursts of PlaylistLibrary::playlistsChanged into one
+    // Explorer-menu sync; m_explorerMenuSignature is what was last written.
+    QTimer* m_explorerMenuSyncTimer = nullptr;
+    QString m_explorerMenuSignature;
     // Mirrors SettingsDialog's own overlay whenever a theme transition it
     // starts also restyles MainWindow (see its themeTransitionStarted/
     // Finished signals) - both top-level windows repaint from the same
