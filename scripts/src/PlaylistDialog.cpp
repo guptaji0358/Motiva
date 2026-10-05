@@ -4,6 +4,7 @@
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
 #include "CategoryFilterDialog.h"
+#include "CategoryItemPickerDialog.h"
 #include "Theme.h"
 #include "VideoPlayer.h"
 
@@ -1690,8 +1691,13 @@ void PlaylistDialog::applyItemFilter() {
         }
     } else {
         // SQL over the items' stored metadata (see LibraryDatabase::matchingItems).
-        const QSet<qint64> visible =
-            m_library->matchingItems(m->id(), filter ? &filter->definition : nullptr, search);
+        // A hand-picked category shows exactly its selected items (that still
+        // exist in this playlist); the search then narrows within them.
+        QSet<qint64> visible =
+            m_library->matchingItems(m->id(), filter && !filter->isSelection() ? &filter->definition : nullptr, search);
+        if (filter && filter->isSelection()) {
+            visible.intersect(filter->itemIds);
+        }
         for (int r = 0; r < m->count(); ++r) {
             m_view->setRowHidden(r, !visible.contains(m->itemIdAt(r)));
         }
@@ -1706,7 +1712,8 @@ void PlaylistDialog::applyItemFilter() {
 void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {
     QMenu menu(this);
     const bool user = currentFilter() != nullptr; // "All" can't be edited, renamed or deleted
-    QAction* editAction = menu.addAction(tr("Edit Category…"));
+    const PlaylistFilterInfo* selected = currentFilter();
+    QAction* editAction = menu.addAction(selected && selected->isSelection() ? tr("Manage Selection…") : tr("Edit Category…"));
     QAction* renameAction = menu.addAction(tr("Rename…"));
     menu.addSeparator();
     QAction* deleteAction = menu.addAction(tr("Delete Category"));
@@ -1732,6 +1739,39 @@ void PlaylistDialog::onBuildCategory() {
     if (!m) {
         return;
     }
+    // Two ways to build a category: saved conditions, or a hand-picked
+    // selection of this playlist's items.
+    QMessageBox choice(QMessageBox::Question, tr("Build Category"),
+                       tr("How do you want to build a category for \"%1\"?").arg(m->name()), QMessageBox::NoButton, this);
+    choice.setInformativeText(tr("Conditions: a saved filter, e.g. file names containing \"anime\". Matching items "
+                                 "are included automatically.\n\nSelect from Playlist: tick the items of this playlist "
+                                 "yourself. Nothing is copied."));
+    QPushButton* byConditions = choice.addButton(tr("Conditions"), QMessageBox::AcceptRole);
+    QPushButton* bySelection = choice.addButton(tr("Select from Playlist"), QMessageBox::AcceptRole);
+    choice.addButton(QMessageBox::Cancel);
+    choice.exec();
+    if (choice.clickedButton() == bySelection) {
+        CategoryItemPickerDialog picker(m_library, m, QString(), {}, 0, this);
+        if (picker.exec() != QDialog::Accepted) {
+            return;
+        }
+        const qint64 id = m_library->createFilter(m->id(), picker.categoryName(), FilterDefinition{},
+                                                  QStringLiteral("selected"));
+        if (id <= 0) {
+            return; // errorOccurred already explained it
+        }
+        if (!m_library->setCategoryItems(id, m->id(), picker.selectedItemIds())) {
+            m_library->deleteFilter(id, m->id()); // no half-made category
+            return;
+        }
+        reloadCategories(false);
+        m_categoryCombo->setCurrentIndex(qMax(0, m_categoryCombo->findData(id)));
+        showNotice(tr("Category created from your selection. Nothing was copied - the playlist is unchanged."));
+        return;
+    }
+    if (choice.clickedButton() != byConditions) {
+        return;
+    }
     CategoryFilterDialog dialog(m_library, m, nullptr, this);
     if (dialog.exec() == QDialog::Accepted) {
         reloadCategories(false);
@@ -1747,6 +1787,13 @@ void PlaylistDialog::onEditCategory() {
         return;
     }
     const PlaylistFilterInfo copy = *filter;
+    if (copy.isSelection()) {
+        CategoryItemPickerDialog picker(m_library, m, copy.name, copy.itemIds, copy.id, this);
+        if (picker.exec() == QDialog::Accepted && m_library->setCategoryItems(copy.id, m->id(), picker.selectedItemIds())) {
+            reloadCategories(false);
+        }
+        return;
+    }
     CategoryFilterDialog dialog(m_library, m, &copy, this);
     if (dialog.exec() == QDialog::Accepted) {
         reloadCategories(false);

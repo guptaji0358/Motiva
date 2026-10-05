@@ -74,7 +74,9 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/CleanupWindow.cpp
     scripts/include/CleanupWindow.h
     scripts/src/CategoryFilterDialog.cpp
+    scripts/src/CategoryItemPickerDialog.cpp
     scripts/include/CategoryFilterDialog.h
+    scripts/include/CategoryItemPickerDialog.h
     scripts/src/LocalBackupProvider.cpp
     scripts/include/LocalBackupProvider.h
     scripts/include/BackupProvider.h

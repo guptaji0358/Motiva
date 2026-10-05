@@ -289,7 +289,13 @@ bool LibraryDatabase::initializeOrMigrate(bool freshFile) {
         version = 4;
     }
     if (version == 4) {
-        return migrateV4toV5();
+        if (!migrateV4toV5()) {
+            return false;
+        }
+        version = 5;
+    }
+    if (version == 5) {
+        return migrateV5toV6();
     }
     return fail(QStringLiteral("No migration path from library schema %1.").arg(version));
 }
@@ -1042,6 +1048,38 @@ bool LibraryDatabase::migrateV4toV5() {
     return true;
 }
 
+bool LibraryDatabase::migrateV5toV6() {
+    Transaction tx(db());
+    QSqlQuery q(db());
+    if (!tx.started()) {
+        return fail(QStringLiteral("Cannot start transaction: %1").arg(db().lastError().text()));
+    }
+    const QStringList statements = {
+        // Existing categories are all condition-based.
+        QStringLiteral("ALTER TABLE playlist_categories ADD COLUMN mode TEXT NOT NULL DEFAULT 'condition'"),
+        // Hand-picked members: a reference to an existing playlist item, never
+        // a copy. Deleting the item (or the category/playlist) removes the row.
+        QStringLiteral(
+            "CREATE TABLE category_items ("
+            "  category_id INTEGER NOT NULL REFERENCES playlist_categories(id) ON DELETE CASCADE,"
+            "  item_id     INTEGER NOT NULL REFERENCES playlist_items(id) ON DELETE CASCADE,"
+            "  PRIMARY KEY (category_id, item_id))"),
+        QStringLiteral("CREATE INDEX idx_category_items_item ON category_items(item_id)"),
+        QStringLiteral("UPDATE library_metadata SET value = '6' WHERE key = 'schema_version'"),
+        QStringLiteral("PRAGMA user_version = 6"),
+    };
+    for (const QString& sql : statements) {
+        if (!q.exec(sql)) {
+            return fail(QStringLiteral("Library upgrade to schema 6 failed: %1").arg(q.lastError().text()));
+        }
+    }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
+    }
+    qInfo() << "[Library] Upgraded library schema 5 -> 6 (hand-picked categories).";
+    return true;
+}
+
 // ------------------------------------------------------------ media backups
 
 static MediaBackupRecord backupFromQuery(const QSqlQuery& q, int first) {
@@ -1241,28 +1279,48 @@ FilterDefinition FilterDefinition::fromJson(const QString& json) {
 QVector<PlaylistFilterInfo> LibraryDatabase::playlistFilters(qint64 playlistId) {
     QVector<PlaylistFilterInfo> result;
     QSqlQuery q(db());
-    q.prepare(QStringLiteral("SELECT id, name, filter_definition FROM playlist_categories WHERE playlist_id = ?"
+    q.prepare(QStringLiteral("SELECT id, name, filter_definition, mode FROM playlist_categories WHERE playlist_id = ?"
                              " ORDER BY position, id"));
     q.addBindValue(playlistId);
     if (!check(q, "playlistFilters")) {
         return result;
     }
     while (q.next()) {
-        result.push_back({q.value(0).toLongLong(), playlistId, q.value(1).toString(),
-                          FilterDefinition::fromJson(q.value(2).toString())});
+        PlaylistFilterInfo info{q.value(0).toLongLong(), playlistId, q.value(1).toString(),
+                                FilterDefinition::fromJson(q.value(2).toString())};
+        info.mode = q.value(3).toString() == QLatin1String("selected") ? QStringLiteral("selected")
+                                                                       : QStringLiteral("condition");
+        result.push_back(info);
+    }
+    QSqlQuery members(db());
+    members.setForwardOnly(true);
+    members.prepare(QStringLiteral("SELECT c.category_id, c.item_id FROM category_items c"
+                                   " JOIN playlist_categories k ON k.id = c.category_id WHERE k.playlist_id = ?"));
+    members.addBindValue(playlistId);
+    if (check(members, "playlistFilterItems")) {
+        while (members.next()) {
+            for (PlaylistFilterInfo& info : result) {
+                if (info.id == members.value(0).toLongLong()) {
+                    info.itemIds.insert(members.value(1).toLongLong());
+                    break;
+                }
+            }
+        }
     }
     return result;
 }
 
-qint64 LibraryDatabase::createPlaylistFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition) {
+qint64 LibraryDatabase::createPlaylistFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition,
+                                             const QString& mode) {
     const QString now = nowIso();
     QSqlQuery q(db());
     q.prepare(QStringLiteral(
-        "INSERT INTO playlist_categories(playlist_id, name, filter_definition, position, created_at, updated_at)"
-        " VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_categories WHERE playlist_id = ?), ?, ?)"));
+        "INSERT INTO playlist_categories(playlist_id, name, filter_definition, mode, position, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_categories WHERE playlist_id = ?), ?, ?)"));
     q.addBindValue(playlistId);
     q.addBindValue(name.trimmed());
     q.addBindValue(definition.toJson());
+    q.addBindValue(mode == QLatin1String("selected") ? QStringLiteral("selected") : QStringLiteral("condition"));
     q.addBindValue(playlistId);
     q.addBindValue(now);
     q.addBindValue(now);
@@ -1282,6 +1340,43 @@ bool LibraryDatabase::updatePlaylistFilter(qint64 filterId, const QString& name,
     q.addBindValue(filterId);
     if (!check(q, "updatePlaylistFilter")) {
         return false;
+    }
+    touch();
+    return true;
+}
+
+bool LibraryDatabase::setCategoryItems(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds) {
+    Transaction tx(db());
+    if (!tx.started()) {
+        return fail(QStringLiteral("Cannot start transaction: %1").arg(db().lastError().text()));
+    }
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("DELETE FROM category_items WHERE category_id = ?"));
+    q.addBindValue(categoryId);
+    if (!check(q, "setCategoryItems clear")) {
+        return false;
+    }
+    QSqlQuery insert(db());
+    // Only items of the category's own playlist can be members.
+    insert.prepare(QStringLiteral("INSERT OR IGNORE INTO category_items(category_id, item_id)"
+                                  " SELECT ?, id FROM playlist_items WHERE id = ? AND playlist_id = ?"));
+    for (qint64 itemId : itemIds) {
+        insert.addBindValue(categoryId);
+        insert.addBindValue(itemId);
+        insert.addBindValue(playlistId);
+        if (!check(insert, "setCategoryItems insert")) {
+            return false;
+        }
+    }
+    QSqlQuery stamp(db());
+    stamp.prepare(QStringLiteral("UPDATE playlist_categories SET updated_at = ? WHERE id = ?"));
+    stamp.addBindValue(nowIso());
+    stamp.addBindValue(categoryId);
+    if (!check(stamp, "setCategoryItems stamp")) {
+        return false;
+    }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Saving the selection failed: %1").arg(db().lastError().text()));
     }
     touch();
     return true;

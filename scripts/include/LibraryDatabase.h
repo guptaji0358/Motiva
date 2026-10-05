@@ -114,11 +114,17 @@ struct BackupStats {
     qint64 pendingBytes = 0; // stored size of media still to back up
 };
 
+// A category is either a rule set ("condition": definition) or a hand-picked
+// list of the parent playlist's items ("selected": itemIds, playlist_items.id
+// values). Either way it only references the playlist's own items.
 struct PlaylistFilterInfo {
     qint64 id = 0;
     qint64 playlistId = 0;
     QString name;
     FilterDefinition definition;
+    QString mode = QStringLiteral("condition"); // "condition" | "selected"
+    QSet<qint64> itemIds;                       // selected mode only
+    bool isSelection() const { return mode == QLatin1String("selected"); }
 };
 
 // The Motiva library: a .mtv file, which is a SQLite database (Qt SQL's
@@ -150,10 +156,11 @@ public:
     };
 
     // 1: playlists. 4: + virtual categories as per-playlist saved filters
-    // (playlist_categories). 5: + media_backups. 2 and 3 only ever existed in
+    // (playlist_categories). 5: + media_backups. 6: + category mode and
+    // category_items (hand-picked categories). 2 and 3 only ever existed in
     // unreleased development builds (media groups, then playlist groups);
     // both are migrated forward.
-    static constexpr int kSchemaVersion = 5;
+    static constexpr int kSchemaVersion = 6;
     // PRAGMA application_id marking a SQLite file as a Motiva library ("MTV1").
     static constexpr int kApplicationId = 0x4D545631;
 
@@ -207,7 +214,11 @@ public:
 
     // --- virtual categories: saved filters of one playlist (schema 4) ---
     QVector<PlaylistFilterInfo> playlistFilters(qint64 playlistId); // in creation order
-    qint64 createPlaylistFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition);
+    qint64 createPlaylistFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition,
+                                const QString& mode = QStringLiteral("condition"));
+    // Replaces a "selected" category's members. Only items that belong to
+    // `playlistId` are stored; the rows vanish with the item (FK cascade).
+    bool setCategoryItems(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds);
     bool updatePlaylistFilter(qint64 filterId, const QString& name, const FilterDefinition& definition);
     // Deletes the saved filter only - never media or playlist items.
     bool deletePlaylistFilter(qint64 filterId);
@@ -264,6 +275,7 @@ private:
     bool migrateV2toV3();
     bool migrateV3toV4();
     bool migrateV4toV5();
+    bool migrateV5toV6();
     bool migrateV1toV4();
     bool createV3CategoryTables(QSqlQuery& q);
     bool createFilterTable(QSqlQuery& q);

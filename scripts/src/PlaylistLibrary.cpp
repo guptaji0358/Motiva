@@ -391,8 +391,18 @@ int PlaylistLibrary::cachedThumbnailCount() const {
     return count;
 }
 
-qint64 PlaylistLibrary::createFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition) {
-    const qint64 id = m_db.createPlaylistFilter(playlistId, name, definition);
+bool PlaylistLibrary::setCategoryItems(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds) {
+    if (!m_db.setCategoryItems(categoryId, playlistId, itemIds)) {
+        emit errorOccurred(m_db.lastError());
+        return false;
+    }
+    emit filtersChanged(playlistId);
+    return true;
+}
+
+qint64 PlaylistLibrary::createFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition,
+                                     const QString& mode) {
+    const qint64 id = m_db.createPlaylistFilter(playlistId, name, definition, mode);
     if (id <= 0) {
         emit errorOccurred(m_db.lastError());
         return 0;

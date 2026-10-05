@@ -46,6 +46,8 @@ duplicated - `LibraryDatabase::matchingItems` always filters
 `WHERE playlist_id = ?`. UI: category combo + "Build Category"
 (`CategoryFilterDialog`) inside `PlaylistDialog`.
 
+**Two category modes (schema 6)**: `playlist_categories.mode` is `condition` (JSON rules) or `selected` (hand-picked, "Select from Playlist"). Selected members live in `category_items(category_id, item_id)` -> `playlist_items.id`, both FKs cascade, so removing an item from the playlist removes it from the category and no media/item rows are duplicated. `setCategoryItems` only stores items of the category's own playlist. UI: Build Category asks Conditions vs Select from Playlist; `CategoryItemPickerDialog` does create and "Manage Selection...".
+
 **Local Media Backup (schema 5, `media_backups`)** - OFF by default
 (`backup/enabled`), never copies/scans unless enabled. `BackupManager` ->
 `BackupProvider` (abstract) -> `LocalBackupProvider` (objects named by

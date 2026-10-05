@@ -69,7 +69,9 @@ public:
     // LibraryDatabase). They hold rules, never media - removing/adding
     // items stays a playlist operation. ---
     QVector<PlaylistFilterInfo> filters(qint64 playlistId) { return m_db.playlistFilters(playlistId); }
-    qint64 createFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition);
+    qint64 createFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition,
+                        const QString& mode = QStringLiteral("condition"));
+    bool setCategoryItems(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds);
     bool updateFilter(qint64 filterId, qint64 playlistId, const QString& name, const FilterDefinition& definition);
     bool deleteFilter(qint64 filterId, qint64 playlistId);
     QSet<qint64> matchingItems(qint64 playlistId, const FilterDefinition* definition, const QString& search) {
