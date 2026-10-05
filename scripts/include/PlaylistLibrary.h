@@ -61,27 +61,19 @@ public:
     bool isPersistent() const { return m_db.isPersistent(); }
 
     PlaylistListModel* listModel() { return &m_list; }
+    // The library's database, for BackupManager's bookkeeping (media_backups).
+    // GUI thread only - SQLite connections belong to the thread that made them.
+    LibraryDatabase& database() { return m_db; }
 
-    // --- playlist categories: organizational groups of existing playlists
-    // (see LibraryDatabase). A playlist may be in any number of categories;
-    // one in none is "Uncategorized". Nothing here touches playlist
-    // contents, order or playback. ---
-    const QVector<CategoryInfo>& categories() const { return m_categories; }
-    QString categoryName(qint64 id) const;
-    QList<qint64> categoriesOf(qint64 playlistId) const;
-    QList<qint64> playlistsIn(qint64 categoryId) const; // library order
-    qint64 createCategory(const QString& name, const QList<qint64>& playlistIds = {}); // 0 on failure
-    bool renameCategory(qint64 id, const QString& name);
-    bool deleteCategory(qint64 id); // the category only - its playlists stay
-    bool addPlaylistToCategory(qint64 categoryId, qint64 playlistId);
-    bool removePlaylistFromCategory(qint64 categoryId, qint64 playlistId);
-    // "Move to Category": exactly these categories afterwards (none =
-    // Uncategorized).
-    bool setPlaylistCategories(qint64 playlistId, const QList<qint64>& categoryIds);
-    // "Choose Playlists…": exactly these playlists in the category afterwards.
-    bool setCategoryPlaylists(qint64 categoryId, const QList<qint64>& playlistIds);
-    QSet<qint64> searchPlaylists(const QString& text, QSet<qint64>* matchedCategories) {
-        return m_db.searchPlaylists(text, matchedCategories);
+    // --- virtual categories: saved filters of one playlist (see
+    // LibraryDatabase). They hold rules, never media - removing/adding
+    // items stays a playlist operation. ---
+    QVector<PlaylistFilterInfo> filters(qint64 playlistId) { return m_db.playlistFilters(playlistId); }
+    qint64 createFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition);
+    bool updateFilter(qint64 filterId, qint64 playlistId, const QString& name, const FilterDefinition& definition);
+    bool deleteFilter(qint64 filterId, qint64 playlistId);
+    QSet<qint64> matchingItems(qint64 playlistId, const FilterDefinition* definition, const QString& search) {
+        return m_db.matchingItems(playlistId, definition, search);
     }
     int playlistCount() const { return m_list.m_rows.size(); }
     PlaylistModel* playlist(qint64 id);
@@ -136,24 +128,21 @@ signals:
     void activeSettingsChanged();
     void playlistsChanged();
     void errorOccurred(const QString& message);
+    // A playlist's saved filters were created, renamed/edited or deleted.
+    void filtersChanged(qint64 playlistId);
     // Around closeForCleanup()/reopenAfterCleanup(): every PlaylistModel*
     // handed out before aboutToReset() is destroyed right after it.
     void aboutToReset();
     void resetFinished();
-    // Categories or their playlist links changed.
-    void categoriesChanged();
 
 private:
     void reloadList();
     void migrateLegacyImagePlaylist();
     void refreshListCounts(qint64 id);
-    void reloadCategories();
 
     SettingsManager* m_settings;
     LibraryDatabase m_db;
     PlaylistListModel m_list;
-    QVector<CategoryInfo> m_categories;
-    QVector<QPair<qint64, qint64>> m_categoryLinks; // (category id, playlist id)
     QHash<qint64, PlaylistModel*> m_models;
     qint64 m_activeId = 0;
     qint64 m_selectedId = 0;

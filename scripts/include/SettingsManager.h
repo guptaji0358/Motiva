@@ -58,6 +58,11 @@ public:
     bool explorerIntegrationEnabled() const;
     void setExplorerIntegrationEnabled(bool enabled);
 
+    // Optional local backup of media (BackupManager). OFF by default: until
+    // the user turns it on, Motiva never copies, scans or uploads media.
+    bool backupEnabled() const;
+    void setBackupEnabled(bool enabled);
+
     bool wasWallpaperActive() const;
     void setWasWallpaperActive(bool active);
 

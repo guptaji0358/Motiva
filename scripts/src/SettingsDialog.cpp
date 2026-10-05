@@ -5,6 +5,8 @@
 #include "ThemeTransitionOverlay.h"
 #include "CleanupManager.h"
 #include "CleanupWindow.h"
+#include "BackupManager.h"
+#include "BackupWindow.h"
 
 #include <QFormLayout>
 #include <QVBoxLayout>
@@ -22,8 +24,8 @@
 #include <QPushButton>
 
 SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* settings, CleanupManager* cleanup,
-                               QWidget* parent)
-    : QDialog(parent), m_manager(manager), m_settings(settings), m_cleanup(cleanup) {
+                               BackupManager* backup, QWidget* parent)
+    : QDialog(parent), m_manager(manager), m_settings(settings), m_cleanup(cleanup), m_backup(backup) {
     setWindowTitle(tr("Settings"));
     m_transitionOverlay = new ThemeTransitionOverlay(this);
     // Embedded via resources/app.qrc (Assets/settings-icon/settings.svg)
@@ -61,7 +63,7 @@ SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* setti
     // 720-800 x 360-450 range, and the dialog stays freely resizable
     // larger or smaller (down to this floor) afterward.
     setMinimumSize(860, 380);
-    resize(880, 400);
+    resize(880, 520);
     connect(m_cleanup, &CleanupManager::preferencesChanged, this, &SettingsDialog::onPreferencesChangedExternally);
 }
 
@@ -206,6 +208,41 @@ void SettingsDialog::buildUi() {
     connect(m_explorerIntegrationCheck, &QCheckBox::toggled, this,
         &SettingsDialog::onExplorerIntegrationToggled);
     rightCol->addWidget(m_explorerIntegrationCheck);
+
+    // Optional local media backup: the ON/OFF switch (OFF by default) and a
+    // one-line status; details, progress and storage live in BackupWindow.
+    auto* backupSection = new QLabel(tr("Media Backup"));
+    backupSection->setObjectName(QStringLiteral("sectionLabel"));
+    backupSection->setFont(sectionFont);
+    rightCol->addWidget(backupSection);
+    m_backupCheck = new QCheckBox(tr("Back up my media"), this);
+    m_backupCheck->setToolTip(BackupWindow::explanationText());
+    connect(m_backupCheck, &QCheckBox::toggled, this, [this](bool on) {
+        const bool ok = on ? BackupWindow::confirmAndEnable(m_backup, this) : BackupWindow::confirmAndDisable(m_backup, this);
+        if (!ok) {
+            m_backupCheck->blockSignals(true);
+            m_backupCheck->setChecked(!on);
+            m_backupCheck->blockSignals(false);
+        }
+        updateBackupRow();
+    });
+    rightCol->addWidget(m_backupCheck);
+    auto* backupRow = new QHBoxLayout();
+    m_backupStatus = new QLabel(this);
+    m_backupStatus->setObjectName(QStringLiteral("secondaryText"));
+    m_backupStatus->setWordWrap(true);
+    backupRow->addWidget(m_backupStatus, 1);
+    auto* manageBackup = new QPushButton(tr("Manage…"), this);
+    connect(manageBackup, &QPushButton::clicked, this, &SettingsDialog::openBackup);
+    backupRow->addWidget(manageBackup);
+    rightCol->addLayout(backupRow);
+    for (auto signal : {&BackupManager::enabledChanged}) {
+        connect(m_backup, signal, this, &SettingsDialog::updateBackupRow);
+    }
+    connect(m_backup, &BackupManager::stateChanged, this, &SettingsDialog::updateBackupRow);
+    connect(m_backup, &BackupManager::progressChanged, this, &SettingsDialog::updateBackupRow);
+    connect(m_backup, &BackupManager::statsChanged, this, &SettingsDialog::updateBackupRow);
+    updateBackupRow();
 
     // Compact entry only - the cleanup levels live in their own window.
     auto* cleanupSection = new QLabel(tr("Cleanup & Reset"));
@@ -384,6 +421,21 @@ void SettingsDialog::onThemeChanged(int index) {
         setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg")
                                  .arg(Theme::iconVariant(theme))));
     });
+}
+
+void SettingsDialog::updateBackupRow() {
+    m_backupCheck->blockSignals(true);
+    m_backupCheck->setChecked(m_backup->isEnabled());
+    m_backupCheck->blockSignals(false);
+    m_backupStatus->setText(m_backup->statusText());
+}
+
+void SettingsDialog::openBackup() {
+    if (!m_backupWindow) {
+        m_backupWindow = new BackupWindow(m_backup, this);
+        connect(m_backupWindow, &BackupWindow::openCleanupRequested, this, &SettingsDialog::openCleanup);
+    }
+    m_backupWindow->present();
 }
 
 void SettingsDialog::openCleanup() {

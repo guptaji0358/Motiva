@@ -10,6 +10,7 @@
 class SettingsManager;
 class RecoveryState;
 class PlaylistLibrary;
+class BackupManager;
 
 // Cleanup & Reset: the one place that knows which files and settings Motiva
 // owns, and the only code that deletes any of them. The Settings UI
@@ -48,12 +49,16 @@ public:
         DeleteData,
         DeleteCacheAndData,
         FactoryReset,
+        // Media backups are separate from cache and data: only these two
+        // ever remove them, and only when the user asks.
+        DeleteBackups,
         // "More..." operations
         ResetRecoveryHistory,
         ClearLog,
         ResetWindowsIntegration,
         ResetPreferences,
         RemoveLegacyData,
+        DeleteUnusedBackups,
     };
 
     // Approximate on-disk sizes, -1 = could not be determined.
@@ -63,13 +68,16 @@ public:
         qint64 logBytes = -1;
         qint64 recoveryBytes = -1;  // recovery-state.json (+ .tmp)
         qint64 legacyBytes = -1;
+        qint64 backupBytes = -1;   // everything under the backup folder
+        int backupItems = 0;       // media with a valid backup
+        int unusedBackups = 0;     // backups whose media is in no playlist any more
         bool recoveryPresent = false;
         bool logPresent = false;
         bool legacyPresent = false;
     };
 
     CleanupManager(SettingsManager* settings, RecoveryState* recovery, PlaylistLibrary* library,
-                   QObject* parent = nullptr);
+                   BackupManager* backup, QObject* parent = nullptr);
     ~CleanupManager() override;
 
     // Measures the owned files off the GUI thread; emits sizesReady().
@@ -138,6 +146,7 @@ private:
     SettingsManager* m_settings;
     RecoveryState* m_recovery;
     PlaylistLibrary* m_library;
+    BackupManager* m_backup;
 
     QVector<Step> m_steps;
     int m_stepIndex = -1;

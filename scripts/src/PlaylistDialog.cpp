@@ -1,9 +1,9 @@
 #include "PlaylistDialog.h"
+#include "BackupManager.h"
 #include "MediaRecovery.h"
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
-#include "PlaylistTreeModel.h"
-#include "CategoryBuilderDialog.h"
+#include "CategoryFilterDialog.h"
 #include "Theme.h"
 #include "VideoPlayer.h"
 
@@ -11,7 +11,6 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QCursor>
 #include <QDir>
 #include <QDrag>
 #include <QDragEnterEvent>
@@ -28,7 +27,6 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -38,7 +36,6 @@
 #include <QStyledItemDelegate>
 #include <QTextEdit>
 #include <QTimer>
-#include <QTreeView>
 #include <QVBoxLayout>
 
 namespace {
@@ -198,16 +195,7 @@ class PlaylistRowDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
-    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex& index) const override {
-        switch (index.data(PlaylistTreeModel::KindRole).toInt()) {
-        case PlaylistTreeModel::HeaderNode:
-            return QSize(200, 34);
-        case PlaylistTreeModel::CategoryNode:
-            return QSize(200, 38);
-        default:
-            return QSize(200, 52);
-        }
-    }
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override { return QSize(200, 52); }
 
     // Inline rename: a plain line edit over the name line of the row.
     void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex&) const override {
@@ -219,58 +207,6 @@ public:
         const Theme::ThemePalette& pal = Theme::themePalette(Theme::currentTheme());
         const bool selected = option.state & QStyle::State_Selected;
         const bool hovered = option.state & QStyle::State_MouseOver;
-        const int kind = index.data(PlaylistTreeModel::KindRole).toInt();
-        if (kind == PlaylistTreeModel::HeaderNode) {
-            // CATEGORIES / UNCATEGORIZED: a small section caption, not a row.
-            p->save();
-            QFont caption = option.font;
-            caption.setBold(true);
-            caption.setPointSizeF(caption.pointSizeF() * 0.85);
-            caption.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
-            p->setFont(caption);
-            p->setPen(pal.textSecondary);
-            const QRect r = option.rect.adjusted(6, 0, -4, -4);
-            p->drawText(r, Qt::AlignLeft | Qt::AlignBottom, index.data(Qt::DisplayRole).toString().toUpper());
-            p->setPen(pal.border);
-            p->drawLine(r.left(), option.rect.bottom(), option.rect.right() - 4, option.rect.bottom());
-            p->restore();
-            return;
-        }
-        if (kind == PlaylistTreeModel::CategoryNode) {
-            // A category: chevron, name, playlist count. Expand/collapse with
-            // a double-click or the arrow keys.
-            p->save();
-            p->setRenderHint(QPainter::Antialiasing, true);
-            const QRectF row = QRectF(option.rect).adjusted(2, 2, -4, -2);
-            const int radius = qMin(6, cardRadius());
-            if (selected || hovered) {
-                p->setPen(Qt::NoPen);
-                p->setBrush(selected ? pal.accentSoft : pal.buttonHoverBg);
-                p->drawRoundedRect(row, radius, radius);
-            }
-            const auto* view = qobject_cast<const QTreeView*>(option.widget);
-            const bool expanded = view && view->isExpanded(index);
-            p->setPen(pal.textSecondary);
-            p->drawText(QRectF(row.left() + 4, row.top(), 16, row.height()), Qt::AlignCenter,
-                        expanded ? QStringLiteral("\u25BE") : QStringLiteral("\u25B8"));
-            QFont bold = option.font;
-            bold.setBold(true);
-            const QFontMetrics boldFm(bold);
-            const QFontMetrics fm(option.font);
-            const QString count = QString::number(index.data(PlaylistListModel::CountRole).toInt());
-            const qreal countW = fm.horizontalAdvance(count) + 8;
-            const QRectF nameRect(row.left() + 22, row.top(), row.width() - 30 - countW, row.height());
-            p->setFont(bold);
-            p->setPen(pal.textPrimary);
-            p->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
-                        boldFm.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, int(nameRect.width())));
-            p->setFont(option.font);
-            p->setPen(pal.textSecondary);
-            p->drawText(QRectF(row.right() - 8 - countW, row.top(), countW, row.height()), Qt::AlignRight | Qt::AlignVCenter,
-                        count);
-            p->restore();
-            return;
-        }
         const bool active = index.data(PlaylistListModel::IsActiveRole).toBool();
         const bool video = index.data(PlaylistListModel::TypeRole).toInt() == static_cast<int>(PlaylistType::Video);
         const int count = index.data(PlaylistListModel::CountRole).toInt();
@@ -460,16 +396,32 @@ void PlaylistView::dropEvent(QDropEvent* event) {
     emit filesDropped(files, pos);
 }
 
+int PlaylistView::visibleNeighbour(int row, int step) const {
+    if (!model()) {
+        return -1;
+    }
+    for (int r = row + step; r >= 0 && r < model()->rowCount(); r += step) {
+        if (!isRowHidden(r)) {
+            return r;
+        }
+    }
+    return -1;
+}
+
 void PlaylistView::keyPressEvent(QKeyEvent* event) {
     const QModelIndexList selected = selectionModel() ? selectionModel()->selectedIndexes() : QModelIndexList();
     const int row = selected.isEmpty() ? -1 : selected.first().row();
     if (row >= 0 && (event->modifiers() & Qt::ControlModifier)) {
-        if (event->key() == Qt::Key_Left && row > 0) {
-            emit moveRequested(row, row - 1);
+        // Past the visible neighbour - rows outside the current category
+        // are hidden and keep their place.
+        const int left = visibleNeighbour(row, -1);
+        const int right = visibleNeighbour(row, +1);
+        if (event->key() == Qt::Key_Left && left >= 0) {
+            emit moveRequested(row, left);
             return;
         }
-        if (event->key() == Qt::Key_Right && row < model()->rowCount() - 1) {
-            emit moveRequested(row, row + 1);
+        if (event->key() == Qt::Key_Right && right >= 0) {
+            emit moveRequested(row, right);
             return;
         }
     }
@@ -535,67 +487,6 @@ void PlaylistView::paintEvent(QPaintEvent* event) {
     }
 }
 
-// The sidebar tree. A drag only carries a reference to the playlist - the
-// model files it under the drop target - so the default "move = remove the
-// dragged row afterwards" behavior of item views must never run here.
-class PlaylistTreeView : public QTreeView {
-public:
-    using QTreeView::QTreeView;
-
-protected:
-    // The row delegate draws chevrons, selection and the accent marker in
-    // the theme's colors; the platform style's own branch area (on Windows
-    // 11 a blue selection pill per indentation level) must not add to it.
-    void drawBranches(QPainter*, const QRect&, const QModelIndex&) const override {}
-    // Same reason for the row itself: one column, painted entirely by the
-    // delegate (selection, hover, focus come from the view's own state).
-    void drawRow(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-        QStyleOptionViewItem opt = option;
-        opt.rect = visualRect(index);
-        opt.state.setFlag(QStyle::State_Selected, selectionModel()->isSelected(index));
-        const QPoint cursor = viewport()->mapFromGlobal(QCursor::pos());
-        opt.state.setFlag(QStyle::State_MouseOver, viewport()->rect().contains(cursor) && indexAt(cursor) == index);
-        opt.state.setFlag(QStyle::State_HasFocus, hasFocus() && currentIndex() == index);
-        itemDelegateForIndex(index)->paint(painter, opt, index);
-    }
-
-    // A click on a category's chevron opens/closes it (double-click and the
-    // arrow keys do too - QTreeView's own behavior).
-    void mousePressEvent(QMouseEvent* event) override {
-        const QModelIndex idx = indexAt(event->position().toPoint());
-        if (event->button() == Qt::LeftButton &&
-            idx.data(PlaylistTreeModel::KindRole).toInt() == PlaylistTreeModel::CategoryNode &&
-            event->position().x() < visualRect(idx).left() + 24) {
-            setExpanded(idx, !isExpanded(idx));
-            event->accept();
-            return;
-        }
-        QTreeView::mousePressEvent(event);
-    }
-
-    void paintEvent(QPaintEvent* event) override {
-        QTreeView::paintEvent(event);
-        const QString empty = property("emptyText").toString();
-        if (model() && model()->rowCount() == 0 && !empty.isEmpty()) {
-            QPainter p(viewport());
-            p.setPen(Theme::themePalette(Theme::currentTheme()).textSecondary);
-            p.drawText(viewport()->rect().adjusted(12, 16, -12, 0), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
-                       empty);
-        }
-    }
-
-    void startDrag(Qt::DropActions supportedActions) override {
-        const QModelIndexList selected = selectedIndexes();
-        QMimeData* mime = selected.isEmpty() ? nullptr : model()->mimeData(selected);
-        if (!mime) {
-            return;
-        }
-        auto* drag = new QDrag(this);
-        drag->setMimeData(mime);
-        drag->exec(supportedActions, Qt::MoveAction);
-    }
-};
-
 // -------------------------------------------------------------- PlaylistDialog
 
 PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
@@ -621,6 +512,12 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     connect(newVideoShortcut, &QShortcut::activated, this, [this] {
         if (!isTextInputFocused()) {
             createPlaylist(true);
+        }
+    });
+
+    connect(m_library, &PlaylistLibrary::filtersChanged, this, [this](qint64 playlistId) {
+        if (current() && current()->id() == playlistId) {
+            reloadCategories(false);
         }
     });
 
@@ -703,103 +600,52 @@ void PlaylistDialog::buildUi() {
 
 QWidget* PlaylistDialog::buildSidebar() {
     auto* panel = new QWidget(this);
-    panel->setFixedWidth(280);
+    panel->setFixedWidth(250);
     auto* col = new QVBoxLayout(panel);
     col->setContentsMargins(0, 0, 0, 0);
-    col->setSpacing(8);
+    col->setSpacing(10);
 
-    // Searches playlist metadata only (name, type, category) in the .mtv.
-    m_searchEdit = new QLineEdit(panel);
-    m_searchEdit->setPlaceholderText(tr("🔎  Search playlists…"));
-    m_searchEdit->setClearButtonEnabled(true);
-    m_searchEdit->setAccessibleName(tr("Search playlists"));
-    col->addWidget(m_searchEdit);
-    m_searchTimer = new QTimer(this);
-    m_searchTimer->setSingleShot(true);
-    m_searchTimer->setInterval(120);
-    connect(m_searchEdit, &QLineEdit::textChanged, m_searchTimer, qOverload<>(&QTimer::start));
-    connect(m_searchTimer, &QTimer::timeout, this, [this] {
-        m_treeModel->setFilter(m_searchEdit->text());
-        m_tree->setProperty("emptyText", m_treeModel->isFiltering() ? tr("No playlists match.") : QString());
-        m_tree->viewport()->update();
-    });
+    auto* label = new QLabel(tr("My Playlists"), panel);
+    label->setObjectName(QStringLiteral("sectionLabel"));
+    QFont f = label->font();
+    f.setBold(true);
+    label->setFont(f);
+    col->addWidget(label);
 
-    auto* newRow = new QHBoxLayout();
-    newRow->setSpacing(6);
+    m_playlistList = new QListView(panel);
+    m_playlistList->setModel(m_library->listModel());
+    m_playlistList->setItemDelegate(new PlaylistRowDelegate(m_playlistList));
+    m_playlistList->setUniformItemSizes(true);
+    m_playlistList->setMouseTracking(true);
+    m_playlistList->setFrameShape(QFrame::NoFrame);
+    m_playlistList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_playlistList->setAccessibleName(tr("My Playlists"));
+    m_playlistList->setStyleSheet(QStringLiteral("QListView { background: transparent; }"));
+    m_playlistList->setAccessibleDescription(tr("Right-click for Rename and Delete. F2 or double-click renames, "
+                                                "Delete or D deletes, Ctrl+Alt+N creates an image playlist, "
+                                                "Ctrl+Shift+N a video playlist."));
+    // Double-click and F2 (EditKeyPressed) open the inline name editor;
+    // Enter commits, Escape cancels (standard item-view editing).
+    m_playlistList->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+    m_playlistList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_playlistList, &QWidget::customContextMenuRequested, this, &PlaylistDialog::showPlaylistMenu);
+    m_playlistList->installEventFilter(this);
+    connect(m_playlistList->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            &PlaylistDialog::onSelectionInSidebar);
+    col->addWidget(m_playlistList, 1);
+
+    auto* buttons = new QHBoxLayout();
+    buttons->setSpacing(6);
+    // Two direct buttons - no type menu (that dropdown was what Ctrl+N popped).
     auto* newImage = new QPushButton(tr("+ Image Playlist"), panel);
     newImage->setToolTip(tr("New image playlist (Ctrl+Alt+N)"));
     connect(newImage, &QPushButton::clicked, this, [this] { createPlaylist(false); });
-    newRow->addWidget(newImage);
+    buttons->addWidget(newImage);
     auto* newVideo = new QPushButton(tr("+ Video Playlist"), panel);
     newVideo->setToolTip(tr("New video playlist (Ctrl+Shift+N)"));
     connect(newVideo, &QPushButton::clicked, this, [this] { createPlaylist(true); });
-    newRow->addWidget(newVideo);
-    col->addLayout(newRow);
-    auto* buildCategory = new QPushButton(tr("+ Build Category"), panel);
-    buildCategory->setToolTip(tr("Group your existing playlists so they're easier to find"));
-    connect(buildCategory, &QPushButton::clicked, this, [this] { onBuildCategory(0); });
-    col->addWidget(buildCategory);
-
-    // Categories (each with its playlists) then Uncategorized - the same
-    // playlists as before, just grouped. See PlaylistTreeModel.
-    m_treeModel = new PlaylistTreeModel(m_library, this);
-    auto* tree = new PlaylistTreeView(panel);
-    m_tree = tree;
-    m_tree->setModel(m_treeModel);
-    m_tree->setItemDelegate(new PlaylistRowDelegate(m_tree));
-    m_tree->setHeaderHidden(true);
-    m_tree->setRootIsDecorated(false);
-    m_tree->setIndentation(14);
-    m_tree->setMouseTracking(true);
-    m_tree->setFrameShape(QFrame::NoFrame);
-    m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_tree->setAccessibleName(tr("Playlists"));
-    // The delegate draws rows, chevrons and selection itself (theme colors).
-    m_tree->setStyleSheet(QStringLiteral(
-        "QTreeView { background: transparent; show-decoration-selected: 0; selection-background-color: transparent; }"
-        "QTreeView::item, QTreeView::item:selected, QTreeView::item:hover { background: transparent; }"
-        "QTreeView::branch, QTreeView::branch:selected, QTreeView::branch:hover { background: transparent; }"
-        "QTreeView::branch { image: none; border-image: none; }"));
-    m_tree->setAccessibleDescription(tr("Categories group playlists; a playlist can be in several. Right-click for "
-                                        "Rename, Delete and category actions. F2 renames, Delete deletes. Drag a "
-                                        "playlist onto a category to file it there. Ctrl+Alt+N creates an image "
-                                        "playlist, Ctrl+Shift+N a video playlist."));
-    // F2 renames; double-click renames a playlist and opens/closes a
-    // category (handled below), so no DoubleClicked edit trigger.
-    m_tree->setEditTriggers(QAbstractItemView::EditKeyPressed);
-    m_tree->setExpandsOnDoubleClick(true);
-    m_tree->setDragDropMode(QAbstractItemView::DragDrop);
-    m_tree->setDefaultDropAction(Qt::MoveAction);
-    m_tree->setDropIndicatorShown(true);
-    m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_tree, &QWidget::customContextMenuRequested, this, &PlaylistDialog::showPlaylistMenu);
-    connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& idx) {
-        if (idx.data(PlaylistTreeModel::KindRole).toInt() == PlaylistTreeModel::PlaylistNode) {
-            m_tree->edit(idx);
-        }
-    });
-    connect(m_tree, &QTreeView::collapsed, this, [this](const QModelIndex& idx) {
-        if (m_restoringTree) {
-            return;
-        }
-        if (idx.data(PlaylistTreeModel::KindRole).toInt() == PlaylistTreeModel::HeaderNode) {
-            m_tree->expand(idx); // section captions always stay open
-        } else {
-            m_collapsedCategories.insert(idx.data(PlaylistTreeModel::CategoryIdRole).toLongLong());
-        }
-    });
-    connect(m_tree, &QTreeView::expanded, this, [this](const QModelIndex& idx) {
-        if (!m_restoringTree) {
-            m_collapsedCategories.remove(idx.data(PlaylistTreeModel::CategoryIdRole).toLongLong());
-        }
-    });
-    connect(m_treeModel, &QAbstractItemModel::modelAboutToBeReset, this, &PlaylistDialog::saveTreeState);
-    connect(m_treeModel, &QAbstractItemModel::modelReset, this, &PlaylistDialog::restoreTreeState);
-    m_tree->installEventFilter(this);
-    connect(m_tree->selectionModel(), &QItemSelectionModel::selectionChanged, this,
-            &PlaylistDialog::onSelectionInSidebar);
-    col->addWidget(m_tree, 1);
-    restoreTreeState();
+    buttons->addWidget(newVideo);
+    col->addLayout(buttons);
     return panel;
 }
 
@@ -850,9 +696,68 @@ QWidget* PlaylistDialog::buildEditor() {
     head->addWidget(m_activeCheck, 0, Qt::AlignVCenter);
     col->addLayout(head);
 
+    // Virtual categories: saved filters of THIS playlist. "All" is built in.
+    auto* filterRow = new QHBoxLayout();
+    filterRow->setSpacing(8);
+    m_categoryLabel = new QLabel(tr("Category:"), editor);
+    filterRow->addWidget(m_categoryLabel);
+    m_categoryCombo = new QComboBox(editor);
+    m_categoryCombo->setMinimumWidth(170);
+    m_categoryCombo->setAccessibleName(tr("Category"));
+    m_categoryCombo->setToolTip(tr("A category is a saved filter for this playlist. Right-click to edit, rename or "
+                                   "delete it."));
+    m_categoryLabel->setBuddy(m_categoryCombo);
+    m_categoryCombo->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_categoryCombo, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& pos) { showCategoryMenu(m_categoryCombo->mapToGlobal(pos)); });
+    connect(m_categoryCombo, &QComboBox::currentIndexChanged, this, [this] {
+        applyItemFilter();
+        updateUi();
+    });
+    filterRow->addWidget(m_categoryCombo);
+    // Same actions as the right-click menu, reachable by keyboard too.
+    m_categoryMenuButton = new QPushButton(QStringLiteral("⋯"), editor);
+    m_categoryMenuButton->setAccessibleName(tr("Category actions"));
+    m_categoryMenuButton->setToolTip(tr("Edit, rename or delete this category"));
+    m_categoryMenuButton->setFixedWidth(40);
+    connect(m_categoryMenuButton, &QPushButton::clicked, this, [this] {
+        showCategoryMenu(m_categoryMenuButton->mapToGlobal(QPoint(0, m_categoryMenuButton->height())));
+    });
+    filterRow->addWidget(m_categoryMenuButton);
+    auto* buildCategory = new QPushButton(tr("+ Build Category"), editor);
+    buildCategory->setToolTip(tr("Save a filter for this playlist, e.g. file names containing \"anime\""));
+    connect(buildCategory, &QPushButton::clicked, this, &PlaylistDialog::onBuildCategory);
+    filterRow->addWidget(buildCategory);
+    filterRow->addStretch();
+    m_itemSearch = new QLineEdit(editor);
+    m_itemSearch->setPlaceholderText(tr("🔎  Search this playlist…"));
+    m_itemSearch->setClearButtonEnabled(true);
+    m_itemSearch->setAccessibleName(tr("Search this playlist"));
+    m_itemSearch->setMinimumWidth(230);
+    filterRow->addWidget(m_itemSearch);
+    col->addLayout(filterRow);
+    m_itemSearchTimer = new QTimer(this);
+    m_itemSearchTimer->setSingleShot(true);
+    m_itemSearchTimer->setInterval(150);
+    connect(m_itemSearch, &QLineEdit::textChanged, m_itemSearchTimer, qOverload<>(&QTimer::start));
+    connect(m_itemSearchTimer, &QTimer::timeout, this, [this] {
+        applyItemFilter();
+        updateUi();
+    });
+    m_filterTimer = new QTimer(this);
+    m_filterTimer->setSingleShot(true);
+    m_filterTimer->setInterval(0);
+    connect(m_filterTimer, &QTimer::timeout, this, [this] {
+        applyItemFilter();
+        updateUi();
+    });
+
     m_view = new PlaylistView(editor);
     m_view->setMinimumHeight(kCardHeight + 3 * kCardSpacing);
     col->addWidget(m_view, 1);
+    m_showingLabel = new QLabel(editor);
+    m_showingLabel->setObjectName(QStringLiteral("secondaryText"));
+    col->addWidget(m_showingLabel);
     connect(m_view, &PlaylistView::filesDropped, this, [this](const QStringList& files, int row) {
         if (current()) {
             addFilesTo(current()->id(), files, row);
@@ -941,6 +846,12 @@ QWidget* PlaylistDialog::buildEditor() {
         onFindFile(row);
     });
     bannerRow->addWidget(m_findFileButton, 0, Qt::AlignVCenter);
+    // Only shown when a valid backup copy of the selected missing file exists.
+    m_restoreBackupButton = new QPushButton(tr("Restore from Backup"), m_missingBanner);
+    m_restoreBackupButton->setToolTip(tr("Copy this file back from Motiva's backup. An existing file is never overwritten."));
+    connect(m_restoreBackupButton, &QPushButton::clicked, this, [this] { onRestoreFromBackup(selectedRow()); });
+    m_restoreBackupButton->setVisible(false);
+    bannerRow->addWidget(m_restoreBackupButton, 0, Qt::AlignVCenter);
     m_missingRemoveButton = new QPushButton(tr("Remove"), m_missingBanner);
     m_missingRemoveButton->setToolTip(tr("Remove this entry from the playlist. No file is deleted."));
     connect(m_missingRemoveButton, &QPushButton::clicked, this, &PlaylistDialog::onRemove);
@@ -1034,40 +945,53 @@ PlaylistModel* PlaylistDialog::current() const {
 }
 
 void PlaylistDialog::selectPlaylist(qint64 id) {
-    QModelIndex idx = m_treeModel->indexOfPlaylist(id);
-    if (!idx.isValid() && !m_treeModel->isFiltering() && m_library->playlistCount() > 0) {
-        idx = m_treeModel->indexOfPlaylist(m_library->listModel()->idAt(0));
-    }
-    if (idx.isValid()) {
-        const bool autoScroll = m_tree->hasAutoScroll();
-        m_tree->setAutoScroll(isVisible());
-        m_tree->setCurrentIndex(idx);
-        m_tree->setAutoScroll(autoScroll);
-        m_tree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
-        if (isVisible()) {
-            // Not while the dialog is still being built: the tree has no
-            // real height yet, and the scroll would hide the top caption.
-            m_tree->scrollTo(idx);
-        }
+    const int row = m_library->listModel()->rowOf(id);
+    if (row >= 0) {
+        const QModelIndex idx = m_library->listModel()->index(row);
+        m_playlistList->setCurrentIndex(idx);
+        m_playlistList->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+    } else if (m_library->playlistCount() > 0) {
+        selectPlaylist(m_library->listModel()->idAt(0));
+        return;
     }
     bindSelectedPlaylist();
 }
 
 void PlaylistDialog::onSelectionInSidebar() {
-    if (m_restoringTree) {
-        return;
-    }
-    if (const qint64 id = selectedPlaylistId()) {
-        m_library->setSelected(id);
+    const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
+    if (!sel.isEmpty()) {
+        m_library->setSelected(m_library->listModel()->idAt(sel.first().row()));
     }
     showNotice(QString());
     bindSelectedPlaylist();
 }
 
 void PlaylistDialog::bindSelectedPlaylist() {
-    PlaylistModel* model = m_library->playlist(selectedPlaylistId());
+    const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
+    const qint64 id = sel.isEmpty() ? 0 : m_library->listModel()->idAt(sel.first().row());
+    PlaylistModel* model = m_library->playlist(id);
     if (model != m_view->playlist()) {
         m_view->setPlaylist(model);
+        if (model) {
+            connect(model, &QAbstractItemModel::modelReset, m_filterTimer, qOverload<>(&QTimer::start),
+                    Qt::UniqueConnection);
+            connect(model, &QAbstractItemModel::layoutChanged, m_filterTimer, qOverload<>(&QTimer::start),
+                    Qt::UniqueConnection);
+            connect(model, &QAbstractItemModel::rowsInserted, m_filterTimer, qOverload<>(&QTimer::start),
+                    Qt::UniqueConnection);
+            connect(model, &QAbstractItemModel::rowsRemoved, m_filterTimer, qOverload<>(&QTimer::start),
+                    Qt::UniqueConnection);
+            connect(model, &QAbstractItemModel::rowsMoved, m_filterTimer, qOverload<>(&QTimer::start),
+                    Qt::UniqueConnection);
+            connect(model, &PlaylistModel::contentsChanged, m_filterTimer, qOverload<>(&QTimer::start),
+                    Qt::UniqueConnection);
+        }
+        if ((model ? model->id() : 0) != m_filtersPlaylistId) {
+            m_itemSearch->blockSignals(true);
+            m_itemSearch->clear();
+            m_itemSearch->blockSignals(false);
+            reloadCategories(true); // every playlist opens on "All"
+        }
         if (m_view->selectionModel()) {
             connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this,
                     &PlaylistDialog::updateUi, Qt::UniqueConnection);
@@ -1141,6 +1065,64 @@ void PlaylistDialog::selectRow(int row) {
     updateUi();
 }
 
+void PlaylistDialog::setBackupManager(BackupManager* backup) {
+    m_backup = backup;
+    if (!m_backup) {
+        return;
+    }
+    connect(m_backup, &BackupManager::restoreProgress, this, [this](qint64, int percent) {
+        showNotice(tr("Restoring from backup… %1%").arg(percent));
+    });
+    connect(m_backup, &BackupManager::restoreFinished, this,
+            [this](qint64, bool ok, const QString& path, const QString& message) {
+                showNotice(ok ? tr("Restored \"%1\" from backup. Its place in every playlist is unchanged.")
+                                    .arg(QFileInfo(path).fileName())
+                              : tr("Could not restore from backup: %1").arg(message));
+                updateUi();
+            });
+}
+
+// "Restore from Backup": the backup is copied back to the file's original
+// location when that is free; if a file is already there, or the folder/drive
+// isn't, the user picks where to put it. Never overwrites. The media record
+// is the same one - only its saved path changes (PlaylistLibrary::relocateMedia).
+void PlaylistDialog::onRestoreFromBackup(int row) {
+    PlaylistModel* m = current();
+    if (!m || !m_backup || row < 0 || row >= m->count() || m_backup->isRestoring()) {
+        return;
+    }
+    const qint64 mediaId = m->mediaIdAt(row);
+    if (!m_backup->hasUsableBackup(mediaId)) {
+        showNotice(tr("There is no usable backup of this file."));
+        updateUi();
+        return;
+    }
+    QString destination = m->pathAt(row);
+    const QFileInfo target(destination);
+    if (target.exists() || !target.dir().exists()) {
+        const QString reason = target.exists()
+                                   ? tr("A different file already exists at the original location, and Motiva never "
+                                        "overwrites files.")
+                                   : tr("The original folder isn't available.");
+        QMessageBox::information(this, tr("Restore from Backup"),
+                                 reason + QStringLiteral("\n\n") + tr("Choose where to restore the backup."));
+        destination = QFileDialog::getSaveFileName(this, tr("Restore from Backup"),
+                                                   target.exists() ? QDir::home().filePath(target.fileName())
+                                                                   : QDir::home().filePath(target.fileName()),
+                                                   QString(), nullptr, QFileDialog::DontConfirmOverwrite);
+        if (destination.isEmpty()) {
+            return;
+        }
+        if (QFileInfo::exists(destination)) {
+            showNotice(tr("A file already exists there - choose a name that isn't in use. Nothing was overwritten."));
+            return;
+        }
+    }
+    showNotice(tr("Restoring from backup…"));
+    m_backup->restoreMedia(mediaId, destination);
+    updateUi();
+}
+
 void PlaylistDialog::showNotice(const QString& text) {
     m_noticeLabel->setText(text);
     m_noticeLabel->setVisible(!text.isEmpty());
@@ -1164,93 +1146,34 @@ void PlaylistDialog::onCreatePlaylist(int type) {
 }
 
 void PlaylistDialog::startInlineRename() {
-    const QModelIndex idx = selectedTreeIndex();
-    if (!idx.isValid()) {
+    const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
+    if (sel.isEmpty()) {
         return;
     }
-    m_tree->setCurrentIndex(idx);
-    m_tree->setFocus();
-    m_tree->edit(idx);
+    m_playlistList->setCurrentIndex(sel.first());
+    m_playlistList->setFocus();
+    m_playlistList->edit(sel.first());
 }
 
 void PlaylistDialog::showPlaylistMenu(const QPoint& pos) {
-    QModelIndex idx = m_tree->indexAt(pos);
-    const bool fromMouse = idx.isValid();
+    QModelIndex idx = m_playlistList->indexAt(pos);
     if (!idx.isValid()) {
-        idx = selectedTreeIndex(); // keyboard (Menu key / Shift+F10)
-        if (!idx.isValid()) {
+        // Keyboard (Menu key / Shift+F10): act on the selection.
+        const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
+        if (sel.isEmpty()) {
             return;
         }
+        idx = sel.first();
     }
-    const int kind = idx.data(PlaylistTreeModel::KindRole).toInt();
-    if (kind == PlaylistTreeModel::HeaderNode) {
-        return;
-    }
-    m_tree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
-    m_tree->setCurrentIndex(idx);
-    const QPoint at = m_tree->viewport()->mapToGlobal(fromMouse ? pos : m_tree->visualRect(idx).center());
+    m_playlistList->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+    m_playlistList->setCurrentIndex(idx);
     QMenu menu(this);
-
-    if (kind == PlaylistTreeModel::CategoryNode) {
-        const qint64 categoryId = idx.data(PlaylistTreeModel::CategoryIdRole).toLongLong();
-        QAction* rename = menu.addAction(tr("Rename"));
-        rename->setShortcut(QKeySequence(Qt::Key_F2));
-        QAction* choose = menu.addAction(tr("Choose Playlists…"));
-        menu.addSeparator();
-        QAction* del = menu.addAction(tr("Delete Category"));
-        del->setShortcut(QKeySequence(QKeySequence::Delete));
-        QAction* chosen = menu.exec(at);
-        if (chosen == rename) {
-            startInlineRename();
-        } else if (chosen == choose) {
-            onBuildCategory(categoryId);
-        } else if (chosen == del) {
-            onDeleteCategory(categoryId);
-        }
-        return;
-    }
-
-    // A playlist: the existing actions, plus where it is filed.
-    const qint64 playlistId = idx.data(PlaylistListModel::IdRole).toLongLong();
-    const qint64 under = idx.data(PlaylistTreeModel::CategoryIdRole).toLongLong();
-    const QList<qint64> current = m_library->categoriesOf(playlistId);
     QAction* rename = menu.addAction(tr("Rename"));
     rename->setShortcut(QKeySequence(Qt::Key_F2));
     QAction* del = menu.addAction(tr("Delete"));
     del->setShortcut(QKeySequence(QKeySequence::Delete));
-    menu.addSeparator();
-    QMenu* addTo = menu.addMenu(tr("Add to Category"));
-    QMenu* moveTo = menu.addMenu(tr("Move to Category"));
-    for (const CategoryInfo& c : m_library->categories()) {
-        const qint64 cid = c.id;
-        QAction* add = addTo->addAction(c.name, this, [this, cid, playlistId] {
-            m_library->addPlaylistToCategory(cid, playlistId);
-        });
-        add->setEnabled(!current.contains(cid));
-        // Move: filed under exactly this category afterwards.
-        QAction* move = moveTo->addAction(c.name, this, [this, cid, playlistId] {
-            m_library->setPlaylistCategories(playlistId, {cid});
-        });
-        move->setCheckable(true);
-        move->setChecked(current.size() == 1 && current.first() == cid);
-    }
-    if (!m_library->categories().isEmpty()) {
-        addTo->addSeparator();
-        moveTo->addSeparator();
-    }
-    addTo->addAction(tr("New Category…"), this, [this, playlistId] { onBuildCategory(0, {playlistId}); });
-    QAction* uncategorized = moveTo->addAction(tr("Uncategorized"), this, [this, playlistId] {
-        m_library->setPlaylistCategories(playlistId, {});
-    });
-    uncategorized->setCheckable(true);
-    uncategorized->setChecked(current.isEmpty());
-    moveTo->setEnabled(!m_library->categories().isEmpty());
-    if (under > 0) {
-        menu.addAction(tr("Remove from \"%1\"").arg(m_library->categoryName(under)), this, [this, under, playlistId] {
-            m_library->removePlaylistFromCategory(under, playlistId); // the playlist itself stays
-        });
-    }
-    QAction* chosen = menu.exec(at);
+    QAction* chosen = menu.exec(m_playlistList->viewport()->mapToGlobal(
+        idx.isValid() && m_playlistList->indexAt(pos).isValid() ? pos : m_playlistList->visualRect(idx).center()));
     if (chosen == rename) {
         startInlineRename();
     } else if (chosen == del) {
@@ -1259,18 +1182,12 @@ void PlaylistDialog::showPlaylistMenu(const QPoint& pos) {
 }
 
 bool PlaylistDialog::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == m_tree && event->type() == QEvent::KeyPress) {
+    if (watched == m_playlistList && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         const bool plain = (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
         if (plain && (key->key() == Qt::Key_Delete || key->key() == Qt::Key_D)) {
-            if (const qint64 categoryId = selectedCategoryId()) {
-                if (key->key() == Qt::Key_Delete) {
-                    onDeleteCategory(categoryId);
-                }
-            } else if (selectedPlaylistId()) {
-                onDeletePlaylist();
-            }
-            return true; // also keeps 'D' from triggering the tree's type-ahead search
+            onDeletePlaylist();
+            return true; // also keeps 'D' from triggering the list's type-ahead search
         }
     }
     return QDialog::eventFilter(watched, event);
@@ -1437,6 +1354,8 @@ void PlaylistDialog::updateMissingBanner(int row) {
         m_missingRemoveButton->setVisible(false);
     }
     m_findFileButton->setEnabled(!m_recoveryRunning);
+    m_restoreBackupButton->setVisible(selectedMissing && m_backup && m_backup->hasUsableBackup(m->mediaIdAt(row)));
+    m_restoreBackupButton->setEnabled(!m_backup || !m_backup->isRestoring());
     m_missingBanner->setVisible(true);
 }
 
@@ -1457,7 +1376,6 @@ void PlaylistDialog::onDeletePlaylist() {
     const qint64 id = m->id();
     const int row = m_library->listModel()->rowOf(id);
     m_view->setPlaylist(nullptr); // the model is destroyed by deletePlaylist
-    m_tree->selectionModel()->clearSelection();
     if (m_library->deletePlaylist(id)) {
         showNotice(tr("Deleted playlist \"%1\". No files were deleted.").arg(name));
         selectPlaylist(m_library->listModel()->idAt(qMin(row, m_library->playlistCount() - 1)));
@@ -1571,7 +1489,12 @@ void PlaylistDialog::removeRow(int row) {
         if (m->count() == 0 && m->isActive()) {
             m_library->setActive(0); // nothing left to show
         }
-        selectRow(qMin(row, m->count() - 1));
+        int next = qMin(row, m->count() - 1);
+        if (next >= 0 && m_view->isRowHidden(next)) {
+            const int after = m_view->visibleNeighbour(next, +1);
+            next = after >= 0 ? after : m_view->visibleNeighbour(next, -1);
+        }
+        selectRow(next);
     }
     updateUi();
 }
@@ -1603,7 +1526,9 @@ void PlaylistDialog::onMove(int delta) {
 
 void PlaylistDialog::moveRow(int row, int delta) {
     PlaylistModel* m = current();
-    const int to = row + delta;
+    // To the next VISIBLE position: items outside the current category are
+    // hidden and keep their place in the playlist.
+    const int to = m_view->visibleNeighbour(row, delta < 0 ? -1 : +1);
     if (!m || row < 0 || to < 0 || to >= m->count()) {
         return;
     }
@@ -1643,14 +1568,8 @@ void PlaylistDialog::updateUi() {
     const bool hasPlaylists = m_library->playlistCount() > 0;
     PlaylistModel* m = current();
     m_editorStack->setCurrentIndex(m ? 1 : 0);
-    const qint64 selectedCategory = selectedCategoryId();
-    const int inCategory = selectedCategory ? m_library->playlistsIn(selectedCategory).size() : 0;
-    m_emptyLabel->setText(selectedCategory ? tr("\"%1\" groups %2.\n\nSelect one of its playlists to edit it, or "
-                                                "right-click the category to rename it or choose its playlists.")
-                                                 .arg(m_library->categoryName(selectedCategory),
-                                                      inCategory == 1 ? tr("1 playlist") : tr("%1 playlists").arg(inCategory))
-                          : hasPlaylists ? tr("Select a playlist on the left.")
-                                         : tr("Create a playlist with \"+ Image Playlist\" or \"+ Video Playlist\" to get started.\n\n"
+    m_emptyLabel->setText(hasPlaylists ? tr("Select a playlist on the left.")
+                                       : tr("Create a playlist with \"+ Image Playlist\" or \"+ Video Playlist\" to get started.\n\n"
                                             "Image playlists change image on unlock, at Windows start or on a timer.\n"
                                             "Video playlists play their videos one after another."));
     if (!m) {
@@ -1680,6 +1599,17 @@ void PlaylistDialog::updateUi() {
         summary += QStringLiteral("  •  ") + countText(missing, tr("%1 file not found"), tr("%1 files not found"));
     }
     m_summaryLabel->setText(summary);
+    int shown = 0;
+    for (int r = 0; r < count; ++r) {
+        shown += m_view->isRowHidden(r) ? 0 : 1;
+    }
+    const bool filtered = currentFilter() || !m_itemSearch->text().trimmed().isEmpty();
+    m_showingLabel->setText(!filtered        ? countText(count, tr("Showing %1 item"), tr("Showing %1 items"))
+                            : shown == 0     ? tr("No items match - showing 0 of %1").arg(count)
+                                             : tr("Showing %1 of %2 items").arg(shown).arg(count));
+    m_categoryMenuButton->setEnabled(currentFilter() != nullptr);
+    // Categories belong to this playlist - say so.
+    m_categoryLabel->setText(tr("Categories of \"%1\":").arg(m->name().size() > 24 ? m->name().left(23) + QStringLiteral("…") : m->name()));
     m_binding = true;
     m_activeCheck->setChecked(m->isActive());
     m_binding = false;
@@ -1717,100 +1647,152 @@ bool PlaylistDialog::isTextInputFocused() {
            w->inherits("QPlainTextEdit");
 }
 
-// ------------------------------------------------------ playlist categories
+// ------------------------------------------------ virtual categories (filters)
 
-QModelIndex PlaylistDialog::selectedTreeIndex() const {
-    // The selection, not the current index: accessibility clients select
-    // without moving the current index (same rule as selectedRow()).
-    const QModelIndexList sel = m_tree->selectionModel()->selectedIndexes();
-    return sel.isEmpty() ? QModelIndex() : sel.first();
+void PlaylistDialog::reloadCategories(bool resetToAll) {
+    PlaylistModel* m = current();
+    const qint64 keep = resetToAll ? 0 : m_categoryCombo->currentData().toLongLong();
+    m_filtersPlaylistId = m ? m->id() : 0;
+    m_filters = m ? m_library->filters(m->id()) : QVector<PlaylistFilterInfo>{};
+    m_categoryCombo->blockSignals(true);
+    m_categoryCombo->clear();
+    m_categoryCombo->addItem(tr("All"), 0); // built in: every item of the playlist
+    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
+        m_categoryCombo->addItem(f.name, f.id);
+    }
+    const int index = m_categoryCombo->findData(keep);
+    m_categoryCombo->setCurrentIndex(index >= 0 ? index : 0);
+    m_categoryCombo->blockSignals(false);
+    applyItemFilter();
+    updateUi();
 }
 
-qint64 PlaylistDialog::selectedPlaylistId() const {
-    const QModelIndex idx = selectedTreeIndex();
-    return idx.data(PlaylistTreeModel::KindRole).toInt() == PlaylistTreeModel::PlaylistNode
-               ? idx.data(PlaylistListModel::IdRole).toLongLong()
-               : 0;
+const PlaylistFilterInfo* PlaylistDialog::currentFilter() const {
+    const qint64 id = m_categoryCombo ? m_categoryCombo->currentData().toLongLong() : 0;
+    for (const PlaylistFilterInfo& f : m_filters) {
+        if (f.id == id) {
+            return &f;
+        }
+    }
+    return nullptr; // "All"
 }
 
-qint64 PlaylistDialog::selectedCategoryId() const {
-    const QModelIndex idx = selectedTreeIndex();
-    return idx.data(PlaylistTreeModel::KindRole).toInt() == PlaylistTreeModel::CategoryNode
-               ? idx.data(PlaylistTreeModel::CategoryIdRole).toLongLong()
-               : 0;
-}
-
-void PlaylistDialog::saveTreeState() {
-    const QModelIndex idx = selectedTreeIndex();
-    if (!idx.isValid()) {
-        return; // keep what was selected before (e.g. a search hid it for a moment)
-    }
-    m_savedKind = idx.data(PlaylistTreeModel::KindRole).toInt();
-    m_savedId = m_savedKind == PlaylistTreeModel::PlaylistNode ? idx.data(PlaylistListModel::IdRole).toLongLong()
-                : m_savedKind == PlaylistTreeModel::CategoryNode ? idx.data(PlaylistTreeModel::CategoryIdRole).toLongLong()
-                                                                  : 0;
-    m_savedParentCategory =
-        m_savedKind == PlaylistTreeModel::PlaylistNode ? idx.data(PlaylistTreeModel::CategoryIdRole).toLongLong() : -1;
-}
-
-void PlaylistDialog::restoreTreeState() {
-    m_restoringTree = true;
-    // Re-selecting after a rebuild must not scroll the selected row to the
-    // top (that hides the section captions above it).
-    const bool autoScroll = m_tree->hasAutoScroll();
-    m_tree->setAutoScroll(false);
-    const bool filtering = m_treeModel->isFiltering();
-    for (const QModelIndex& group : m_treeModel->groupIndexes()) {
-        const bool category = group.data(PlaylistTreeModel::KindRole).toInt() == PlaylistTreeModel::CategoryNode;
-        const bool open = !category || filtering ||
-                          !m_collapsedCategories.contains(group.data(PlaylistTreeModel::CategoryIdRole).toLongLong());
-        m_tree->setExpanded(group, open);
-    }
-    QModelIndex idx;
-    if (m_savedKind == PlaylistTreeModel::PlaylistNode) {
-        idx = m_treeModel->indexOfPlaylist(m_savedId, m_savedParentCategory);
-    } else if (m_savedKind == PlaylistTreeModel::CategoryNode) {
-        idx = m_treeModel->indexOfCategory(m_savedId);
-    }
-    if (idx.isValid()) {
-        m_tree->setCurrentIndex(idx);
-        m_tree->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
-    }
-    m_tree->setAutoScroll(autoScroll);
-    m_restoringTree = false;
-    // A search that hides the selected playlist leaves it open in the editor.
-    if (m_view && m_summaryLabel && (idx.isValid() || !filtering)) {
-        bindSelectedPlaylist();
-    }
-}
-
-void PlaylistDialog::onBuildCategory(qint64 categoryId, const QList<qint64>& preselected) {
-    CategoryBuilderDialog dialog(m_library, categoryId, this);
-    dialog.preselect(preselected);
-    if (dialog.exec() != QDialog::Accepted) {
+void PlaylistDialog::applyItemFilter() {
+    PlaylistModel* m = current();
+    if (!m || !m_view->model()) {
         return;
     }
-    m_collapsedCategories.remove(dialog.categoryId());
-    const QModelIndex idx = m_treeModel->indexOfCategory(dialog.categoryId());
-    if (idx.isValid()) {
-        m_tree->setExpanded(idx, true);
-        m_tree->scrollTo(idx);
+    const PlaylistFilterInfo* filter = currentFilter();
+    const QString search = m_itemSearch->text().trimmed();
+    if (!filter && search.isEmpty()) {
+        for (int r = 0; r < m->count(); ++r) {
+            m_view->setRowHidden(r, false);
+        }
+    } else {
+        // SQL over the items' stored metadata (see LibraryDatabase::matchingItems).
+        const QSet<qint64> visible =
+            m_library->matchingItems(m->id(), filter ? &filter->definition : nullptr, search);
+        for (int r = 0; r < m->count(); ++r) {
+            m_view->setRowHidden(r, !visible.contains(m->itemIdAt(r)));
+        }
     }
-    showNotice(categoryId > 0 ? tr("Category updated.")
-                              : tr("Category \"%1\" created. Your playlists themselves are unchanged.")
-                                    .arg(m_library->categoryName(dialog.categoryId())));
+    const int row = selectedRow();
+    if (row >= 0 && m_view->isRowHidden(row)) {
+        m_view->selectionModel()->clearSelection();
+    }
+    m_view->viewport()->update();
 }
 
-void PlaylistDialog::onDeleteCategory(qint64 categoryId) {
-    const QString name = m_library->categoryName(categoryId);
-    const int count = m_library->playlistsIn(categoryId).size();
+void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {
+    QMenu menu(this);
+    const bool user = currentFilter() != nullptr; // "All" can't be edited, renamed or deleted
+    QAction* editAction = menu.addAction(tr("Edit Category…"));
+    QAction* renameAction = menu.addAction(tr("Rename…"));
+    menu.addSeparator();
+    QAction* deleteAction = menu.addAction(tr("Delete Category"));
+    for (QAction* a : {editAction, renameAction, deleteAction}) {
+        a->setEnabled(user);
+    }
+    menu.addSeparator();
+    QAction* buildAction = menu.addAction(tr("Build Category…"));
+    QAction* chosen = menu.exec(globalPos);
+    if (chosen == editAction) {
+        onEditCategory();
+    } else if (chosen == renameAction) {
+        onRenameCategory();
+    } else if (chosen == deleteAction) {
+        onDeleteCategory();
+    } else if (chosen == buildAction) {
+        onBuildCategory();
+    }
+}
+
+void PlaylistDialog::onBuildCategory() {
+    PlaylistModel* m = current();
+    if (!m) {
+        return;
+    }
+    CategoryFilterDialog dialog(m_library, m, nullptr, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        reloadCategories(false);
+        m_categoryCombo->setCurrentIndex(qMax(0, m_categoryCombo->findData(dialog.filterId())));
+        showNotice(tr("Category created. It's a saved filter - the playlist itself is unchanged."));
+    }
+}
+
+void PlaylistDialog::onEditCategory() {
+    PlaylistModel* m = current();
+    const PlaylistFilterInfo* filter = currentFilter();
+    if (!m || !filter) {
+        return;
+    }
+    const PlaylistFilterInfo copy = *filter;
+    CategoryFilterDialog dialog(m_library, m, &copy, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        reloadCategories(false);
+    }
+}
+
+void PlaylistDialog::onRenameCategory() {
+    PlaylistModel* m = current();
+    const PlaylistFilterInfo* filter = currentFilter();
+    if (!m || !filter) {
+        return;
+    }
+    const PlaylistFilterInfo copy = *filter;
+    bool ok = false;
+    const QString name =
+        QInputDialog::getText(this, tr("Rename Category"), tr("Category name:"), QLineEdit::Normal, copy.name, &ok).trimmed();
+    if (!ok || name.isEmpty() || name == copy.name) {
+        return;
+    }
+    if (name.compare(QLatin1String("All"), Qt::CaseInsensitive) == 0 || name.compare(tr("All"), Qt::CaseInsensitive) == 0) {
+        showNotice(tr("\"All\" is built in - choose another name."));
+        return;
+    }
+    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
+        if (f.id != copy.id && f.name.compare(name, Qt::CaseInsensitive) == 0) {
+            showNotice(tr("This playlist already has a category called \"%1\".").arg(f.name));
+            return;
+        }
+    }
+    m_library->updateFilter(copy.id, m->id(), name, copy.definition);
+}
+
+void PlaylistDialog::onDeleteCategory() {
+    PlaylistModel* m = current();
+    const PlaylistFilterInfo* filter = currentFilter();
+    if (!m || !filter) {
+        return;
+    }
+    const PlaylistFilterInfo copy = *filter;
     const auto answer = QMessageBox::question(
         this, tr("Delete Category"),
-        tr("Delete the category \"%1\"?\n\nOnly the category is removed. Its %2 stay in your library, "
-           "exactly as they are.")
-            .arg(name, count == 1 ? tr("1 playlist") : tr("%1 playlists").arg(count)),
+        tr("Delete the category \"%1\"?\n\nOnly the saved filter is removed. Every item stays in \"%2\".")
+            .arg(copy.name, m->name()),
         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer == QMessageBox::Yes && m_library->deleteCategory(categoryId)) {
-        showNotice(tr("Deleted category \"%1\". No playlists were deleted.").arg(name));
+    if (answer == QMessageBox::Yes && m_library->deleteFilter(copy.id, m->id())) {
+        m_categoryCombo->setCurrentIndex(0);
+        showNotice(tr("Deleted category \"%1\". No items were removed.").arg(copy.name));
     }
 }

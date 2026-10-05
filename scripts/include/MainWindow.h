@@ -22,6 +22,7 @@ class PlaylistLibrary;
 class PlaylistRotation;
 class PlaylistDialog;
 class CleanupManager;
+class BackupManager;
 class ThemeTransitionOverlay;
 class QDragEnterEvent;
 class QDragMoveEvent;
@@ -230,6 +231,7 @@ private:
     PlaylistDialog* m_playlistDialog = nullptr;
     SettingsDialog* m_settingsDialog = nullptr;
     CleanupManager* m_cleanup = nullptr;
+    BackupManager* m_backup = nullptr;
     // Coalesces bursts of PlaylistLibrary::playlistsChanged into one
     // Explorer-menu sync; m_explorerMenuSignature is what was last written.
     QTimer* m_explorerMenuSyncTimer = nullptr;

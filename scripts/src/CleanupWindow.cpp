@@ -52,8 +52,8 @@ CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent) : QDialog
     // returns to Settings, and Motiva keeps running.
     setModal(false);
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-    setMinimumSize(560, 540);
-    resize(640, 590);
+    setMinimumSize(560, 620);
+    resize(640, 690);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -130,6 +130,12 @@ QWidget* CleanupWindow::buildLevelsPage() {
     col->addWidget(makeLevelRow(kDotOrange, tr("CACHE + DATA"),
                                 tr("Removes both cache and application data. Settings and theme are kept."),
                                 &m_combinedSize, tr("Delete Cache + Data"), Op::DeleteCacheAndData));
+    // Backups are neither cache nor data: their own row, removed only on request.
+    col->addWidget(makeRule(page));
+    col->addWidget(makeLevelRow("#8b6fd6", tr("MEDIA BACKUPS"),
+                                tr("Copies of your media that Motiva made after you turned Backup on. Never part of "
+                                   "Cache or Data - removed only here, and only on request."),
+                                &m_backupSize, tr("Delete Media Backups"), Op::DeleteBackups));
 
     col->addSpacing(14);
     col->addWidget(makeRule(page));
@@ -390,6 +396,11 @@ void CleanupWindow::onSizesReady(const CleanupManager::Sizes& sizes) {
     }
     m_cacheSize->setText(cache);
     m_dataSize->setText(sizeText(sizes.dataBytes));
+    m_backupSize->setText(sizes.backupBytes < 0 ? sizeText(-1)
+                          : sizes.backupBytes == 0
+                              ? tr("Size: no backups stored")
+                              : sizeText(sizes.backupBytes) +
+                                    (sizes.backupItems > 0 ? tr("  \u2022  %1 media files").arg(sizes.backupItems) : QString()));
     m_combinedSize->setText(sizes.cacheBytes < 0 || sizes.dataBytes < 0 ? sizeText(-1)
                                                                         : sizeText(sizes.cacheBytes + sizes.dataBytes));
 }
@@ -414,7 +425,7 @@ bool CleanupWindow::confirm(Op op) {
         info = tr("Removed:\n• every playlist, its order and settings (the .mtv library)\n• saved media "
                   "references, including the current wallpaper media\n• unreadable library copies Motiva set "
                   "aside earlier\n\nMotiva's wallpaper is released first and a new, empty library is created.\n"
-                  "Kept: your settings, theme and cache.\n\n%1\n\nTo keep a copy, use Playlists → Export… first. "
+                  "Kept: your settings, theme, cache and media backups.\n\n%1\n\nTo keep a copy, use Playlists → Export… first. "
                   "This action cannot be undone.")
                    .arg(mediaSafe);
         action = tr("Delete Data");
@@ -424,7 +435,7 @@ bool CleanupWindow::confirm(Op op) {
         text = tr("Delete Motiva's cache and all playlist/library data?");
         info = tr("Removed:\n• every playlist and the .mtv library, saved media references\n• the diagnostic "
                   "log, temporary files and preview thumbnails\n\nMotiva's wallpaper is released first. Kept: your "
-                  "settings, theme and the Motiva installation.\n\n%1\n\nThis action cannot be undone.")
+                  "settings, theme, media backups and the Motiva installation.\n\n%1\n\nThis action cannot be undone.")
                    .arg(mediaSafe);
         action = tr("Delete Cache + Data");
         break;
@@ -433,11 +444,31 @@ bool CleanupWindow::confirm(Op op) {
         text = tr("Factory Reset Motiva?");
         info = tr("This will reset Motiva to its default state and remove your Motiva settings, playlists, "
                   "library, recovery state, and cached data. Start with Windows, the Start Menu shortcut and the "
-                  "Explorer menu entries are turned off. Motiva then restarts.\n\n%1\nMotiva itself stays "
-                  "installed.\n\nThis action cannot be undone.")
+                  "Explorer menu entries are turned off, and Backup is turned off. Motiva then restarts.\n\n"
+                  "Media backups already on disk are NOT deleted by Factory Reset - remove them first with "
+                  "Delete Media Backups if you want them gone.\n\n%1\nMotiva itself stays installed.\n\n"
+                  "This action cannot be undone.")
                    .arg(mediaSafe);
         action = tr("Factory Reset");
         icon = QMessageBox::Critical;
+        break;
+    case Op::DeleteBackups:
+        title = tr("Delete Media Backups");
+        text = tr("Delete all of Motiva's media backups?");
+        info = tr("Removed: every backup copy Motiva made (and the records of them), and Backup is turned off so "
+                  "nothing is copied again until you turn it back on.\n\nYour original files are not touched - "
+                  "only Motiva's own copies are deleted. If an original is later lost, it can no longer be "
+                  "restored from backup.\n\nThis action cannot be undone.");
+        action = tr("Delete Media Backups");
+        icon = QMessageBox::Critical;
+        break;
+    case Op::DeleteUnusedBackups:
+        title = tr("Delete Unused Backups");
+        text = tr("Delete the backups of media that is no longer in any playlist?");
+        info = tr("Removed: backup copies whose media is no longer used by any playlist. Backups of media that is "
+                  "still in a playlist are kept.\n\nYour original files are not touched.\n\nThis action cannot be "
+                  "undone.");
+        action = tr("Delete Unused Backups");
         break;
     case Op::ResetRecoveryHistory:
         title = tr("Reset Recovery History");
@@ -636,6 +667,11 @@ void CleanupWindow::showMoreDialog() {
     }
     addRow(tr("Reset preferences"), tr("Theme and every other setting back to defaults; playlists are kept."),
            QString(), tr("Reset"), Op::ResetPreferences);
+    if (m_sizes.unusedBackups > 0) {
+        addRow(tr("Delete unused backups"),
+               tr("Backup copies of media that is no longer in any playlist (%1).").arg(m_sizes.unusedBackups), QString(),
+               tr("Delete"), Op::DeleteUnusedBackups);
+    }
     if (m_sizes.legacyPresent) {
         addRow(tr("Remove old version data"), tr("Recovery state left by Motiva builds from before the rename."),
                sizeText(m_sizes.legacyBytes), tr("Remove"), Op::RemoveLegacyData);

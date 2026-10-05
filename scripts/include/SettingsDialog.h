@@ -11,6 +11,10 @@ class SettingsManager;
 class ThemeTransitionOverlay;
 class CleanupManager;
 class CleanupWindow;
+class BackupManager;
+class BackupWindow;
+class QLabel;
+class QCheckBox;
 
 // Houses the settings users rarely change (scaling, monitor selection,
 // volume, mute, loop, start-with-Windows) separately from the main
@@ -23,7 +27,7 @@ public:
     // cleanup: drives the separate Cleanup & Reset window (see
     // CleanupWindow), opened from this dialog's compact "Open Cleanup" entry.
     SettingsDialog(WallpaperManager* manager, SettingsManager* settings, CleanupManager* cleanup,
-                   QWidget* parent = nullptr);
+                   BackupManager* backup, QWidget* parent = nullptr);
 
     // Applies the persisted values from SettingsManager to both the UI
     // controls here and the live WallpaperManager - call once at startup,
@@ -89,11 +93,17 @@ private:
     void onPreferencesChangedExternally();
     // One Cleanup window per dialog: created on first use, re-focused after.
     void openCleanup();
+    void openBackup();
+    void updateBackupRow();
 
     WallpaperManager* m_manager;
     SettingsManager* m_settings;
     CleanupManager* m_cleanup;
     CleanupWindow* m_cleanupWindow = nullptr;
+    BackupManager* m_backup;
+    BackupWindow* m_backupWindow = nullptr;
+    QCheckBox* m_backupCheck = nullptr;
+    QLabel* m_backupStatus = nullptr;
 
     ThemeTransitionOverlay* m_transitionOverlay = nullptr;
     bool m_themeTransitionActive = false;

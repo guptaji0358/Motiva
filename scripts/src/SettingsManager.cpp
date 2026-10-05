@@ -141,6 +141,13 @@ void SettingsManager::setStartWithWindows(bool enabled) {
     RegCloseKey(key);
 }
 
+bool SettingsManager::backupEnabled() const {
+    return m_settings.value("backup/enabled", false).toBool();
+}
+void SettingsManager::setBackupEnabled(bool enabled) {
+    m_settings.setValue("backup/enabled", enabled);
+}
+
 bool SettingsManager::wasWallpaperActive() const {
     return m_settings.value("app/wasWallpaperActive", false).toBool();
 }

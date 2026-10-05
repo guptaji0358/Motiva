@@ -1,4 +1,5 @@
 #include "LibraryDatabase.h"
+#include <QJsonArray>
 
 #include <QDateTime>
 #include <QDebug>
@@ -270,10 +271,25 @@ bool LibraryDatabase::initializeOrMigrate(bool freshFile) {
     }
     // One step per version, each inside its own transaction.
     if (version == 1) {
-        return migrateV1toV3();
+        if (!migrateV1toV4()) {
+            return false;
+        }
+        version = 4;
     }
     if (version == 2) {
-        return migrateV2toV3();
+        if (!migrateV2toV3()) {
+            return false;
+        }
+        version = 3;
+    }
+    if (version == 3) {
+        if (!migrateV3toV4()) {
+            return false;
+        }
+        version = 4;
+    }
+    if (version == 4) {
+        return migrateV4toV5();
     }
     return fail(QStringLiteral("No migration path from library schema %1.").arg(version));
 }
@@ -774,6 +790,18 @@ qint64 LibraryDatabase::relocateMedia(qint64 mediaId, const QString& newPath) {
                 return 0;
             }
         }
+        // A backup of the merged-away record moves to the surviving one when
+        // that has none (otherwise it becomes an unused backup).
+        QSqlQuery moveBackup(db());
+        moveBackup.prepare(QStringLiteral(
+            "UPDATE media_backups SET media_id = ? WHERE media_id = ? AND NOT EXISTS"
+            " (SELECT 1 FROM media_backups WHERE media_id = ?)"));
+        moveBackup.addBindValue(existing);
+        moveBackup.addBindValue(mediaId);
+        moveBackup.addBindValue(existing);
+        if (!check(moveBackup, "relocateMedia (backup)")) {
+            return 0;
+        }
         QSqlQuery repoint(db());
         repoint.prepare(QStringLiteral("UPDATE playlist_items SET media_id = ? WHERE media_id = ?"));
         repoint.addBindValue(existing);
@@ -801,9 +829,9 @@ qint64 LibraryDatabase::relocateMedia(qint64 mediaId, const QString& newPath) {
     return result;
 }
 
-bool LibraryDatabase::createCategoryTables(QSqlQuery& q) {
-    // Categories only reference playlists (playlists/playlist_items/media
-    // stay the source of truth). Deleting either side removes just the link.
+// The schema-3 tables (playlist groups) - only needed as the intermediate
+// step of the 2 -> 3 -> 4 path.
+bool LibraryDatabase::createV3CategoryTables(QSqlQuery& q) {
     const QStringList statements = {
         QStringLiteral(
             "CREATE TABLE IF NOT EXISTS categories ("
@@ -813,12 +841,11 @@ bool LibraryDatabase::createCategoryTables(QSqlQuery& q) {
             "  created_at  TEXT NOT NULL,"
             "  updated_at  TEXT NOT NULL)"),
         QStringLiteral(
-            "CREATE TABLE category_playlists ("
+            "CREATE TABLE IF NOT EXISTS category_playlists ("
             "  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,"
             "  playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,"
             "  added_at    TEXT NOT NULL,"
             "  PRIMARY KEY (category_id, playlist_id))"),
-        QStringLiteral("CREATE INDEX idx_category_playlists_playlist ON category_playlists(playlist_id)"),
     };
     for (const QString& sql : statements) {
         if (!q.exec(sql)) {
@@ -828,30 +855,74 @@ bool LibraryDatabase::createCategoryTables(QSqlQuery& q) {
     return true;
 }
 
-bool LibraryDatabase::migrateV1toV3() {
+bool LibraryDatabase::createFilterTable(QSqlQuery& q) {
+    // One row per saved filter. A filter belongs to exactly one playlist and
+    // goes with it; it holds a rule (filter_definition, JSON), never media.
+    const QStringList statements = {
+        QStringLiteral(
+            "CREATE TABLE playlist_categories ("
+            "  id                INTEGER PRIMARY KEY,"
+            "  playlist_id       INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,"
+            "  name              TEXT NOT NULL,"
+            "  filter_definition TEXT NOT NULL,"
+            "  position          INTEGER NOT NULL,"
+            "  created_at        TEXT NOT NULL,"
+            "  updated_at        TEXT NOT NULL)"),
+        QStringLiteral("CREATE INDEX idx_playlist_categories_playlist ON playlist_categories(playlist_id, position)"),
+        // A category name is unique within its playlist only - the same name
+        // under two different playlists is two unrelated categories.
+        QStringLiteral("CREATE UNIQUE INDEX idx_playlist_categories_name ON playlist_categories(playlist_id, name COLLATE NOCASE)"),
+        QStringLiteral("UPDATE library_metadata SET value = '4' WHERE key = 'schema_version'"),
+        QStringLiteral("PRAGMA user_version = 4"),
+    };
+    for (const QString& sql : statements) {
+        if (!q.exec(sql)) {
+            return fail(QStringLiteral("Library upgrade to schema 4 failed: %1").arg(q.lastError().text()));
+        }
+    }
+    return true;
+}
+
+bool LibraryDatabase::migrateV1toV4() {
     Transaction tx(db());
     QSqlQuery q(db());
-    if (!tx.started() || !createCategoryTables(q) ||
-        !q.exec(QStringLiteral("UPDATE library_metadata SET value = '3' WHERE key = 'schema_version'")) ||
-        !q.exec(QStringLiteral("PRAGMA user_version = 3"))) {
-        return fail(QStringLiteral("Library upgrade to schema 3 failed: %1").arg(q.lastError().text()));
+    if (!tx.started() || !createFilterTable(q)) {
+        return false;
     }
     if (!tx.commit()) {
         return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
     }
-    qInfo() << "[Library] Upgraded library schema 1 -> 3 (playlist categories).";
+    qInfo() << "[Library] Upgraded library schema 1 -> 4 (virtual categories as playlist filters).";
     return true;
 }
 
-// Schema 2 (an unreleased development build) grouped MEDIA into categories
-// (category_items). Nothing is lost moving to playlist categories: each
-// such category's media becomes a real playlist of the same name (split
-// into images/videos if mixed - a playlist has one type), filed under that
-// same category. Then the media-membership table goes.
+// Schema 3 (an unreleased development build) grouped playlists into
+// library-wide categories. Categories are now saved filters inside each
+// playlist, so those groupings have no equivalent and are dropped; every
+// playlist, item and media record stays exactly as it is.
+bool LibraryDatabase::migrateV3toV4() {
+    Transaction tx(db());
+    QSqlQuery q(db());
+    if (!tx.started()) {
+        return fail(QStringLiteral("Cannot start transaction: %1").arg(db().lastError().text()));
+    }
+    const int dropped = queryInt(QStringLiteral("SELECT count(*) FROM categories"), 0);
+    if (!q.exec(QStringLiteral("DROP TABLE IF EXISTS category_playlists")) ||
+        !q.exec(QStringLiteral("DROP TABLE IF EXISTS categories")) || !createFilterTable(q)) {
+        return fail(QStringLiteral("Library upgrade to schema 4 failed: %1").arg(q.lastError().text()));
+    }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
+    }
+    qInfo() << "[Library] Upgraded library schema 3 -> 4:" << dropped
+            << "playlist grouping(s) removed (playlists unchanged).";
+    return true;
+}
+
 bool LibraryDatabase::migrateV2toV3() {
     Transaction tx(db());
     QSqlQuery q(db());
-    if (!tx.started() || !createCategoryTables(q)) {
+    if (!tx.started() || !createV3CategoryTables(q)) {
         return fail(QStringLiteral("Library upgrade to schema 3 failed: %1").arg(q.lastError().text()));
     }
     const QString now = nowIso();
@@ -931,160 +1002,370 @@ bool LibraryDatabase::migrateV2toV3() {
     return true;
 }
 
-QVector<CategoryInfo> LibraryDatabase::categories() {
-    QVector<CategoryInfo> result;
+bool LibraryDatabase::migrateV4toV5() {
+    Transaction tx(db());
     QSqlQuery q(db());
-    if (!q.exec(QStringLiteral("SELECT id, name FROM categories ORDER BY position, id"))) {
-        fail(QStringLiteral("Reading categories failed: %1").arg(q.lastError().text()));
-        return result;
+    if (!tx.started()) {
+        return fail(QStringLiteral("Cannot start transaction: %1").arg(db().lastError().text()));
     }
-    while (q.next()) {
-        result.push_back({q.value(0).toLongLong(), q.value(1).toString()});
-    }
-    return result;
-}
-
-QVector<QPair<qint64, qint64>> LibraryDatabase::categoryLinks() {
-    QVector<QPair<qint64, qint64>> result;
-    QSqlQuery q(db());
-    if (!q.exec(QStringLiteral("SELECT category_id, playlist_id FROM category_playlists"))) {
-        fail(QStringLiteral("Reading categories failed: %1").arg(q.lastError().text()));
-        return result;
-    }
-    while (q.next()) {
-        result.push_back({q.value(0).toLongLong(), q.value(1).toLongLong()});
-    }
-    return result;
-}
-
-QString LibraryDatabase::uniqueCategoryName(const QString& wanted) {
-    const QString base = wanted.trimmed().isEmpty() ? QStringLiteral("Category") : wanted.trimmed();
-    QSqlQuery q(db());
-    q.prepare(QStringLiteral("SELECT count(*) FROM categories WHERE name = ? COLLATE NOCASE"));
-    QString candidate = base;
-    for (int n = 2;; ++n) {
-        q.addBindValue(candidate);
-        if (!q.exec() || !q.next() || q.value(0).toInt() == 0) {
-            return candidate;
+    const QStringList statements = {
+        // One row per media record. ON DELETE SET NULL: when the media
+        // record goes away the row stays as an "unused backup" (its file is
+        // only ever removed explicitly) instead of vanishing silently.
+        QStringLiteral(
+            "CREATE TABLE media_backups ("
+            "  id              INTEGER PRIMARY KEY,"
+            "  media_id        INTEGER UNIQUE REFERENCES media(id) ON DELETE SET NULL,"
+            "  provider        TEXT NOT NULL DEFAULT 'local',"
+            "  status          TEXT NOT NULL CHECK (status IN ('complete','failed')),"
+            "  object_id       TEXT,"
+            "  original_path   TEXT NOT NULL,"
+            "  size            INTEGER,"
+            "  source_modified TEXT,"
+            "  content_hash    TEXT,"
+            "  backed_up_at    TEXT,"
+            "  last_error      TEXT,"
+            "  format_version  INTEGER NOT NULL DEFAULT 1)"),
+        QStringLiteral("CREATE INDEX idx_media_backups_hash ON media_backups(content_hash, size)"),
+        QStringLiteral("UPDATE library_metadata SET value = '5' WHERE key = 'schema_version'"),
+        QStringLiteral("PRAGMA user_version = 5"),
+    };
+    for (const QString& sql : statements) {
+        if (!q.exec(sql)) {
+            return fail(QStringLiteral("Library upgrade to schema 5 failed: %1").arg(q.lastError().text()));
         }
-        q.finish();
-        candidate = QStringLiteral("%1 (%2)").arg(base).arg(n);
     }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
+    }
+    qInfo() << "[Library] Upgraded library schema 4 -> 5 (media backup bookkeeping).";
+    return true;
 }
 
-qint64 LibraryDatabase::createCategory(const QString& name) {
+// ------------------------------------------------------------ media backups
+
+static MediaBackupRecord backupFromQuery(const QSqlQuery& q, int first) {
+    MediaBackupRecord r;
+    r.id = q.value(first).toLongLong();
+    r.mediaId = q.value(first + 1).toLongLong();
+    r.provider = q.value(first + 2).toString();
+    r.status = q.value(first + 3).toString();
+    r.objectId = q.value(first + 4).toString();
+    r.originalPath = q.value(first + 5).toString();
+    r.size = q.value(first + 6).isNull() ? -1 : q.value(first + 6).toLongLong();
+    r.sourceModified = q.value(first + 7).toString();
+    r.contentHash = q.value(first + 8).toString();
+    r.backedUpAt = q.value(first + 9).toString();
+    r.lastError = q.value(first + 10).toString();
+    return r;
+}
+
+static const char* kBackupColumns =
+    "b.id, b.media_id, b.provider, b.status, b.object_id, b.original_path, b.size, b.source_modified, b.content_hash,"
+    " b.backed_up_at, b.last_error";
+
+QVector<BackupCandidate> LibraryDatabase::backupCandidates(BackupScan scan) {
+    QVector<BackupCandidate> result;
+    QSqlQuery q(db());
+    q.setForwardOnly(true);
+    if (!q.exec(QStringLiteral("SELECT m.id, m.path, %1 FROM media m LEFT JOIN media_backups b ON b.media_id = m.id"
+                               " ORDER BY m.id")
+                    .arg(QLatin1String(kBackupColumns)))) {
+        fail(QStringLiteral("Reading backup state failed: %1").arg(q.lastError().text()));
+        return result;
+    }
+    while (q.next()) {
+        BackupCandidate c;
+        c.mediaId = q.value(0).toLongLong();
+        c.path = q.value(1).toString();
+        if (!q.value(2).isNull()) {
+            c.backup = backupFromQuery(q, 2);
+        }
+        const bool hasRow = c.backup.id != 0;
+        const bool take = scan == BackupScan::All || !hasRow ||
+                          (scan == BackupScan::PendingAndFailed && !c.backup.isComplete());
+        if (take) {
+            result.push_back(c);
+        }
+    }
+    return result;
+}
+
+MediaBackupRecord LibraryDatabase::backupFor(qint64 mediaId) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT %1 FROM media_backups b WHERE b.media_id = ?").arg(QLatin1String(kBackupColumns)));
+    q.addBindValue(mediaId);
+    if (check(q, "backupFor") && q.next()) {
+        return backupFromQuery(q, 0);
+    }
+    return {};
+}
+
+bool LibraryDatabase::saveBackup(const MediaBackupRecord& r) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral(
+        "INSERT INTO media_backups(media_id, provider, status, object_id, original_path, size, source_modified,"
+        " content_hash, backed_up_at, last_error)"
+        " VALUES (?, ?, 'complete', ?, ?, ?, ?, ?, ?, NULL)"
+        " ON CONFLICT(media_id) DO UPDATE SET provider = excluded.provider, status = 'complete',"
+        " object_id = excluded.object_id, original_path = excluded.original_path, size = excluded.size,"
+        " source_modified = excluded.source_modified, content_hash = excluded.content_hash,"
+        " backed_up_at = excluded.backed_up_at, last_error = NULL"));
+    q.addBindValue(r.mediaId);
+    q.addBindValue(r.provider.isEmpty() ? QStringLiteral("local") : r.provider);
+    q.addBindValue(r.objectId);
+    q.addBindValue(r.originalPath);
+    q.addBindValue(r.size);
+    q.addBindValue(r.sourceModified);
+    q.addBindValue(r.contentHash);
+    q.addBindValue(r.backedUpAt.isEmpty() ? nowIso() : r.backedUpAt);
+    return check(q, "saveBackup");
+}
+
+bool LibraryDatabase::saveBackupFailure(qint64 mediaId, const QString& originalPath, const QString& error) {
+    // A failed attempt never replaces a still-valid earlier backup.
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral(
+        "INSERT INTO media_backups(media_id, provider, status, original_path, last_error)"
+        " VALUES (?, 'local', 'failed', ?, ?)"
+        " ON CONFLICT(media_id) DO UPDATE SET last_error = excluded.last_error, original_path = excluded.original_path,"
+        " status = CASE WHEN media_backups.status = 'complete' THEN 'complete' ELSE 'failed' END"));
+    q.addBindValue(mediaId);
+    q.addBindValue(originalPath);
+    q.addBindValue(error);
+    return check(q, "saveBackupFailure");
+}
+
+BackupStats LibraryDatabase::backupStats() {
+    BackupStats s;
+    s.complete = queryInt(QStringLiteral("SELECT count(*) FROM media_backups WHERE status = 'complete' AND media_id IS NOT NULL"), 0);
+    s.failed = queryInt(QStringLiteral("SELECT count(*) FROM media_backups WHERE status = 'failed' AND media_id IS NOT NULL"), 0);
+    s.pending = queryInt(QStringLiteral("SELECT count(*) FROM media m WHERE NOT EXISTS"
+                                        " (SELECT 1 FROM media_backups b WHERE b.media_id = m.id)"), 0);
+    s.unused = queryInt(QStringLiteral("SELECT count(*) FROM media_backups WHERE media_id IS NULL"), 0);
+    QSqlQuery q(db());
+    if (q.exec(QStringLiteral("SELECT COALESCE(SUM(sz), 0) FROM (SELECT MAX(size) AS sz FROM media_backups"
+                              " WHERE status = 'complete' AND object_id IS NOT NULL GROUP BY object_id)")) && q.next()) {
+        s.bytes = q.value(0).toLongLong();
+    }
+    if (q.exec(QStringLiteral("SELECT COALESCE(SUM(CASE WHEN json_extract(m.metadata, '$.size') > 0"
+                              " THEN json_extract(m.metadata, '$.size') ELSE 0 END), 0) FROM media m WHERE NOT EXISTS"
+                              " (SELECT 1 FROM media_backups b WHERE b.media_id = m.id)")) && q.next()) {
+        s.pendingBytes = q.value(0).toLongLong();
+    }
+    return s;
+}
+
+QHash<QString, QString> LibraryDatabase::backupHashIndex() {
+    QHash<QString, QString> index;
+    QSqlQuery q(db());
+    if (q.exec(QStringLiteral("SELECT content_hash, size, object_id FROM media_backups"
+                              " WHERE status = 'complete' AND content_hash IS NOT NULL AND object_id IS NOT NULL"))) {
+        while (q.next()) {
+            index.insert(q.value(0).toString() + QLatin1Char(':') + q.value(1).toString(), q.value(2).toString());
+        }
+    }
+    return index;
+}
+
+QStringList LibraryDatabase::unusedBackupObjects() {
+    QStringList objects;
+    QSqlQuery q(db());
+    if (q.exec(QStringLiteral("SELECT DISTINCT object_id FROM media_backups WHERE media_id IS NULL AND object_id IS NOT NULL"
+                              " AND object_id NOT IN (SELECT object_id FROM media_backups"
+                              "   WHERE media_id IS NOT NULL AND object_id IS NOT NULL)"))) {
+        while (q.next()) {
+            objects << q.value(0).toString();
+        }
+    }
+    return objects;
+}
+
+int LibraryDatabase::backupObjectReferences(const QString& objectId) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT count(*) FROM media_backups WHERE object_id = ?"));
+    q.addBindValue(objectId);
+    return check(q, "backupObjectReferences") && q.next() ? q.value(0).toInt() : 0;
+}
+
+bool LibraryDatabase::deleteUnusedBackupRows() {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("DELETE FROM media_backups WHERE media_id IS NULL"));
+    return check(q, "deleteUnusedBackupRows");
+}
+
+bool LibraryDatabase::deleteAllBackupRows() {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("DELETE FROM media_backups"));
+    return check(q, "deleteAllBackupRows");
+}
+
+// ------------------------------------------------------- saved filters
+
+bool FilterDefinition::isEmpty() const {
+    for (const FilterRule& r : rules) {
+        if (!r.isEmpty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QString FilterDefinition::toJson() const {
+    QJsonArray array;
+    for (const FilterRule& r : rules) {
+        if (!r.isEmpty()) {
+            array.append(QJsonObject{{QStringLiteral("field"), r.field},
+                                     {QStringLiteral("op"), r.op},
+                                     {QStringLiteral("value"), r.value.trimmed()}});
+        }
+    }
+    const QJsonObject root{{QStringLiteral("version"), 1},
+                           {QStringLiteral("match"), matchAll ? QStringLiteral("all") : QStringLiteral("any")},
+                           {QStringLiteral("rules"), array}};
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+FilterDefinition FilterDefinition::fromJson(const QString& json) {
+    FilterDefinition def;
+    const QJsonObject root = QJsonDocument::fromJson(json.toUtf8()).object();
+    def.matchAll = root.value(QStringLiteral("match")).toString() != QLatin1String("any");
+    for (const QJsonValue& v : root.value(QStringLiteral("rules")).toArray()) {
+        const QJsonObject o = v.toObject();
+        def.rules.push_back({o.value(QStringLiteral("field")).toString(), o.value(QStringLiteral("op")).toString(),
+                             o.value(QStringLiteral("value")).toString()});
+    }
+    return def;
+}
+
+QVector<PlaylistFilterInfo> LibraryDatabase::playlistFilters(qint64 playlistId) {
+    QVector<PlaylistFilterInfo> result;
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT id, name, filter_definition FROM playlist_categories WHERE playlist_id = ?"
+                             " ORDER BY position, id"));
+    q.addBindValue(playlistId);
+    if (!check(q, "playlistFilters")) {
+        return result;
+    }
+    while (q.next()) {
+        result.push_back({q.value(0).toLongLong(), playlistId, q.value(1).toString(),
+                          FilterDefinition::fromJson(q.value(2).toString())});
+    }
+    return result;
+}
+
+qint64 LibraryDatabase::createPlaylistFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition) {
     const QString now = nowIso();
     QSqlQuery q(db());
-    q.prepare(QStringLiteral("INSERT INTO categories(name, position, created_at, updated_at)"
-                             " VALUES (?, (SELECT COALESCE(MAX(position), -1) + 1 FROM categories), ?, ?)"));
-    q.addBindValue(uniqueCategoryName(name));
+    q.prepare(QStringLiteral(
+        "INSERT INTO playlist_categories(playlist_id, name, filter_definition, position, created_at, updated_at)"
+        " VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_categories WHERE playlist_id = ?), ?, ?)"));
+    q.addBindValue(playlistId);
+    q.addBindValue(name.trimmed());
+    q.addBindValue(definition.toJson());
+    q.addBindValue(playlistId);
     q.addBindValue(now);
     q.addBindValue(now);
-    if (!check(q, "createCategory")) {
+    if (!check(q, "createPlaylistFilter")) {
         return 0;
     }
     touch();
     return q.lastInsertId().toLongLong();
 }
 
-bool LibraryDatabase::renameCategory(qint64 id, const QString& name) {
+bool LibraryDatabase::updatePlaylistFilter(qint64 filterId, const QString& name, const FilterDefinition& definition) {
     QSqlQuery q(db());
-    q.prepare(QStringLiteral("UPDATE categories SET name = ?, updated_at = ? WHERE id = ?"));
+    q.prepare(QStringLiteral("UPDATE playlist_categories SET name = ?, filter_definition = ?, updated_at = ? WHERE id = ?"));
     q.addBindValue(name.trimmed());
+    q.addBindValue(definition.toJson());
     q.addBindValue(nowIso());
-    q.addBindValue(id);
-    if (!check(q, "renameCategory")) {
+    q.addBindValue(filterId);
+    if (!check(q, "updatePlaylistFilter")) {
         return false;
     }
     touch();
     return true;
 }
 
-bool LibraryDatabase::deleteCategory(qint64 id) {
+bool LibraryDatabase::deletePlaylistFilter(qint64 filterId) {
     QSqlQuery q(db());
-    q.prepare(QStringLiteral("DELETE FROM categories WHERE id = ?")); // links cascade; playlists untouched
-    q.addBindValue(id);
-    if (!check(q, "deleteCategory")) {
+    q.prepare(QStringLiteral("DELETE FROM playlist_categories WHERE id = ?"));
+    q.addBindValue(filterId);
+    if (!check(q, "deletePlaylistFilter")) {
         return false;
     }
     touch();
     return true;
 }
 
-bool LibraryDatabase::addPlaylistToCategory(qint64 categoryId, qint64 playlistId) {
-    QSqlQuery q(db());
-    q.prepare(QStringLiteral("INSERT OR IGNORE INTO category_playlists(category_id, playlist_id, added_at) VALUES (?, ?, ?)"));
-    q.addBindValue(categoryId);
-    q.addBindValue(playlistId);
-    q.addBindValue(nowIso());
-    if (!check(q, "addPlaylistToCategory")) {
-        return false;
-    }
-    touch();
-    return true;
-}
-
-bool LibraryDatabase::removePlaylistFromCategory(qint64 categoryId, qint64 playlistId) {
-    QSqlQuery q(db());
-    q.prepare(QStringLiteral("DELETE FROM category_playlists WHERE category_id = ? AND playlist_id = ?"));
-    q.addBindValue(categoryId);
-    q.addBindValue(playlistId);
-    if (!check(q, "removePlaylistFromCategory")) {
-        return false;
-    }
-    touch();
-    return true;
-}
-
-QSet<qint64> LibraryDatabase::searchPlaylists(const QString& text, QSet<qint64>* matchedCategories) {
-    QSet<qint64> playlists;
-    const QStringList terms = text.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts).mid(0, 8);
+QSet<qint64> LibraryDatabase::matchingItems(qint64 playlistId, const FilterDefinition* definition, const QString& search) {
     auto like = [](QString term) {
         term.replace(QLatin1Char('\\'), QStringLiteral("\\\\"))
             .replace(QLatin1Char('%'), QStringLiteral("\\%"))
             .replace(QLatin1Char('_'), QStringLiteral("\\_"));
-        return QLatin1Char('%') + term + QLatin1Char('%');
+        return term;
     };
-    // Playlist metadata only (names, type, category names) - no media.
-    QStringList where;
-    for (int i = 0; i < terms.size(); ++i) {
-        where << QStringLiteral(
-            "(p.name LIKE ? ESCAPE '\\' OR p.type LIKE ? ESCAPE '\\'"
-            " OR EXISTS (SELECT 1 FROM category_playlists cp JOIN categories c ON c.id = cp.category_id"
-            "            WHERE cp.playlist_id = p.id AND c.name LIKE ? ESCAPE '\\'))");
-    }
-    QSqlQuery q(db());
-    q.prepare(QStringLiteral("SELECT p.id FROM playlists p") +
-              (where.isEmpty() ? QString() : QStringLiteral(" WHERE ") + where.join(QStringLiteral(" AND "))));
-    for (const QString& term : terms) {
-        for (int i = 0; i < 3; ++i) {
-            q.addBindValue(like(term));
-        }
-    }
-    if (check(q, "searchPlaylists")) {
-        while (q.next()) {
-            playlists.insert(q.value(0).toLongLong());
-        }
-    }
-    if (matchedCategories) {
-        matchedCategories->clear();
-        QStringList catWhere;
-        for (int i = 0; i < terms.size(); ++i) {
-            catWhere << QStringLiteral("name LIKE ? ESCAPE '\\'");
-        }
-        QSqlQuery c(db());
-        c.prepare(QStringLiteral("SELECT id FROM categories") +
-                  (catWhere.isEmpty() ? QString() : QStringLiteral(" WHERE ") + catWhere.join(QStringLiteral(" AND "))));
-        for (const QString& term : terms) {
-            c.addBindValue(like(term));
-        }
-        if (check(c, "searchPlaylists (categories)")) {
-            while (c.next()) {
-                matchedCategories->insert(c.value(0).toLongLong());
+    QString sql = QStringLiteral("SELECT i.id FROM playlist_items i JOIN media m ON m.id = i.media_id WHERE i.playlist_id = ?");
+    QVariantList binds{playlistId};
+
+    // The saved filter's rules (stored metadata only: name, path, size).
+    QStringList ruleSql;
+    if (definition) {
+        for (const FilterRule& r : definition->rules) {
+            const QString value = r.value.trimmed();
+            if (value.isEmpty()) {
+                continue;
+            }
+            if (r.field == QLatin1String("name") || r.field == QLatin1String("path")) {
+                const QString column = r.field == QLatin1String("name") ? QStringLiteral("m.name") : QStringLiteral("m.path");
+                ruleSql << column + (r.op == QLatin1String("not_contains") ? QStringLiteral(" NOT") : QString()) +
+                               QStringLiteral(" LIKE ? ESCAPE '\\'");
+                binds << QLatin1Char('%') + like(value) + QLatin1Char('%');
+            } else if (r.field == QLatin1String("extension")) {
+                QString ext = value;
+                while (ext.startsWith(QLatin1Char('.'))) {
+                    ext.remove(0, 1);
+                }
+                ruleSql << QStringLiteral("m.name") + (r.op == QLatin1String("is_not") ? QStringLiteral(" NOT") : QString()) +
+                               QStringLiteral(" LIKE ? ESCAPE '\\'");
+                binds << QStringLiteral("%.") + like(ext);
+            } else if (r.field == QLatin1String("size_mb")) {
+                bool ok = false;
+                const double mb = value.toDouble(&ok);
+                if (!ok) {
+                    continue;
+                }
+                // Unknown size (-1, file never seen) never passes a size rule.
+                ruleSql << QStringLiteral("(json_extract(m.metadata, '$.size') >= 0 AND json_extract(m.metadata, '$.size') ") +
+                               (r.op == QLatin1String("at_most") ? QStringLiteral("<=") : QStringLiteral(">=")) +
+                               QStringLiteral(" ?)");
+                binds << mb * 1024.0 * 1024.0;
             }
         }
     }
-    return playlists;
+    if (!ruleSql.isEmpty()) {
+        sql += QStringLiteral(" AND (") + ruleSql.join(definition->matchAll ? QStringLiteral(" AND ") : QStringLiteral(" OR ")) +
+               QLatin1Char(')');
+    }
+    // Search inside the current view: every word in the name or path.
+    for (const QString& term : search.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts).mid(0, 8)) {
+        sql += QStringLiteral(" AND (m.name LIKE ? ESCAPE '\\' OR m.path LIKE ? ESCAPE '\\')");
+        binds << QLatin1Char('%') + like(term) + QLatin1Char('%') << QLatin1Char('%') + like(term) + QLatin1Char('%');
+    }
+
+    QSet<qint64> ids;
+    QSqlQuery q(db());
+    q.setForwardOnly(true);
+    q.prepare(sql);
+    for (const QVariant& b : std::as_const(binds)) {
+        q.addBindValue(b);
+    }
+    if (check(q, "matchingItems")) {
+        while (q.next()) {
+            ids.insert(q.value(0).toLongLong());
+        }
+    }
+    return ids;
 }
 
 bool LibraryDatabase::exportTo(const QString& path) {
@@ -1098,6 +1379,21 @@ bool LibraryDatabase::exportTo(const QString& path) {
     q.addBindValue(QDir::toNativeSeparators(path));
     if (!check(q, "export")) {
         return false;
+    }
+    // The copy gets no backup bookkeeping: its object ids point into THIS
+    // device's backup folder.
+    {
+        const QString exportName = m_connectionName + QStringLiteral("-export");
+        {
+            QSqlDatabase out = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), exportName);
+            out.setDatabaseName(path);
+            if (out.open()) {
+                QSqlQuery clear(out);
+                clear.exec(QStringLiteral("DELETE FROM media_backups"));
+                out.close();
+            }
+        }
+        QSqlDatabase::removeDatabase(exportName);
     }
     qInfo() << "[Library] Exported library to" << QDir::toNativeSeparators(path);
     return true;

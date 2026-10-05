@@ -1,5 +1,7 @@
 #include "CleanupManager.h"
+#include "BackupManager.h"
 #include "LibraryDatabase.h"
+#include "LocalBackupProvider.h"
 #include "PlaylistLibrary.h"
 #include "RecoveryState.h"
 #include "SettingsManager.h"
@@ -13,8 +15,8 @@
 #include <QtConcurrent>
 
 CleanupManager::CleanupManager(SettingsManager* settings, RecoveryState* recovery, PlaylistLibrary* library,
-                               QObject* parent)
-    : QObject(parent), m_settings(settings), m_recovery(recovery), m_library(library) {
+                               BackupManager* backup, QObject* parent)
+    : QObject(parent), m_settings(settings), m_recovery(recovery), m_library(library), m_backup(backup) {
     qRegisterMetaType<CleanupManager::Sizes>();
     connect(&m_stepWatcher, &QFutureWatcher<QString>::finished, this,
             [this] { finishStep(m_stepWatcher.result()); });
@@ -218,8 +220,13 @@ void CleanupManager::refreshSizes() {
     if (m_sizeWatcher.isRunning()) {
         return;
     }
-    m_sizeWatcher.setFuture(QtConcurrent::run([] {
+    // Backup statistics come from the database (GUI thread); the folder size is a plain file walk.
+    const BackupStats backupStats = m_backup ? m_backup->stats() : BackupStats{};
+    m_sizeWatcher.setFuture(QtConcurrent::run([backupStats] {
         Sizes s;
+        s.backupItems = backupStats.complete;
+        s.unusedBackups = backupStats.unused;
+        s.backupBytes = LocalBackupProvider().usedBytes();
         const QFileInfo log(logFilePath());
         s.logPresent = log.isFile();
         s.logBytes = s.logPresent ? log.size() : 0;
@@ -321,6 +328,43 @@ QVector<CleanupManager::Step> CleanupManager::buildSteps(Operation op) {
     }
 
     switch (op) {
+    case Operation::DeleteBackups: {
+        // Explicit, and the only thing besides "unused backups" that removes
+        // copies. Original media is never touched - only Motiva's own copies.
+        BackupProvider* provider = m_backup->provider();
+        steps.push_back({tr("Stopping any running backup"), false, [this] {
+                             m_backup->cancelAndWait();
+                             return QString();
+                         }});
+        steps.push_back({tr("Deleting backup copies"), true, [provider] { return provider->removeEverything(); }});
+        steps.push_back({tr("Clearing backup records and turning backup off"), false, [this] {
+                             m_backup->forgetAllBackups();
+                             return QString();
+                         }});
+        break;
+    }
+    case Operation::DeleteUnusedBackups: {
+        BackupProvider* provider = m_backup->provider();
+        auto objects = std::make_shared<QStringList>();
+        auto removedAll = std::make_shared<bool>(true);
+        steps.push_back({tr("Finding unused backups"), false, [this, objects] {
+                             *objects = m_backup->unusedObjects();
+                             return QString();
+                         }});
+        steps.push_back({tr("Deleting unused backup copies"), true, [provider, objects, removedAll] {
+                             const QString error = provider->removeObjects(*objects);
+                             *removedAll = error.isEmpty();
+                             return error;
+                         }});
+        steps.push_back({tr("Clearing their records"), false, [this, removedAll] {
+                             if (!*removedAll) {
+                                 return tr("Kept the records of unused backups that could not be deleted, so you can try again.");
+                             }
+                             m_backup->forgetUnusedBackups();
+                             return QString();
+                         }});
+        break;
+    }
     case Operation::ResetRecoveryHistory:
         steps.push_back({tr("Resetting recovery history"), false, [this] { return m_recovery->resetHistory(); }});
         break;

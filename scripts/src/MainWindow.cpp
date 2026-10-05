@@ -10,6 +10,7 @@
 #include "PlaylistRotation.h"
 #include "PlaylistDialog.h"
 #include "CleanupManager.h"
+#include "BackupManager.h"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -207,7 +208,9 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     m_rotation = new PlaylistRotation(m_library, &m_settings, this);
     // Cleanup & Reset (Settings). Built before the UI so SettingsDialog can
     // bind to it; it reaches the wallpaper only through these two hooks.
-    m_cleanup = new CleanupManager(&m_settings, &m_recoveryState, m_library, this);
+    // Optional local media backup - OFF unless the user turned it on.
+    m_backup = new BackupManager(m_library, &m_settings, this);
+    m_cleanup = new CleanupManager(&m_settings, &m_recoveryState, m_library, m_backup, this);
     connect(m_cleanup, &CleanupManager::releaseMediaRequested, this, &MainWindow::releaseMediaForCleanup);
     connect(m_cleanup, &CleanupManager::restartRequested, this, &MainWindow::restartAfterFactoryReset);
     m_explorerMenuSyncTimer = new QTimer(this);
@@ -468,6 +471,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     if (startMinimized) {
         hide();
     }
+    m_backup->start(); // only does anything if the user turned Backup on
     StartupDiagnostics::instance().mark("mainWindowReady");
     qInfo() << "[Lifecycle] MainWindow construction complete.";
 }
@@ -668,9 +672,10 @@ void MainWindow::buildUi() {
     setCentralWidget(central);
 
     m_playlistDialog = new PlaylistDialog(m_library, this);
+    m_playlistDialog->setBackupManager(m_backup);
     connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
 
-    m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, this);
+    m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, m_backup, this);
     connect(m_settingsDialog, &SettingsDialog::mutedChanged, this, [this](bool muted) {
         if (m_trayMuteAction) {
             m_trayMuteAction->blockSignals(true);
@@ -1775,6 +1780,10 @@ void MainWindow::restartAfterFactoryReset() {
 }
 
 void MainWindow::onExitRequested() {
+    // A running backup stops at the next chunk and removes its partial file.
+    if (m_backup) {
+        m_backup->cancelAndWait();
+    }
     // Explicit, deterministic teardown *before* the event loop stops:
     // WallpaperManager::removeWallpaper() stops the player and destroys
     // the native render windows, which in turn lets Qt Multimedia's

@@ -66,6 +66,7 @@ private:
     QLabel* m_cacheSize = nullptr;
     QLabel* m_dataSize = nullptr;
     QLabel* m_combinedSize = nullptr;
+    QLabel* m_backupSize = nullptr;
     QPushButton* m_closeButton = nullptr;
 
     // Progress page

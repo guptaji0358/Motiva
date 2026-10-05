@@ -35,6 +35,35 @@ PC is in use and keystrokes land in whatever app has the foreground.
 WMI-launched test processes need `Win32_ProcessStartup.ShowWindow=1`, or
 Windows applies SW_HIDE to their first default-shown window.
 
+## Current status (2026-10-05b, per-playlist categories + Local Media Backup)
+
+**Categories (library schema 4)** replace the schema-3 playlist-groups design:
+a category is a saved filter belonging to exactly ONE playlist
+(`playlist_categories`: `playlist_id` FK cascade, `filter_definition` JSON,
+unique `(playlist_id, name NOCASE)`). Every playlist has a built-in "All"
+(not stored, not renamable/deletable). No global category list; no media is
+duplicated - `LibraryDatabase::matchingItems` always filters
+`WHERE playlist_id = ?`. UI: category combo + "Build Category"
+(`CategoryFilterDialog`) inside `PlaylistDialog`.
+
+**Local Media Backup (schema 5, `media_backups`)** - OFF by default
+(`backup/enabled`), never copies/scans unless enabled. `BackupManager` ->
+`BackupProvider` (abstract) -> `LocalBackupProvider` (objects named by
+SHA-256 under `AppLocalDataLocation/backups/objects/`, `.partial` temp
+then rename). One row per media record; identical content stored once.
+SQLite connections are thread-bound: **all DB work stays on the GUI
+thread, workers do file I/O only.** Restore from Backup lives in the
+missing-media banner, never overwrites, keeps the media id
+(`PlaylistLibrary::relocateMedia`). Deletion only via Cleanup window
+("MEDIA BACKUPS" row, Delete Media Backups also turns Backup off; "Delete
+unused backups" under More...). Factory Reset does not delete backups.
+Originals are only ever read.
+
+**Testing gotchas**: UIA hangs ~27 s while a modal dialog opened via UIA
+Toggle is open; enable Backup in tests by setting
+`HKCU\Software\Motiva\Motivaackup\enabled=true` via WMI `reg add` and
+relaunching. Windows' combo popups don't commit via UIA.
+
 ## Current status (2026-10-04, Settings → Cleanup & Reset)
 
 `CleanupManager` (`scripts/{include,src}/CleanupManager.*`) is the only code

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QHash>
 #include <QPair>
 #include <QSet>
 #include <QString>
@@ -51,14 +52,73 @@ struct PlaylistItemRecord {
     MediaFacts facts;
 };
 
-// A playlist category (schema 3): an organizational group of existing
-// playlists, for finding them when there are many. It holds no media and
-// is never played - category_playlists only links category ids to
-// playlist ids, so a playlist can be in several categories (or none) and a
-// rename shows everywhere.
-struct CategoryInfo {
+// A virtual category: a saved filter of ONE playlist's media (schema 4).
+// It stores only a rule - which of the playlist's items match is worked out
+// from the media's stored metadata each time - so it never copies media or
+// playlist items, and media added later shows up automatically if it
+// matches. "All" (every item) is built in and not stored.
+struct FilterRule {
+    // field: "name" (file name), "path" (full path incl. folders),
+    //        "extension", "size_mb" (stored file size).
+    // op:    "contains", "not_contains" (name/path), "is", "is_not"
+    //        (extension), "at_least", "at_most" (size_mb).
+    QString field;
+    QString op;
+    QString value;
+    bool isEmpty() const { return value.trimmed().isEmpty(); }
+};
+
+struct FilterDefinition {
+    bool matchAll = true; // all rules must match (AND) vs any rule (OR)
+    QVector<FilterRule> rules;
+    bool isEmpty() const;
+    QString toJson() const;
+    static FilterDefinition fromJson(const QString& json);
+};
+
+// Backup bookkeeping for ONE media record (schema 5). The backed-up bytes
+// are a normal file owned by the backup provider (never inside SQLite);
+// this row only says which object holds this media's copy and whether that
+// copy is valid. One row per media record - however many playlists or
+// categories reference the media. media_id becomes 0 (NULL in the table)
+// when the media record itself is gone: an "unused backup", removed only
+// explicitly (Cleanup & Reset).
+struct MediaBackupRecord {
     qint64 id = 0;
+    qint64 mediaId = 0;
+    QString provider;     // "local" today; a cloud provider can be added later
+    QString status;       // "complete" | "failed"
+    QString objectId;     // provider-defined handle (local: path under the backup root)
+    QString originalPath; // where the original was when it was backed up
+    qint64 size = -1;
+    QString sourceModified; // original's modified time (UTC ISO) when copied
+    QString contentHash;    // SHA-256 of the copied bytes
+    QString backedUpAt;
+    QString lastError;
+    bool isComplete() const { return status == QLatin1String("complete"); }
+};
+
+// A media record together with its backup row (backup.id == 0: none yet).
+struct BackupCandidate {
+    qint64 mediaId = 0;
+    QString path;
+    MediaBackupRecord backup;
+};
+
+struct BackupStats {
+    int complete = 0;      // media with a valid backup
+    int failed = 0;        // last attempt failed
+    int pending = 0;       // media with no backup row yet
+    int unused = 0;        // backups whose media record no longer exists
+    qint64 bytes = 0;      // size of distinct backup objects
+    qint64 pendingBytes = 0; // stored size of media still to back up
+};
+
+struct PlaylistFilterInfo {
+    qint64 id = 0;
+    qint64 playlistId = 0;
     QString name;
+    FilterDefinition definition;
 };
 
 // The Motiva library: a .mtv file, which is a SQLite database (Qt SQL's
@@ -89,10 +149,11 @@ public:
         Failed           // could not open/create at all - in-memory session
     };
 
-    // 1: playlists. 3: + playlist categories (categories,
-    // category_playlists). 2 only ever existed in an unreleased development
-    // build (media-based categories); it is migrated forward to 3.
-    static constexpr int kSchemaVersion = 3;
+    // 1: playlists. 4: + virtual categories as per-playlist saved filters
+    // (playlist_categories). 5: + media_backups. 2 and 3 only ever existed in
+    // unreleased development builds (media groups, then playlist groups);
+    // both are migrated forward.
+    static constexpr int kSchemaVersion = 5;
     // PRAGMA application_id marking a SQLite file as a Motiva library ("MTV1").
     static constexpr int kApplicationId = 0x4D545631;
 
@@ -144,20 +205,35 @@ public:
     // touches files on disk.
     qint64 relocateMedia(qint64 mediaId, const QString& newPath);
 
-    // --- playlist categories (schema 3) ---
-    QVector<CategoryInfo> categories(); // in creation order
-    // Every (category id, playlist id) link.
-    QVector<QPair<qint64, qint64>> categoryLinks();
-    qint64 createCategory(const QString& name); // name made unique; 0 on failure
-    bool renameCategory(qint64 id, const QString& name);
-    // Deletes the category and its links only - its playlists stay.
-    bool deleteCategory(qint64 id);
-    bool addPlaylistToCategory(qint64 categoryId, qint64 playlistId); // already linked = success
-    bool removePlaylistFromCategory(qint64 categoryId, qint64 playlistId);
-    // Ids of playlists whose name, type, or category name contains every
-    // whitespace-separated term (case-insensitive), and - via
-    // matchedCategories - categories whose own name matches.
-    QSet<qint64> searchPlaylists(const QString& text, QSet<qint64>* matchedCategories);
+    // --- virtual categories: saved filters of one playlist (schema 4) ---
+    QVector<PlaylistFilterInfo> playlistFilters(qint64 playlistId); // in creation order
+    qint64 createPlaylistFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition);
+    bool updatePlaylistFilter(qint64 filterId, const QString& name, const FilterDefinition& definition);
+    // Deletes the saved filter only - never media or playlist items.
+    bool deletePlaylistFilter(qint64 filterId);
+    // playlist_items.id of the playlist's items that pass `definition`
+    // (nullptr = All) and contain every word of `search` in their file name
+    // or path. Evaluated in SQL on stored metadata - no file is opened.
+    QSet<qint64> matchingItems(qint64 playlistId, const FilterDefinition* definition, const QString& search);
+
+    // --- media backup bookkeeping (schema 5; see BackupManager) ---
+    enum class BackupScan { Pending, PendingAndFailed, All };
+    // Media records with their backup row, filtered by what a backup run
+    // should look at: Pending = no row yet; PendingAndFailed adds failed
+    // ones; All also returns complete ones (to notice changed originals).
+    QVector<BackupCandidate> backupCandidates(BackupScan scan);
+    MediaBackupRecord backupFor(qint64 mediaId);
+    bool saveBackup(const MediaBackupRecord& record); // upsert by media id
+    bool saveBackupFailure(qint64 mediaId, const QString& originalPath, const QString& error);
+    BackupStats backupStats();
+    // "hash:size" -> object id of complete backups, to reuse identical content.
+    QHash<QString, QString> backupHashIndex();
+    // Object ids held ONLY by unused backups (nothing live shares them).
+    QStringList unusedBackupObjects();
+    // How many backup rows (live or unused) point at this object.
+    int backupObjectReferences(const QString& objectId);
+    bool deleteUnusedBackupRows();
+    bool deleteAllBackupRows();
 
     // --- library-level key/value state (active playlist etc.) ---
     QString meta(const QString& key, const QString& fallback = QString());
@@ -185,10 +261,12 @@ private:
     bool configureConnection();
     bool initializeOrMigrate(bool freshFile);
     bool createSchemaV1();
-    bool migrateV1toV3();
     bool migrateV2toV3();
-    bool createCategoryTables(QSqlQuery& q);
-    QString uniqueCategoryName(const QString& wanted);
+    bool migrateV3toV4();
+    bool migrateV4toV5();
+    bool migrateV1toV4();
+    bool createV3CategoryTables(QSqlQuery& q);
+    bool createFilterTable(QSqlQuery& q);
     int queryInt(const QString& sql, int fallback);
     bool check(QSqlQuery& query, const char* what);
     bool fail(const QString& message);

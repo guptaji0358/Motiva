@@ -73,10 +73,15 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/CleanupManager.h
     scripts/src/CleanupWindow.cpp
     scripts/include/CleanupWindow.h
-    scripts/src/PlaylistTreeModel.cpp
-    scripts/include/PlaylistTreeModel.h
-    scripts/src/CategoryBuilderDialog.cpp
-    scripts/include/CategoryBuilderDialog.h
+    scripts/src/CategoryFilterDialog.cpp
+    scripts/include/CategoryFilterDialog.h
+    scripts/src/LocalBackupProvider.cpp
+    scripts/include/LocalBackupProvider.h
+    scripts/include/BackupProvider.h
+    scripts/src/BackupManager.cpp
+    scripts/include/BackupManager.h
+    scripts/src/BackupWindow.cpp
+    scripts/include/BackupWindow.h
     scripts/include/WindowsShellIntegration.h
 )
 
