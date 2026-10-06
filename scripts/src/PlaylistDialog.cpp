@@ -5,12 +5,15 @@
 #include "PlaylistModel.h"
 #include "CategoryFilterDialog.h"
 #include "CategoryItemPickerDialog.h"
+#include "FlowDialog.h"
 #include "Theme.h"
 #include "VideoPlayer.h"
 
+#include <QAbstractProxyModel>
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCheckBox>
+#include <QCollator>
 #include <QComboBox>
 #include <QDir>
 #include <QDrag>
@@ -32,6 +35,7 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSortFilterProxyModel>
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStyledItemDelegate>
@@ -45,6 +49,27 @@ constexpr const char* kRowMimeType = "application/x-motiva-playlist-row";
 constexpr int kCardWidth = 184;
 constexpr int kCardHeight = 158;
 constexpr int kCardSpacing = 12;
+
+// Orders the cards by file name (natural, case-insensitive: img-2 before
+// img-10). Ties keep playlist order. Sorting direction comes from the view.
+class ArrangeProxy : public QSortFilterProxyModel {
+public:
+    explicit ArrangeProxy(QObject* parent) : QSortFilterProxyModel(parent) {
+        m_collator.setNumericMode(true);
+        m_collator.setCaseSensitivity(Qt::CaseInsensitive);
+        setDynamicSortFilter(true);
+    }
+
+protected:
+    bool lessThan(const QModelIndex& left, const QModelIndex& right) const override {
+        const int c = m_collator.compare(QFileInfo(left.data(PlaylistModel::PathRole).toString()).fileName(),
+                                         QFileInfo(right.data(PlaylistModel::PathRole).toString()).fileName());
+        return c != 0 ? c < 0 : left.row() < right.row();
+    }
+
+private:
+    QCollator m_collator;
+};
 
 // The app ships no translation files, so tr("%n item(s)") would show the
 // literal "(s)" - spell out the singular/plural forms instead.
@@ -149,7 +174,12 @@ public:
         badgeFont.setPointSizeF(qMax(7.0, badgeFont.pointSizeF() - 1));
         p->setFont(badgeFont);
         const QFontMetrics fm = p->fontMetrics();
-        const QString number = QStringLiteral("%1").arg(index.row() + 1, 2, 10, QLatin1Char('0'));
+        // Position in the playlist (what playback follows), not in the arranged view.
+        int sequence = index.row();
+        if (const auto* proxy = qobject_cast<const QAbstractProxyModel*>(index.model())) {
+            sequence = proxy->mapToSource(index).row();
+        }
+        const QString number = QStringLiteral("%1").arg(sequence + 1, 2, 10, QLatin1Char('0'));
         drawPill(p, QRectF(thumb.left() + 6, thumb.top() + 6, fm.horizontalAdvance(number) + 12, fm.height() + 4),
                  QColor(0, 0, 0, 165), number, radius);
         if (isVideo && available) {
@@ -258,6 +288,8 @@ public:
 // ---------------------------------------------------------------- PlaylistView
 
 PlaylistView::PlaylistView(QWidget* parent) : QListView(parent) {
+    m_proxy = new ArrangeProxy(this);
+    setModel(m_proxy);
     setItemDelegate(new PlaylistCardDelegate(this));
     setViewMode(QListView::IconMode);
     setFlow(QListView::LeftToRight);
@@ -285,8 +317,39 @@ PlaylistView::PlaylistView(QWidget* parent) : QListView(parent) {
 
 void PlaylistView::setPlaylist(PlaylistModel* playlist) {
     m_playlist = playlist;
-    setModel(playlist);
+    m_proxy->setSourceModel(playlist);
     viewport()->update();
+}
+
+void PlaylistView::setArrangement(Arrangement arrangement) {
+    m_arrangement = arrangement;
+    // Column -1 = no sorting: the proxy mirrors the playlist's own order.
+    if (arrangement == Arrangement::None) {
+        m_proxy->sort(-1);
+    } else {
+        m_proxy->sort(0, arrangement == Arrangement::AtoZ ? Qt::AscendingOrder : Qt::DescendingOrder);
+    }
+    viewport()->update();
+}
+
+int PlaylistView::sourceRow(const QModelIndex& viewIndex) const {
+    return viewIndex.isValid() ? m_proxy->mapToSource(viewIndex).row() : -1;
+}
+
+QModelIndex PlaylistView::viewIndex(int row) const {
+    return m_playlist ? m_proxy->mapFromSource(m_playlist->index(row)) : QModelIndex();
+}
+
+void PlaylistView::setSourceRowHidden(int row, bool hidden) {
+    const QModelIndex idx = viewIndex(row);
+    if (idx.isValid()) {
+        setRowHidden(idx.row(), hidden);
+    }
+}
+
+bool PlaylistView::isSourceRowHidden(int row) const {
+    const QModelIndex idx = viewIndex(row);
+    return idx.isValid() && isRowHidden(idx.row());
 }
 
 QStringList PlaylistView::acceptedLocalFiles(const QMimeData* mime) const {
@@ -318,11 +381,11 @@ int PlaylistView::insertPositionAt(const QPoint& pos) const {
 
 void PlaylistView::startDrag(Qt::DropActions) {
     const QModelIndex idx = currentIndex();
-    if (!idx.isValid()) {
-        return;
+    if (!idx.isValid() || isArranged()) {
+        return; // dragging reorders the playlist - not while the cards are arranged by name
     }
     auto* mime = new QMimeData();
-    mime->setData(kRowMimeType, QByteArray::number(idx.row()));
+    mime->setData(kRowMimeType, QByteArray::number(sourceRow(idx)));
     auto* drag = new QDrag(this);
     drag->setMimeData(mime);
     const QImage thumb = idx.data(PlaylistModel::ThumbnailRole).value<QImage>();
@@ -378,6 +441,10 @@ void PlaylistView::dropEvent(QDropEvent* event) {
     m_dropIndicatorPos = -1;
     viewport()->update();
     if (mime->hasFormat(kRowMimeType) && event->source() == this) {
+        if (isArranged()) {
+            event->ignore();
+            return;
+        }
         const int from = mime->data(kRowMimeType).toInt();
         const int to = (pos > from) ? pos - 1 : pos;
         event->setDropAction(Qt::MoveAction);
@@ -394,15 +461,15 @@ void PlaylistView::dropEvent(QDropEvent* event) {
     }
     event->setDropAction(Qt::CopyAction);
     event->accept();
-    emit filesDropped(files, pos);
+    emit filesDropped(files, isArranged() ? -1 : pos); // no meaningful insert spot in an arranged view
 }
 
 int PlaylistView::visibleNeighbour(int row, int step) const {
-    if (!model()) {
+    if (!m_playlist) {
         return -1;
     }
-    for (int r = row + step; r >= 0 && r < model()->rowCount(); r += step) {
-        if (!isRowHidden(r)) {
+    for (int r = row + step; r >= 0 && r < m_playlist->count(); r += step) {
+        if (!isSourceRowHidden(r)) {
             return r;
         }
     }
@@ -411,8 +478,8 @@ int PlaylistView::visibleNeighbour(int row, int step) const {
 
 void PlaylistView::keyPressEvent(QKeyEvent* event) {
     const QModelIndexList selected = selectionModel() ? selectionModel()->selectedIndexes() : QModelIndexList();
-    const int row = selected.isEmpty() ? -1 : selected.first().row();
-    if (row >= 0 && (event->modifiers() & Qt::ControlModifier)) {
+    const int row = selected.isEmpty() ? -1 : sourceRow(selected.first());
+    if (row >= 0 && !isArranged() && (event->modifiers() & Qt::ControlModifier)) {
         // Past the visible neighbour - rows outside the current category
         // are hidden and keep their place.
         const int left = visibleNeighbour(row, -1);
@@ -730,6 +797,21 @@ QWidget* PlaylistDialog::buildEditor() {
     connect(buildCategory, &QPushButton::clicked, this, &PlaylistDialog::onBuildCategory);
     filterRow->addWidget(buildCategory);
     filterRow->addStretch();
+    auto* arrangeLabel = new QLabel(tr("Arrange:"), editor);
+    filterRow->addWidget(arrangeLabel);
+    m_arrangeCombo = new QComboBox(editor);
+    m_arrangeCombo->addItem(tr("None"), static_cast<int>(PlaylistView::Arrangement::None));
+    m_arrangeCombo->addItem(tr("A – Z"), static_cast<int>(PlaylistView::Arrangement::AtoZ));
+    m_arrangeCombo->addItem(tr("Z – A"), static_cast<int>(PlaylistView::Arrangement::ZtoA));
+    m_arrangeCombo->setAccessibleName(tr("Arrange items"));
+    m_arrangeCombo->setToolTip(tr("Only changes how the cards are shown here. None shows the playlist's own order - "
+                                  "the order the wallpaper follows, which A – Z / Z – A never change."));
+    arrangeLabel->setBuddy(m_arrangeCombo);
+    connect(m_arrangeCombo, &QComboBox::currentIndexChanged, this, [this] {
+        m_view->setArrangement(static_cast<PlaylistView::Arrangement>(m_arrangeCombo->currentData().toInt()));
+        updateUi();
+    });
+    filterRow->addWidget(m_arrangeCombo);
     m_itemSearch = new QLineEdit(editor);
     m_itemSearch->setPlaceholderText(tr("🔎  Search this playlist…"));
     m_itemSearch->setClearButtonEnabled(true);
@@ -779,15 +861,16 @@ QWidget* PlaylistDialog::buildEditor() {
     });
     connect(m_view, &PlaylistView::removeRequested, this, [this](int) { onRemove(); });
     connect(m_view, &QListView::doubleClicked, this, [this](const QModelIndex& idx) {
-        selectRow(idx.row());
-        if (current() && !current()->isAvailable(idx.row())) {
-            onFindFile(idx.row());
+        const int row = m_view->sourceRow(idx);
+        selectRow(row);
+        if (current() && !current()->isAvailable(row)) {
+            onFindFile(row);
         } else {
             onShowNow();
         }
     });
 
-    m_hintLabel = new QLabel(tr("Right-click an item for more actions  •  Drag items to set the order  •  "
+    m_hintLabel = new QLabel(tr("Right-click an item for more actions  •  Drag items to set the order (Arrange: None)  •  "
                                 "Double-click an item to show it now"),
                              editor);
     m_hintLabel->setObjectName(QStringLiteral("secondaryText"));
@@ -803,6 +886,10 @@ QWidget* PlaylistDialog::buildEditor() {
     m_showNowButton->setToolTip(tr("Make the selected item the current one (Enter)"));
     connect(m_showNowButton, &QPushButton::clicked, this, &PlaylistDialog::onShowNow);
     actions->addWidget(m_showNowButton);
+    m_flowButton = new QPushButton(tr("Wallpaper Flow…"), editor);
+    m_flowButton->setToolTip(tr("See and edit the order in which this playlist changes the wallpaper, as a diagram"));
+    connect(m_flowButton, &QPushButton::clicked, this, &PlaylistDialog::openFlow);
+    actions->addWidget(m_flowButton);
     actions->addStretch();
     m_clearButton = new QPushButton(tr("Clear"), editor);
     m_clearButton->setToolTip(tr("Remove every item from this playlist. No files are deleted."));
@@ -1051,7 +1138,7 @@ int PlaylistDialog::selectedRow() const {
     // clients (UI Automation SelectionItem.Select, i.e. screen readers)
     // select an item without moving the current index.
     const QModelIndexList selected = m_view->selectionModel()->selectedIndexes();
-    return selected.isEmpty() ? -1 : selected.first().row();
+    return selected.isEmpty() ? -1 : m_view->sourceRow(selected.first());
 }
 
 void PlaylistDialog::selectRow(int row) {
@@ -1059,7 +1146,7 @@ void PlaylistDialog::selectRow(int row) {
     if (!m || row < 0 || row >= m->count()) {
         return;
     }
-    const QModelIndex idx = m->index(row);
+    const QModelIndex idx = m_view->viewIndex(row);
     m_view->setCurrentIndex(idx);
     m_view->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
     m_view->scrollTo(idx);
@@ -1201,14 +1288,14 @@ void PlaylistDialog::showItemMenu(const QPoint& pos) {
     }
     QModelIndex idx = m_view->indexAt(pos);
     const bool fromMouse = idx.isValid();
+    int row = m_view->sourceRow(idx);
     if (!idx.isValid()) {
-        const int row = selectedRow(); // Menu key / Shift+F10
+        row = selectedRow(); // Menu key / Shift+F10
         if (row < 0) {
             return;
         }
-        idx = m->index(row);
+        idx = m_view->viewIndex(row);
     }
-    const int row = idx.row();
     selectRow(row); // the menu always acts on the item it was opened for
     const bool available = m->isAvailable(row);
 
@@ -1491,7 +1578,7 @@ void PlaylistDialog::removeRow(int row) {
             m_library->setActive(0); // nothing left to show
         }
         int next = qMin(row, m->count() - 1);
-        if (next >= 0 && m_view->isRowHidden(next)) {
+        if (next >= 0 && m_view->isSourceRowHidden(next)) {
             const int after = m_view->visibleNeighbour(next, +1);
             next = after >= 0 ? after : m_view->visibleNeighbour(next, -1);
         }
@@ -1527,6 +1614,10 @@ void PlaylistDialog::onMove(int delta) {
 
 void PlaylistDialog::moveRow(int row, int delta) {
     PlaylistModel* m = current();
+    if (m_view->isArranged()) {
+        showNotice(tr("Set Arrange to None to change the order - A – Z / Z – A only rearrange the view."));
+        return;
+    }
     // To the next VISIBLE position: items outside the current category are
     // hidden and keep their place in the playlist.
     const int to = m_view->visibleNeighbour(row, delta < 0 ? -1 : +1);
@@ -1602,7 +1693,7 @@ void PlaylistDialog::updateUi() {
     m_summaryLabel->setText(summary);
     int shown = 0;
     for (int r = 0; r < count; ++r) {
-        shown += m_view->isRowHidden(r) ? 0 : 1;
+        shown += m_view->isSourceRowHidden(r) ? 0 : 1;
     }
     const bool filtered = currentFilter() || !m_itemSearch->text().trimmed().isEmpty();
     m_showingLabel->setText(!filtered        ? countText(count, tr("Showing %1 item"), tr("Showing %1 items"))
@@ -1678,6 +1769,46 @@ const PlaylistFilterInfo* PlaylistDialog::currentFilter() const {
     return nullptr; // "All"
 }
 
+QSet<qint64> PlaylistDialog::categoryItemIds(const QString& search) const {
+    QSet<qint64> ids;
+    PlaylistModel* m = current();
+    if (!m) {
+        return ids;
+    }
+    const PlaylistFilterInfo* filter = currentFilter();
+    if (!filter && search.isEmpty()) {
+        for (int r = 0; r < m->count(); ++r) {
+            ids.insert(m->itemIdAt(r));
+        }
+        return ids;
+    }
+    // SQL over the items' stored metadata (see LibraryDatabase::matchingItems).
+    // A hand-picked category shows exactly its selected items (that still
+    // exist in this playlist); the search then narrows within them.
+    ids = m_library->matchingItems(m->id(), filter && !filter->isSelection() ? &filter->definition : nullptr, search);
+    if (filter && filter->isSelection()) {
+        ids.intersect(filter->itemIds);
+    }
+    return ids;
+}
+
+void PlaylistDialog::openFlow() {
+    PlaylistModel* m = current();
+    if (!m) {
+        return;
+    }
+    const PlaylistFilterInfo* filter = currentFilter();
+    const QString scopeName = tr("%1 > %2").arg(m->name(), filter ? filter->name : tr("All"));
+    FlowDialog flow(m_library, m, scopeName, [this] { return categoryItemIds(QString()); }, this);
+    connect(&flow, &FlowDialog::addMediaRequested, this, [this, &flow] {
+        onAddMedia();
+        flow.refresh();
+    });
+    flow.exec();
+    applyItemFilter();
+    updateUi();
+}
+
 void PlaylistDialog::applyItemFilter() {
     PlaylistModel* m = current();
     if (!m || !m_view->model()) {
@@ -1687,23 +1818,16 @@ void PlaylistDialog::applyItemFilter() {
     const QString search = m_itemSearch->text().trimmed();
     if (!filter && search.isEmpty()) {
         for (int r = 0; r < m->count(); ++r) {
-            m_view->setRowHidden(r, false);
+            m_view->setSourceRowHidden(r, false);
         }
     } else {
-        // SQL over the items' stored metadata (see LibraryDatabase::matchingItems).
-        // A hand-picked category shows exactly its selected items (that still
-        // exist in this playlist); the search then narrows within them.
-        QSet<qint64> visible =
-            m_library->matchingItems(m->id(), filter && !filter->isSelection() ? &filter->definition : nullptr, search);
-        if (filter && filter->isSelection()) {
-            visible.intersect(filter->itemIds);
-        }
+        const QSet<qint64> visible = categoryItemIds(search);
         for (int r = 0; r < m->count(); ++r) {
-            m_view->setRowHidden(r, !visible.contains(m->itemIdAt(r)));
+            m_view->setSourceRowHidden(r, !visible.contains(m->itemIdAt(r)));
         }
     }
     const int row = selectedRow();
-    if (row >= 0 && m_view->isRowHidden(row)) {
+    if (row >= 0 && m_view->isSourceRowHidden(row)) {
         m_view->selectionModel()->clearSelection();
     }
     m_view->viewport()->update();

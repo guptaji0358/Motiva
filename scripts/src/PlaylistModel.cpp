@@ -424,6 +424,63 @@ bool PlaylistModel::move(int from, int to) {
     return true;
 }
 
+QVector<qint64> PlaylistModel::itemIds() const {
+    QVector<qint64> ids;
+    ids.reserve(m_items.size());
+    for (const Item& item : m_items) {
+        ids.push_back(item.itemId);
+    }
+    return ids;
+}
+
+bool PlaylistModel::setOrder(const QVector<qint64>& itemIdsInOrder) {
+    if (itemIdsInOrder.size() != m_items.size()) {
+        return false;
+    }
+    QHash<qint64, Item> byId;
+    for (const Item& item : m_items) {
+        byId.insert(item.itemId, item);
+    }
+    QVector<Item> reordered;
+    reordered.reserve(m_items.size());
+    for (qint64 id : itemIdsInOrder) {
+        const auto it = byId.constFind(id);
+        if (it == byId.constEnd()) {
+            return false; // not a permutation of this playlist's items
+        }
+        reordered.push_back(*it);
+        byId.remove(id);
+    }
+    if (itemIdsInOrder == itemIds()) {
+        return true;
+    }
+    const qint64 currentId = (m_current >= 0) ? m_items[m_current].itemId : 0;
+    if (!m_db->setOrder(m_id, itemIdsInOrder)) {
+        emit errorOccurred(m_db->lastError());
+        return false;
+    }
+    emit layoutAboutToBeChanged();
+    const QModelIndexList before = persistentIndexList();
+    QVector<qint64> beforeIds;
+    for (const QModelIndex& idx : before) {
+        beforeIds.push_back(m_items[idx.row()].itemId);
+    }
+    m_items = reordered;
+    QModelIndexList after;
+    for (qint64 id : beforeIds) {
+        after.push_back(index(rowOfItem(id)));
+    }
+    changePersistentIndexList(before, after);
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (m_items[i].itemId == currentId) {
+            m_current = i;
+        }
+    }
+    emit layoutChanged();
+    emit contentsChanged();
+    return true;
+}
+
 bool PlaylistModel::setCurrentIndex(int row) {
     if (row < 0 || row >= m_items.size()) {
         return false;

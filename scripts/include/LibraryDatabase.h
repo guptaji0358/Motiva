@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QHash>
 #include <QPair>
+#include <QPointF>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -159,10 +160,11 @@ public:
     // (playlist_categories). 5: + media_backups. 6: + category mode and
     // category_items (hand-picked categories). 7 only ever existed in an
     // unreleased development build (Find Similar); 8 removes what it added
-    // (migrateToV8, run for 6 and 7). 2 and 3 only ever existed in
+    // (migrateToV8, run for 6 and 7). 9: + flow_layout (Wallpaper Flow node
+    // positions - presentation only). 2 and 3 only ever existed in
     // unreleased development builds (media groups, then playlist groups);
     // both are migrated forward.
-    static constexpr int kSchemaVersion = 8;
+    static constexpr int kSchemaVersion = 9;
     // PRAGMA application_id marking a SQLite file as a Motiva library ("MTV1").
     static constexpr int kApplicationId = 0x4D545631;
 
@@ -200,6 +202,11 @@ public:
     // Rewrites every item's position to match `itemIdsInOrder`.
     bool setOrder(qint64 playlistId, const QVector<qint64>& itemIdsInOrder);
     qint64 currentItemId(qint64 playlistId);
+
+    // --- Wallpaper Flow node positions (schema 9; layout only, never order) ---
+    QHash<qint64, QPointF> flowPositions(qint64 playlistId); // playlist_items.id -> scene position
+    bool saveFlowPositions(qint64 playlistId, const QHash<qint64, QPointF>& positions);
+    bool clearFlowPositions(qint64 playlistId);
 
     // --- media records (shared by every playlist that references a file) ---
     // Records size/modified for media whose facts aren't known yet (one
@@ -279,6 +286,7 @@ private:
     bool migrateV4toV5();
     bool migrateV5toV6();
     bool migrateToV8();
+    bool migrateV8toV9();
     bool migrateV1toV4();
     bool createV3CategoryTables(QSqlQuery& q);
     bool createFilterTable(QSqlQuery& q);

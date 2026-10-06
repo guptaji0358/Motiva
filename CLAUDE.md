@@ -50,6 +50,8 @@ duplicated - `LibraryDatabase::matchingItems` always filters
 
 **Schema 8**: a "Find Similar" category mode (schema 7, dev build only) was removed. `migrateToV8` (runs for v6 and v7 libraries) drops `media_features` and converts any leftover non-condition/non-selected category into a hand-picked one, keeping its members. Only the two modes above exist.
 
+**Wallpaper Flow + Arrange (schema 9, `flow_layout`)**: `FlowDialog` (QGraphicsView, lightweight node/edge items, theme-aware) edits the ONE playlist order (`playlist_items.position`, what `PlaylistModel::advance()` follows) through `PlaylistModel::setOrder` (DB first, one transaction); every edit is saved immediately, undo/redo keep full-order snapshots (cleared on add/remove). A category scope only permutes the positions its items already occupy. `flow_layout(item_id PK -> playlist_items cascade, x, y)` is presentation only; dragging a node saves its position, a sequence edit needs a drop on an arrow or Earlier/Later/menu. The playlist view's Arrange None / A-Z / Z-A is a view-only `QSortFilterProxyModel` inside `PlaylistView` (cards numbered by playlist position; drag/move disabled while arranged); the Flow dialog's Arrange menu is the explicit, undoable way to write A-Z/Z-A into the saved order. `slots` is a Qt macro - don't name variables that.
+
 **Local Media Backup (schema 5, `media_backups`)** - OFF by default
 (`backup/enabled`), never copies/scans unless enabled. `BackupManager` ->
 `BackupProvider` (abstract) -> `LocalBackupProvider` (objects named by

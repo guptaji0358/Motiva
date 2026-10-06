@@ -15,6 +15,7 @@ class QComboBox;
 class QFrame;
 class QLabel;
 class QPushButton;
+class QSortFilterProxyModel;
 class QStackedWidget;
 class QWidget;
 
@@ -29,8 +30,24 @@ public:
     explicit PlaylistView(QWidget* parent = nullptr);
     void setPlaylist(PlaylistModel* playlist);
     PlaylistModel* playlist() const { return m_playlist; }
-    // Nearest row in direction `step` (+1/-1) that is not hidden by the
-    // playlist's category filter or search; -1 if none.
+
+    // View-only arrangement of the cards by file name. The playlist's own
+    // order (what wallpaper playback follows) is never touched: None shows
+    // that order, A-Z / Z-A only change how the cards are laid out here.
+    // While arranged, dragging/moving cards is off (it would be ambiguous).
+    enum class Arrangement { None, AtoZ, ZtoA };
+    void setArrangement(Arrangement arrangement);
+    Arrangement arrangement() const { return m_arrangement; }
+    bool isArranged() const { return m_arrangement != Arrangement::None; }
+
+    // Everything below speaks in PLAYLIST rows (the model's rows), whatever
+    // order the cards are currently shown in.
+    int sourceRow(const QModelIndex& viewIndex) const;
+    QModelIndex viewIndex(int row) const;
+    void setSourceRowHidden(int row, bool hidden);
+    bool isSourceRowHidden(int row) const;
+    // Nearest playlist row in direction `step` (+1/-1) that is not hidden by
+    // the playlist's category filter or search; -1 if none.
     int visibleNeighbour(int row, int step) const;
 
 signals:
@@ -54,6 +71,8 @@ private:
     QStringList acceptedLocalFiles(const class QMimeData* mime) const;
 
     PlaylistModel* m_playlist = nullptr;
+    QSortFilterProxyModel* m_proxy = nullptr;
+    Arrangement m_arrangement = Arrangement::None;
     int m_dropIndicatorPos = -1;
 };
 
@@ -112,6 +131,7 @@ private:
     void onDeletePlaylist();
     void showPlaylistMenu(const QPoint& pos);
     void showItemMenu(const QPoint& pos);
+    void openFlow();
     // "Find File" for a missing item (see MediaRecoveryDialog).
     void onFindFile(int row);
     void offerRemovalAfterFailedSearch(qint64 itemId, const QString& path);
@@ -142,6 +162,9 @@ private:
     // Hides the rows outside the selected category + search (the rows stay
     // in the playlist; only the view hides them).
     void applyItemFilter();
+    // playlist_items.id of the items in the selected category (all of them for
+    // "All"), optionally narrowed by `search`.
+    QSet<qint64> categoryItemIds(const QString& search) const;
     void showCategoryMenu(const QPoint& globalPos);
     void onBuildCategory();
     void onEditCategory();
@@ -157,6 +180,8 @@ private:
     QLabel* m_categoryLabel = nullptr;
     QComboBox* m_categoryCombo = nullptr;
     QPushButton* m_categoryMenuButton = nullptr;
+    QComboBox* m_arrangeCombo = nullptr;
+    QPushButton* m_flowButton = nullptr;
     QLineEdit* m_itemSearch = nullptr;
     QTimer* m_itemSearchTimer = nullptr;
     QTimer* m_filterTimer = nullptr; // coalesces re-filtering after playlist changes

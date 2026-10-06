@@ -301,7 +301,13 @@ bool LibraryDatabase::initializeOrMigrate(bool freshFile) {
         version = 6;
     }
     if (version == 6 || version == 7) {
-        return migrateToV8();
+        if (!migrateToV8()) {
+            return false;
+        }
+        version = 8;
+    }
+    if (version == 8) {
+        return migrateV8toV9();
     }
     return fail(QStringLiteral("No migration path from library schema %1.").arg(version));
 }
@@ -1114,6 +1120,88 @@ bool LibraryDatabase::migrateToV8() {
         return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
     }
     qInfo() << "[Library] Upgraded library schema to 8.";
+    return true;
+}
+
+// Schema 9: where each item's node sits in the Wallpaper Flow diagram. Layout
+// only - the sequence is playlist_items.position and is never derived from
+// these coordinates. Rows vanish with their item (FK cascade).
+bool LibraryDatabase::migrateV8toV9() {
+    Transaction tx(db());
+    QSqlQuery q(db());
+    if (!tx.started()) {
+        return fail(QStringLiteral("Cannot start transaction: %1").arg(db().lastError().text()));
+    }
+    const QStringList statements = {
+        QStringLiteral(
+            "CREATE TABLE flow_layout ("
+            "  item_id INTEGER PRIMARY KEY REFERENCES playlist_items(id) ON DELETE CASCADE,"
+            "  x       REAL NOT NULL,"
+            "  y       REAL NOT NULL)"),
+        QStringLiteral("UPDATE library_metadata SET value = '9' WHERE key = 'schema_version'"),
+        QStringLiteral("PRAGMA user_version = 9"),
+    };
+    for (const QString& sql : statements) {
+        if (!q.exec(sql)) {
+            return fail(QStringLiteral("Library upgrade to schema 9 failed: %1").arg(q.lastError().text()));
+        }
+    }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
+    }
+    qInfo() << "[Library] Upgraded library schema 8 -> 9 (Wallpaper Flow node layout).";
+    return true;
+}
+
+QHash<qint64, QPointF> LibraryDatabase::flowPositions(qint64 playlistId) {
+    QHash<qint64, QPointF> result;
+    QSqlQuery q(db());
+    q.setForwardOnly(true);
+    q.prepare(QStringLiteral("SELECT f.item_id, f.x, f.y FROM flow_layout f"
+                             " JOIN playlist_items i ON i.id = f.item_id WHERE i.playlist_id = ?"));
+    q.addBindValue(playlistId);
+    if (check(q, "flowPositions")) {
+        while (q.next()) {
+            result.insert(q.value(0).toLongLong(), QPointF(q.value(1).toDouble(), q.value(2).toDouble()));
+        }
+    }
+    return result;
+}
+
+bool LibraryDatabase::saveFlowPositions(qint64 playlistId, const QHash<qint64, QPointF>& positions) {
+    if (positions.isEmpty()) {
+        return true;
+    }
+    Transaction tx(db());
+    if (!tx.started()) {
+        return fail(QStringLiteral("Cannot start transaction: %1").arg(db().lastError().text()));
+    }
+    QSqlQuery q(db());
+    // Only items of this playlist can be positioned.
+    q.prepare(QStringLiteral("INSERT OR REPLACE INTO flow_layout(item_id, x, y)"
+                             " SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM playlist_items WHERE id = ? AND playlist_id = ?)"));
+    for (auto it = positions.constBegin(); it != positions.constEnd(); ++it) {
+        q.addBindValue(it.key());
+        q.addBindValue(it.value().x());
+        q.addBindValue(it.value().y());
+        q.addBindValue(it.key());
+        q.addBindValue(playlistId);
+        if (!check(q, "saveFlowPositions")) {
+            return false;
+        }
+    }
+    touch();
+    return tx.commit();
+}
+
+bool LibraryDatabase::clearFlowPositions(qint64 playlistId) {
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("DELETE FROM flow_layout WHERE item_id IN (SELECT id FROM playlist_items WHERE playlist_id = ?)"));
+    q.addBindValue(playlistId);
+    if (!check(q, "clearFlowPositions")) {
+        return false;
+    }
+    touch();
     return true;
 }
 

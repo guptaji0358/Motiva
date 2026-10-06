@@ -87,6 +87,11 @@ public:
     bool removeAt(int row);
     bool clear();
     bool move(int from, int to); // QList::move semantics; current image stays current
+    // Rewrites the whole sequence in one transaction. `itemIdsInOrder` must be
+    // exactly this playlist's item ids (a permutation). The current item stays
+    // current. This is the one order that wallpaper playback follows.
+    bool setOrder(const QVector<qint64>& itemIdsInOrder);
+    QVector<qint64> itemIds() const;
     bool setCurrentIndex(int row);
     // Next available item in order. wrap=false stops at the last item.
     // Returns false (current unchanged) if there is nowhere to go.

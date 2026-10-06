@@ -71,6 +71,12 @@ public:
     QVector<PlaylistFilterInfo> filters(qint64 playlistId) { return m_db.playlistFilters(playlistId); }
     qint64 createFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition,
                         const QString& mode = QStringLiteral("condition"));
+    // Wallpaper Flow node positions (layout only; the sequence is the playlist order).
+    QHash<qint64, QPointF> flowPositions(qint64 playlistId) { return m_db.flowPositions(playlistId); }
+    bool saveFlowPositions(qint64 playlistId, const QHash<qint64, QPointF>& positions) {
+        return m_db.saveFlowPositions(playlistId, positions);
+    }
+    bool clearFlowPositions(qint64 playlistId) { return m_db.clearFlowPositions(playlistId); }
     bool setCategoryItems(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds);
     bool updateFilter(qint64 filterId, qint64 playlistId, const QString& name, const FilterDefinition& definition);
     bool deleteFilter(qint64 filterId, qint64 playlistId);
