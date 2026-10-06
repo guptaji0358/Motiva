@@ -295,7 +295,13 @@ bool LibraryDatabase::initializeOrMigrate(bool freshFile) {
         version = 5;
     }
     if (version == 5) {
-        return migrateV5toV6();
+        if (!migrateV5toV6()) {
+            return false;
+        }
+        version = 6;
+    }
+    if (version == 6 || version == 7) {
+        return migrateToV8();
     }
     return fail(QStringLiteral("No migration path from library schema %1.").arg(version));
 }
@@ -1077,6 +1083,37 @@ bool LibraryDatabase::migrateV5toV6() {
         return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
     }
     qInfo() << "[Library] Upgraded library schema 5 -> 6 (hand-picked categories).";
+    return true;
+}
+
+// Schema 7 existed only in a development build that had a third category mode
+// ("similar") and a fingerprint cache table. Both are removed; any category
+// that mode produced keeps its saved members as an ordinary hand-picked one,
+// so nothing the user built is lost. Also runs for schema 6 (nothing to do
+// beyond the version bump).
+bool LibraryDatabase::migrateToV8() {
+    Transaction tx(db());
+    QSqlQuery q(db());
+    if (!tx.started()) {
+        return fail(QStringLiteral("Cannot start transaction: %1").arg(db().lastError().text()));
+    }
+    const QStringList statements = {
+        QStringLiteral("DROP TABLE IF EXISTS media_features"),
+        QStringLiteral("UPDATE playlist_categories SET mode = 'selected',"
+                       " filter_definition = '{\"version\":1,\"match\":\"all\",\"rules\":[]}'"
+                       " WHERE mode NOT IN ('condition', 'selected')"),
+        QStringLiteral("UPDATE library_metadata SET value = '8' WHERE key = 'schema_version'"),
+        QStringLiteral("PRAGMA user_version = 8"),
+    };
+    for (const QString& sql : statements) {
+        if (!q.exec(sql)) {
+            return fail(QStringLiteral("Library upgrade to schema 8 failed: %1").arg(q.lastError().text()));
+        }
+    }
+    if (!tx.commit()) {
+        return fail(QStringLiteral("Library upgrade commit failed: %1").arg(db().lastError().text()));
+    }
+    qInfo() << "[Library] Upgraded library schema to 8.";
     return true;
 }
 

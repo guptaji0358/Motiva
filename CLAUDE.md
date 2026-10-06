@@ -48,6 +48,8 @@ duplicated - `LibraryDatabase::matchingItems` always filters
 
 **Two category modes (schema 6)**: `playlist_categories.mode` is `condition` (JSON rules) or `selected` (hand-picked, "Select from Playlist"). Selected members live in `category_items(category_id, item_id)` -> `playlist_items.id`, both FKs cascade, so removing an item from the playlist removes it from the category and no media/item rows are duplicated. `setCategoryItems` only stores items of the category's own playlist. UI: Build Category asks Conditions vs Select from Playlist; `CategoryItemPickerDialog` does create and "Manage Selection...".
 
+**Schema 8**: a "Find Similar" category mode (schema 7, dev build only) was removed. `migrateToV8` (runs for v6 and v7 libraries) drops `media_features` and converts any leftover non-condition/non-selected category into a hand-picked one, keeping its members. Only the two modes above exist.
+
 **Local Media Backup (schema 5, `media_backups`)** - OFF by default
 (`backup/enabled`), never copies/scans unless enabled. `BackupManager` ->
 `BackupProvider` (abstract) -> `LocalBackupProvider` (objects named by

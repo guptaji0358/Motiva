@@ -157,10 +157,12 @@ public:
 
     // 1: playlists. 4: + virtual categories as per-playlist saved filters
     // (playlist_categories). 5: + media_backups. 6: + category mode and
-    // category_items (hand-picked categories). 2 and 3 only ever existed in
+    // category_items (hand-picked categories). 7 only ever existed in an
+    // unreleased development build (Find Similar); 8 removes what it added
+    // (migrateToV8, run for 6 and 7). 2 and 3 only ever existed in
     // unreleased development builds (media groups, then playlist groups);
     // both are migrated forward.
-    static constexpr int kSchemaVersion = 6;
+    static constexpr int kSchemaVersion = 8;
     // PRAGMA application_id marking a SQLite file as a Motiva library ("MTV1").
     static constexpr int kApplicationId = 0x4D545631;
 
@@ -276,6 +278,7 @@ private:
     bool migrateV3toV4();
     bool migrateV4toV5();
     bool migrateV5toV6();
+    bool migrateToV8();
     bool migrateV1toV4();
     bool createV3CategoryTables(QSqlQuery& q);
     bool createFilterTable(QSqlQuery& q);
