@@ -188,6 +188,54 @@ QStringList MainWindow::explorerIntegrationExtensions() {
     return exts;
 }
 
+// Fills whatever space the main layout gives the preview and places the panel
+// inside it: the largest rectangle of the media's aspect ratio, centred. With
+// no aspect (nothing loaded, drop zone shown) the panel simply fills the host.
+// Geometry is recomputed from the host's current size on every resize and
+// aspect change - nothing is cached.
+class PreviewAspectHost : public QWidget {
+public:
+    using QWidget::QWidget;
+    void setPanel(QWidget* panel) {
+        m_panel = panel;
+        place();
+    }
+    void setAspect(double aspect) {
+        if (qFuzzyCompare(aspect + 1.0, m_aspect + 1.0)) {
+            return;
+        }
+        m_aspect = aspect;
+        place();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        place();
+    }
+
+private:
+    void place() {
+        if (!m_panel) {
+            return;
+        }
+        QRect r = rect();
+        if (m_aspect > 0.0 && r.width() > 0 && r.height() > 0) {
+            int w = r.width();
+            int h = qRound(w / m_aspect);
+            if (h > r.height()) {
+                h = r.height();
+                w = qRound(h * m_aspect);
+            }
+            r = QRect((width() - w) / 2, (height() - h) / 2, w, h);
+        }
+        m_panel->setGeometry(r);
+    }
+
+    QWidget* m_panel = nullptr;
+    double m_aspect = 0.0; // width / height of the shown media; 0 = fill
+};
+
 MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     qint64 initialPlaylistId, const QString& initialPlaylistFile, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
@@ -534,10 +582,16 @@ void MainWindow::buildUi() {
     // video is loaded (or a drag is in progress, even over an already-
     // loaded video), and the plain pixmap page once a video is actually
     // playing - the animation never overlaps/covers real video content.
-    auto* previewContainer = new QWidget(central);
-    previewContainer->setMinimumHeight(220);
+    // previewContainer (the dark rounded panel) lives inside m_previewHost,
+    // which takes all the space the layout gives the preview and centres the
+    // panel at the media's aspect ratio (full area while no media is shown),
+    // so a wide window shows a panel that hugs the media, not empty side bands.
+    m_previewHost = new PreviewAspectHost(central);
+    m_previewHost->setMinimumHeight(220);
+    m_previewHost->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    auto* previewContainer = new QWidget(m_previewHost);
+    m_previewHost->setPanel(previewContainer);
     previewContainer->setStyleSheet(kPreviewSurfaceStyle);
-    previewContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_previewStack = new QStackedLayout(previewContainer);
     m_previewStack->setContentsMargins(0, 0, 0, 0);
 
@@ -603,7 +657,7 @@ void MainWindow::buildUi() {
     dropZoneLayout->addWidget(m_pasteLinkButton, 0, Qt::AlignHCenter);
     m_previewStack->addWidget(dropZoneWrapper); // index kDropZonePageIndex
 
-    root->addWidget(previewContainer, /*stretch=*/1);
+    root->addWidget(m_previewHost, /*stretch=*/1);
 
     // --- Video info + secondary actions ---
     auto* infoRow = new QHBoxLayout();
@@ -1169,6 +1223,9 @@ void MainWindow::refreshDropZoneVisual() {
     // overlaps a playing video.
     const bool showDropZone = m_dragHintActive || m_dragInvalidActive || m_selectedVideoPath.isEmpty();
     m_previewStack->setCurrentIndex(showDropZone ? kDropZonePageIndex : kVideoPageIndex);
+    if (showDropZone && m_previewHost) {
+        m_previewHost->setAspect(0.0); // the drop zone uses the whole preview area
+    }
 
     DropZoneWidget::State state = DropZoneWidget::State::Idle;
     if (m_dragInvalidActive) {
@@ -1431,6 +1488,11 @@ void MainWindow::renderPreviewFrame() {
     auto frame = m_manager->player()->currentFrame();
     if (!frame || frame->isNull() || m_selectedVideoPath.isEmpty()) {
         return;
+    }
+    // Shape the panel to the media first, so the label below is already at
+    // its final size when the frame is scaled to it.
+    if (m_previewHost && frame->height() > 0 && m_previewStack->currentIndex() == kVideoPageIndex) {
+        m_previewHost->setAspect(double(frame->width()) / frame->height());
     }
     // The pixmap scale+paint is the real per-frame cost, worth skipping
     // while the window isn't actually visible (main window shown, not

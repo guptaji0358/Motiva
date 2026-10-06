@@ -17,6 +17,7 @@
 #include "IconButton.h"
 
 class QVideoWidget;
+class PreviewAspectHost;
 class SettingsDialog;
 class PlaylistLibrary;
 class PlaylistRotation;
@@ -268,6 +269,7 @@ private:
     bool m_dragInvalidActive = false;
     QStackedLayout* m_previewStack = nullptr;
     QLabel* m_previewLabel = nullptr;
+    PreviewAspectHost* m_previewHost = nullptr; // sizes the preview panel to the media's aspect ratio
     DropZoneWidget* m_dropZone = nullptr;
     QLabel* m_fileNameLabel = nullptr;
     QLabel* m_fileDetailsLabel = nullptr;
