@@ -14,6 +14,7 @@ class FlowNodeItem;
 class PlaylistLibrary;
 class PlaylistModel;
 class QGraphicsScene;
+class QCheckBox;
 class QLabel;
 class QPushButton;
 class QTimer;
@@ -103,6 +104,9 @@ private:
     void undo();
     void redo();
     void tidyLayout();
+    // Auto-organize wiring: lays the sequence out as a non-crossing snake and
+    // saves those positions (layout only - never touches the sequence).
+    void organizeLayout();
     QPointF defaultSlot(int rank) const;
     QString timingSummary() const;
     QVector<qint64> selectedIds() const; // in sequence order
@@ -118,6 +122,8 @@ private:
     QVector<QVector<qint64>> m_redo;
     QSet<qint64> m_keepSelected;
     bool m_rebuildPending = false;
+    QVector<qint64> m_lastSequence; // scope order at the previous rebuild (graph-change detection)
+    bool m_layoutPending = true;    // force an organize on the next rebuild
 
     FlowView* m_view = nullptr;
     QGraphicsScene* m_scene = nullptr;
@@ -126,6 +132,7 @@ private:
     QLabel* m_status = nullptr;
     QPushButton* m_addButton = nullptr;
     QToolButton* m_arrangeButton = nullptr;
+    QCheckBox* m_autoOrganize = nullptr;
     QPushButton* m_earlierButton = nullptr;
     QPushButton* m_laterButton = nullptr;
     QPushButton* m_removeButton = nullptr;

@@ -1,6 +1,7 @@
 #include "CategoryItemPickerDialog.h"
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
+#include "DialogSizing.h"
 #include "Theme.h"
 
 #include <QFileInfo>
@@ -25,8 +26,6 @@ CategoryItemPickerDialog::CategoryItemPickerDialog(PlaylistLibrary* library, Pla
     : QDialog(parent), m_library(library), m_playlist(playlist), m_existingId(existingId),
       m_creating(existingName.isEmpty()) {
     setWindowTitle(m_creating ? tr("Select from Playlist") : tr("Manage Selection"));
-    setMinimumSize(520, 520);
-    resize(580, 640);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(20, 18, 20, 18);
@@ -152,6 +151,7 @@ CategoryItemPickerDialog::CategoryItemPickerDialog(PlaylistLibrary* library, Pla
     }
     updateCount();
     (m_creating ? static_cast<QWidget*>(m_nameEdit) : static_cast<QWidget*>(m_search))->setFocus();
+    DialogSizing::applyComfortableSize(this, QSize(580, 640));
 }
 
 QSet<qint64> CategoryItemPickerDialog::selectedItemIds() const {

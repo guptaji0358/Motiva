@@ -1,6 +1,7 @@
 #include "BackupWindow.h"
 #include "BackupManager.h"
 
+#include "DialogSizing.h"
 #include <QCheckBox>
 #include <QDesktopServices>
 #include <QDir>
@@ -80,8 +81,6 @@ bool BackupWindow::confirmAndDisable(BackupManager* manager, QWidget* parent) {
 BackupWindow::BackupWindow(BackupManager* manager, QWidget* parent) : QDialog(parent), m_manager(manager) {
     setWindowTitle(tr("Media Backup"));
     setModal(false);
-    setMinimumSize(520, 560);
-    resize(560, 600);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(24, 20, 24, 18);
@@ -187,6 +186,7 @@ BackupWindow::BackupWindow(BackupManager* manager, QWidget* parent) : QDialog(pa
     connect(m_manager, &BackupManager::progressChanged, this, &BackupWindow::refresh);
     connect(m_manager, &BackupManager::statsChanged, this, &BackupWindow::refresh);
     refresh();
+    DialogSizing::applyComfortableSize(this, QSize(560, 600));
 }
 
 void BackupWindow::present() {

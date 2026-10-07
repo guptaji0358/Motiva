@@ -872,7 +872,8 @@ void MainWindow::updateStatusUi() {
         // the desktop looks different without this reading as an error
         // or as the wallpaper having been removed.
         if (m_batterySuspended) {
-            text = tr("Video paused on battery");
+            text = m_manager->player()->isStaticImage() ? tr("Image hidden on battery")
+                                                        : tr("Video paused on battery");
             color = kStatusWarningColor;
         } else {
             text = tr("Wallpaper Active");

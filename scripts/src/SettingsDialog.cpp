@@ -1,6 +1,7 @@
 #include "SettingsDialog.h"
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
+#include "DialogSizing.h"
 #include "Theme.h"
 #include "ThemeTransitionOverlay.h"
 #include "CleanupManager.h"
@@ -62,9 +63,8 @@ SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* setti
     // ~760x380 range on this content, comfortably inside the requested
     // 720-800 x 360-450 range, and the dialog stays freely resizable
     // larger or smaller (down to this floor) afterward.
-    setMinimumSize(860, 380);
-    resize(880, 520);
     connect(m_cleanup, &CleanupManager::preferencesChanged, this, &SettingsDialog::onPreferencesChangedExternally);
+    DialogSizing::applyComfortableSize(this, QSize(880, 520));
 }
 
 void SettingsDialog::buildUi() {
@@ -163,7 +163,8 @@ void SettingsDialog::buildUi() {
 
     m_showVideoOnBatteryCheck = new QCheckBox(tr("Show video on battery"), this);
     m_showVideoOnBatteryCheck->setToolTip(
-        tr("Keep the video wallpaper visible when running on battery power."));
+        tr("Keep the video wallpaper visible when running on battery power. Image wallpapers are never shown on "
+           "battery; they come back when AC power returns."));
     connect(m_showVideoOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onShowVideoOnBatteryToggled);
     rightCol->addWidget(m_showVideoOnBatteryCheck);
 

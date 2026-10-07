@@ -191,13 +191,15 @@ void WallpaperManager::setShowVideoOnBattery(bool enabled) {
 }
 
 bool WallpaperManager::batteryPolicyHidesCurrentMedia() const {
-    // "Show video on battery" is a video setting (its label, tooltip and
-    // the "Video paused on battery" status all say so) whose purpose is
-    // to stop continuous decode/present work on battery. A still image
-    // does no such work - it is presented once - so the setting is not
-    // applied to it. Video and animated GIF/WebP keep the existing
-    // behavior unchanged.
-    return m_onBattery && !m_showVideoOnBattery && !m_player->isStaticImage();
+    // Video and animated GIF/WebP: the existing "Show video on battery"
+    // setting decides. Still images: never displayed on battery, regardless
+    // of that setting. Either way this is only a temporary hide (the render
+    // windows are detached, not destroyed; m_active and the playlist stay
+    // untouched) and AC power restores it via resumeFromBattery().
+    if (!m_onBattery) {
+        return false;
+    }
+    return m_player->isStaticImage() ? true : !m_showVideoOnBattery;
 }
 
 void WallpaperManager::reevaluateBatteryPolicy() {
@@ -216,7 +218,8 @@ void WallpaperManager::suspendForBattery() {
     if (!m_active || m_batterySuspended || m_windows.empty()) {
         return;
     }
-    qInfo() << "[Battery] Hiding video wallpaper - on battery and \"Show video on battery\" is off.";
+    qInfo() << "[Battery] Hiding wallpaper -" << (m_player->isStaticImage() ? "images are not shown on battery."
+                                                                      : "on battery and \"Show video on battery\" is off.");
     for (auto& w : m_windows) {
         WindowsDesktopWallpaper::DetachFromDesktop(w->handle());
         w->hideNative();
@@ -236,7 +239,7 @@ void WallpaperManager::resumeFromBattery() {
     if (!m_active || !m_batterySuspended) {
         return;
     }
-    qInfo() << "[Battery] AC power restored - restoring video wallpaper.";
+    qInfo() << "[Battery] Restoring wallpaper (battery restriction no longer applies).";
     m_batterySuspended = false;
     // Reuses the existing async/generation-guarded/verified attach
     // pipeline - the same one Explorer-restart and IPC recovery already
@@ -294,7 +297,8 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
 
     rebuildWindows();
 
-    // If "Show video on battery" is off and we're already on battery
+    // If the battery policy hides this media (video with "Show video on
+    // battery" off, or any still image) and we're already on battery
     // right now, never attach in the first place - avoids a visible
     // flash-then-hide, and avoids racing suspendForBattery()'s detach
     // against this attach attempt still being in flight. Skipping
@@ -305,7 +309,7 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
     const bool shouldStartHidden = batteryPolicyHidesCurrentMedia();
     if (shouldStartHidden) {
         m_batterySuspended = true;
-        qInfo() << "[Battery] Wallpaper set while on battery with \"Show video on battery\" off - "
+        qInfo() << "[Battery] Wallpaper set while on battery and the battery policy hides it - "
                     "staying hidden until AC power returns.";
     } else {
         // Only reachable with a suspension still recorded when a video was

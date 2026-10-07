@@ -1,5 +1,6 @@
 #include "CleanupWindow.h"
 
+#include "DialogSizing.h"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDir>
@@ -52,8 +53,6 @@ CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent) : QDialog
     // returns to Settings, and Motiva keeps running.
     setModal(false);
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-    setMinimumSize(560, 620);
-    resize(640, 690);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -111,6 +110,7 @@ CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent) : QDialog
     });
     connect(m_manager, &CleanupManager::finished, this, &CleanupWindow::onOperationFinished);
     applyThemeStyle();
+    DialogSizing::applyComfortableSize(this, QSize(640, 690));
 }
 
 QWidget* CleanupWindow::buildLevelsPage() {

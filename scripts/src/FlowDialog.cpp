@@ -1,8 +1,10 @@
 #include "FlowDialog.h"
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
+#include "DialogSizing.h"
 #include "Theme.h"
 
+#include <QCheckBox>
 #include <QCollator>
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -23,6 +25,7 @@
 #include <QPersistentModelIndex>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QSettings>
 #include <QShortcut>
 #include <QStyleOptionGraphicsItem>
 #include <QTimer>
@@ -477,8 +480,6 @@ FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const 
       m_scopeItems(std::move(scopeItems)) {
     setWindowTitle(tr("Wallpaper Flow"));
     setWindowIcon(QIcon(QStringLiteral(":/playlist/%1/playlist.svg").arg(Theme::iconVariant(Theme::currentTheme()))));
-    setMinimumSize(840, 560);
-    resize(1120, 740);
     buildUi();
 
     m_rebuildTimer = new QTimer(this);
@@ -495,6 +496,7 @@ FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const 
     refresh();
     QTimer::singleShot(0, this, [this] { m_view->fitInView(m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 40),
                                                            Qt::KeepAspectRatio); });
+    DialogSizing::applyComfortableSize(this, QSize(1120, 740));
 }
 
 void FlowDialog::buildUi() {
@@ -533,6 +535,24 @@ void FlowDialog::buildUi() {
     connect(arrangeMenu->addAction(tr("Tidy Layout")), &QAction::triggered, this, &FlowDialog::tidyLayout);
     m_arrangeButton->setMenu(arrangeMenu);
     bar->addWidget(m_arrangeButton);
+
+    m_autoOrganize = new QCheckBox(tr("Auto-organize wiring"), this);
+    m_autoOrganize->setToolTip(tr("When on, the diagram is laid out automatically whenever items are added, removed or "
+                                  "reordered, so the arrows don't cross or overlap. Only node positions change - never the "
+                                  "sequence. Turn it off to keep your own arrangement."));
+    m_autoOrganize->setChecked(QSettings().value(QStringLiteral("flow/autoOrganize"), false).toBool());
+    connect(m_autoOrganize, &QCheckBox::toggled, this, [this](bool on) {
+        QSettings().setValue(QStringLiteral("flow/autoOrganize"), on);
+        if (on) {
+            m_layoutPending = true;
+            rebuild();
+            m_view->fitInView(m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 40), Qt::KeepAspectRatio);
+            m_status->setText(tr("Auto-organize is on. The diagram was arranged; the sequence was not changed."));
+        } else {
+            m_status->setText(tr("Auto-organize is off. Your arrangement is kept as it is."));
+        }
+    });
+    bar->addWidget(m_autoOrganize);
 
     m_earlierButton = new QPushButton(tr("◀  Earlier"), this);
     m_earlierButton->setToolTip(tr("Move the selected item one step earlier in the sequence (Ctrl+Left)"));
@@ -713,6 +733,14 @@ void FlowDialog::rebuild() {
         }
     }
     const int n = ids.size();
+    // Auto-organize only on a real graph change (items added/removed/reordered),
+    // or when just switched on - not on every rebuild (playback advance, theme),
+    // and never while dragging.
+    if (m_autoOrganize && m_autoOrganize->isChecked() && (m_layoutPending || ids != m_lastSequence)) {
+        organizeLayout();
+    }
+    m_layoutPending = false;
+    m_lastSequence = ids;
     m_nodes.reserve(n);
     for (int i = 0; i < n; ++i) {
         auto* node = new FlowNodeItem(QPersistentModelIndex(m_playlist->index(rows[i])), ids[i], i, i == n - 1, m_playlist);
@@ -967,6 +995,23 @@ void FlowDialog::redo() {
     m_status->setText(tr("Redone and saved."));
     scheduleRebuild();
     updateButtons();
+}
+
+void FlowDialog::organizeLayout() {
+    // The wiring is the chain #1 -> #2 -> ... in sequence order. The snake
+    // (left-to-right, then right-to-left on the next row) keeps every arrow
+    // between grid neighbours, so arrows never cross or overlap, however long
+    // the playlist is. One O(n) pass and one transaction per graph change.
+    const QVector<qint64> ids = scopeOrder();
+    QHash<qint64, QPointF> positions;
+    positions.reserve(ids.size());
+    for (int i = 0; i < ids.size(); ++i) {
+        positions.insert(ids[i], defaultSlot(i));
+    }
+    for (auto it = positions.constBegin(); it != positions.constEnd(); ++it) {
+        m_positions.insert(it.key(), it.value());
+    }
+    m_library->saveFlowPositions(m_playlist->id(), positions);
 }
 
 void FlowDialog::tidyLayout() {

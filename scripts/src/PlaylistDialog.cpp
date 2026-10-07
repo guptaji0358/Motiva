@@ -6,6 +6,7 @@
 #include "CategoryFilterDialog.h"
 #include "CategoryItemPickerDialog.h"
 #include "FlowDialog.h"
+#include "DialogSizing.h"
 #include "Theme.h"
 #include "VideoPlayer.h"
 
@@ -562,8 +563,6 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     setWindowTitle(tr("Playlists"));
     setWindowIcon(QIcon(playlistIconPath()));
     buildUi();
-    setMinimumSize(900, 620);
-    resize(1080, 720);
 
     // Ctrl+Alt+N: New Image Playlist. Ctrl+Shift+N: New Video Playlist.
     // Each goes straight to naming the playlist - no type menu. (Ctrl+N is
@@ -603,6 +602,7 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
         }
     });
     selectPlaylist(m_library->selectedId());
+    DialogSizing::applyComfortableSize(this, QSize(1080, 720));
 }
 
 void PlaylistDialog::buildUi() {

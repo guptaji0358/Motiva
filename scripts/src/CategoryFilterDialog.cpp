@@ -1,6 +1,7 @@
 #include "CategoryFilterDialog.h"
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
+#include "DialogSizing.h"
 #include "Theme.h"
 
 #include <QComboBox>
@@ -48,8 +49,6 @@ CategoryFilterDialog::CategoryFilterDialog(PlaylistLibrary* library, PlaylistMod
                                            const PlaylistFilterInfo* existing, QWidget* parent)
     : QDialog(parent), m_library(library), m_playlist(playlist), m_filterId(existing ? existing->id : 0) {
     setWindowTitle(existing ? tr("Edit Category") : tr("Build Category"));
-    setMinimumSize(560, 520);
-    resize(600, 600);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(20, 18, 20, 18);
@@ -149,6 +148,7 @@ CategoryFilterDialog::CategoryFilterDialog(PlaylistLibrary* library, PlaylistMod
     }
     updatePreview();
     m_nameEdit->setFocus();
+    DialogSizing::applyComfortableSize(this, QSize(600, 600));
 }
 
 void CategoryFilterDialog::addRule(const FilterRule& rule) {
