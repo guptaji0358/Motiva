@@ -31,6 +31,8 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/Theme.h
     scripts/src/IconButton.cpp
     scripts/include/IconButton.h
+    scripts/src/MotivaToolTip.cpp
+    scripts/include/MotivaToolTip.h
     scripts/src/MainWindow.cpp
     scripts/include/MainWindow.h
     scripts/src/DropZoneWidget.cpp

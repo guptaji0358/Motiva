@@ -9,12 +9,15 @@
 #include <QDateTime>
 #include <QSharedMemory>
 #include <QStringList>
+#include <QDebug>
+#include <exception>
 #include <cstdio>
 #include <windows.h>
 #include "MainWindow.h"
 #include "StartupDiagnostics.h"
 #include "InstanceIpc.h"
 #include "Theme.h"
+#include "MotivaToolTip.h"
 #include "SettingsManager.h"
 
 namespace {
@@ -96,6 +99,8 @@ int main(int argc, char* argv[]) {
         startupSettings.setTheme(theme); // persists the one-time legacy migration, if any
         Theme::applyTheme(theme);
     }
+    // One Motiva-styled tooltip for every existing toolTip (see MotivaToolTip.h).
+    MotivaToolTip::install(&app);
 
     // Parsed once, before the single-instance branch below, since which
     // instance ends up handling it (this one, directly, vs. an existing
@@ -165,15 +170,28 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // During Windows startup Explorer's tray often does not exist yet, so
+    // this is routinely false for a few seconds after sign-in. It used to be
+    // a modal QMessageBox, which blocked Motiva before any window existed
+    // (and a second launch could not reach it). QSystemTrayIcon re-adds
+    // itself when Explorer announces TaskbarCreated, so just note it.
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
-        QMessageBox::critical(nullptr, "Motiva",
-            "No system tray was detected on this system. The application will still run.");
+        qWarning() << "[Lifecycle] System tray not available yet - continuing; the tray icon "
+                      "appears once Explorer creates it.";
     }
 
-    MainWindow window(startMinimized, explorerSelectedFile, explorerPlaylistId, explorerPlaylistFile);
-    if (!startMinimized) {
-        window.show();
+    try {
+        MainWindow window(startMinimized, explorerSelectedFile, explorerPlaylistId, explorerPlaylistFile);
+        if (!startMinimized) {
+            window.show();
+        }
+        // Everything heavy (media restore, playlist startup, wallpaper
+        // re-apply) runs after the complete window is on screen.
+        window.beginDeferredStartup();
+        return app.exec();
+    } catch (const std::exception& e) {
+        qCritical() << "[Lifecycle] Fatal exception during startup:" << e.what();
+        QMessageBox::critical(nullptr, "Motiva", QStringLiteral("Motiva could not start:\n%1").arg(QString::fromUtf8(e.what())));
+        return 1;
     }
-
-    return app.exec();
 }

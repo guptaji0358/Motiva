@@ -29,8 +29,10 @@ public:
 
 protected:
     void accept() override;
+    void changeEvent(QEvent* event) override;
 
 private:
+    static void applyRemoveIcon(class IconButton* button); // SVG for the active theme
     struct RuleRow {
         QWidget* row = nullptr;
         QComboBox* field = nullptr;

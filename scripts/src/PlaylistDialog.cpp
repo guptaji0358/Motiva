@@ -155,9 +155,21 @@ public:
             } else {
                 p->setPen(QColor(Theme::kPreviewText));
                 const bool pending = index.data(PlaylistModel::ThumbnailPendingRole).toBool();
-                p->drawText(thumb, Qt::AlignCenter,
-                            pending ? PlaylistDialog::tr("Loading…")
-                                    : (isVideo ? PlaylistDialog::tr("▶  No preview") : PlaylistDialog::tr("No preview")));
+                const QString message = pending ? PlaylistDialog::tr("Loading…") : PlaylistDialog::tr("No preview");
+                if (isVideo && !pending) {
+                    // Video marker is an SVG badge, drawn left of the text.
+                    const int iconSize = 14;
+                    const int gap = 6;
+                    const int textW = p->fontMetrics().horizontalAdvance(message);
+                    const qreal left = thumb.center().x() - (iconSize + gap + textW) / 2.0;
+                    p->drawPixmap(QPointF(left, thumb.center().y() - iconSize / 2.0),
+                                  Theme::tintedIcon(QStringLiteral(":/playlist/video-badge.svg"),
+                                                    QColor(Theme::kPreviewText), iconSize));
+                    p->drawText(QRectF(left + iconSize + gap, thumb.top(), textW + 2, thumb.height()),
+                                Qt::AlignLeft | Qt::AlignVCenter, message);
+                } else {
+                    p->drawText(thumb, Qt::AlignCenter, message);
+                }
             }
         } else {
             p->setPen(QPen(QColor(Theme::kStatusWarning), 1.2, Qt::DashLine));
@@ -184,10 +196,17 @@ public:
         drawPill(p, QRectF(thumb.left() + 6, thumb.top() + 6, fm.horizontalAdvance(number) + 12, fm.height() + 4),
                  QColor(0, 0, 0, 165), number, radius);
         if (isVideo && available) {
-            const QString tag = PlaylistDialog::tr("▶ VIDEO");
-            drawPill(p, QRectF(thumb.left() + 6, thumb.bottom() - fm.height() - 10, fm.horizontalAdvance(tag) + 12,
-                               fm.height() + 4),
-                     QColor(0, 0, 0, 165), tag, radius);
+            const QString tag = PlaylistDialog::tr("VIDEO");
+            const int iconSize = fm.height() - 2;
+            const QRectF tagRect(thumb.left() + 6, thumb.bottom() - fm.height() - 10,
+                                 fm.horizontalAdvance(tag) + iconSize + 18, fm.height() + 4);
+            drawPill(p, tagRect, QColor(0, 0, 0, 165), QString(), radius);
+            p->drawPixmap(QPointF(tagRect.left() + 6, tagRect.center().y() - iconSize / 2.0),
+                          Theme::tintedIcon(QStringLiteral(":/playlist/video-badge.svg"), Qt::white, iconSize));
+            p->setPen(Qt::white);
+            p->drawText(QRectF(tagRect.left() + 6 + iconSize + 4, tagRect.top(), fm.horizontalAdvance(tag) + 2,
+                               tagRect.height()),
+                        Qt::AlignLeft | Qt::AlignVCenter, tag);
         }
         if (isCurrent) {
             const QString label = playlistActive ? PlaylistDialog::tr("Now showing") : PlaylistDialog::tr("Resumes here");

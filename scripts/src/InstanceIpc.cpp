@@ -15,6 +15,21 @@ constexpr DWORD kSetBackgroundCommand = 2;
 constexpr DWORD kAddToPlaylistCommand = 4;
 ATOM g_classAtom = 0;
 
+// The running instance creates its IPC window as the first step of
+// MainWindow's constructor, but the process holds the single-instance lock a
+// moment earlier (and, during Windows startup, can be slow to get that far).
+// A second launch in that gap used to find no window and exit silently, so
+// the user's double-click appeared to do nothing. Waits (bounded, in the
+// sender process only - the running instance is never blocked) instead.
+HWND FindRunningInstanceWindow() {
+    HWND target = FindWindowW(kClassName, nullptr);
+    for (int attempt = 0; !target && attempt < 50; ++attempt) {
+        Sleep(100); // up to ~5s
+        target = FindWindowW(kClassName, nullptr);
+    }
+    return target;
+}
+
 void EnsureClassRegistered() {
     if (g_classAtom != 0) {
         return;
@@ -54,11 +69,11 @@ bool InstanceIpc::startListening() {
 }
 
 bool InstanceIpc::sendRecoverRequest() {
-    HWND target = FindWindowW(kClassName, nullptr);
+    HWND target = FindRunningInstanceWindow();
     if (!target) {
         qWarning() << "[IPC] Second instance detected, but no existing instance's IPC "
-                       "window was found yet (it may still be starting up) - exiting anyway "
-                       "since the single-instance lock proves a process is running.";
+                       "window appeared within the wait - exiting anyway since the "
+                       "single-instance lock proves a process is running.";
         return false;
     }
     qInfo() << "[IPC] Second instance detected - sending recovery request to hwnd="
@@ -74,7 +89,7 @@ bool InstanceIpc::sendRecoverRequest() {
 }
 
 bool InstanceIpc::sendSetBackgroundRequest(const QString& path) {
-    HWND target = FindWindowW(kClassName, nullptr);
+    HWND target = FindRunningInstanceWindow();
     if (!target) {
         qWarning() << "[IPC] Second instance detected (Set as background), but no existing "
                        "instance's IPC window was found yet - exiting anyway.";
@@ -96,11 +111,7 @@ bool InstanceIpc::sendSetBackgroundRequest(const QString& path) {
 }
 
 bool InstanceIpc::sendAddToPlaylistRequest(qint64 playlistId, const QString& path) {
-    HWND target = FindWindowW(kClassName, nullptr);
-    for (int attempt = 0; !target && attempt < 50; ++attempt) {
-        Sleep(100); // up to ~5s, only in this sender process
-        target = FindWindowW(kClassName, nullptr);
-    }
+    HWND target = FindRunningInstanceWindow();
     if (!target) {
         qWarning() << "[IPC] Add-to-playlist: no running instance's IPC window found - file not added:" << path;
         return false;

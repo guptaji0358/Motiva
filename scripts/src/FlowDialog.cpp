@@ -3,6 +3,7 @@
 #include "PlaylistModel.h"
 #include "DialogSizing.h"
 #include "Theme.h"
+#include "IconButton.h"
 
 #include <QCheckBox>
 #include <QCollator>
@@ -499,6 +500,20 @@ FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const 
     DialogSizing::applyComfortableSize(this, QSize(1120, 740));
 }
 
+void FlowDialog::applyDirectionIcons() {
+    const QString v = Theme::iconVariant(Theme::currentTheme());
+    auto icon = [&v](const char* name) { return QIcon(QStringLiteral(":/flow/%1/%2.svg").arg(v, QLatin1String(name))); };
+    m_earlierButton->setStateIcon(icon("earlier"), QIcon(), QIcon(), icon("earlier-disabled"));
+    m_laterButton->setStateIcon(icon("later"), QIcon(), QIcon(), icon("later-disabled"));
+}
+
+void FlowDialog::changeEvent(QEvent* event) {
+    QDialog::changeEvent(event);
+    if ((event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) && m_earlierButton) {
+        applyDirectionIcons();
+    }
+}
+
 void FlowDialog::buildUi() {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(18, 16, 18, 14);
@@ -554,14 +569,15 @@ void FlowDialog::buildUi() {
     });
     bar->addWidget(m_autoOrganize);
 
-    m_earlierButton = new QPushButton(tr("◀  Earlier"), this);
+    m_earlierButton = new IconButton(QIcon(), tr("Earlier"), this);
     m_earlierButton->setToolTip(tr("Move the selected item one step earlier in the sequence (Ctrl+Left)"));
     connect(m_earlierButton, &QPushButton::clicked, this, [this] { moveSelected(-1); });
     bar->addWidget(m_earlierButton);
-    m_laterButton = new QPushButton(tr("Later  ▶"), this);
+    m_laterButton = new IconButton(QIcon(), tr("Later"), this);
     m_laterButton->setToolTip(tr("Move the selected item one step later in the sequence (Ctrl+Right)"));
     connect(m_laterButton, &QPushButton::clicked, this, [this] { moveSelected(+1); });
     bar->addWidget(m_laterButton);
+    applyDirectionIcons();
     m_removeButton = new QPushButton(tr("Remove"), this);
     m_removeButton->setToolTip(tr("Remove the selected items from this playlist (Delete). No files are deleted."));
     connect(m_removeButton, &QPushButton::clicked, this, &FlowDialog::removeSelected);

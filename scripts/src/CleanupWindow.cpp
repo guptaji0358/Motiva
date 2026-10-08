@@ -1,6 +1,7 @@
 #include "CleanupWindow.h"
 
 #include "DialogSizing.h"
+#include "Theme.h"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDir>
@@ -43,6 +44,29 @@ QLabel* makeHeading(const QString& text, QWidget* parent) {
     auto* label = new QLabel(text, parent);
     label->setObjectName(QStringLiteral("cleanupHeading"));
     return label;
+}
+
+constexpr int kMarkSize = 16;
+
+// A small recolored SVG mark (Assets/status/*) as a QLabel.
+QLabel* makeMark(const char* resource, const char* color, QWidget* parent) {
+    auto* mark = new QLabel(parent);
+    mark->setFixedSize(kMarkSize, kMarkSize);
+    mark->setPixmap(Theme::tintedIcon(QLatin1String(resource), QColor(QLatin1String(color)), kMarkSize));
+    return mark;
+}
+
+// `heading` preceded by a colored status dot; the dot is decorative, the
+// heading label keeps the accessible name.
+QWidget* withDot(QLabel* heading, const char* color, QWidget* parent) {
+    auto* box = new QWidget(parent);
+    auto* layout = new QHBoxLayout(box);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+    layout->addWidget(makeMark(":/status/status-dot.svg", color, box), 0, Qt::AlignVCenter);
+    heading->setParent(box);
+    layout->addWidget(heading, 1);
+    return box;
 }
 
 } // namespace
@@ -99,12 +123,12 @@ CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent) : QDialog
     connect(m_manager, &CleanupManager::sizesReady, this, &CleanupWindow::onSizesReady);
     connect(m_manager, &CleanupManager::stepStarted, this, [this](int i) {
         if (m_running) {
-            setStepRow(i, QStringLiteral("→"), nullptr, QString());
+            setStepRow(i, StepMark::Running, nullptr, QString());
         }
     });
     connect(m_manager, &CleanupManager::stepFinished, this, [this](int i, bool ok, const QString& detail) {
         if (m_running) {
-            setStepRow(i, ok ? QStringLiteral("✓") : QStringLiteral("✕"),
+            setStepRow(i, ok ? StepMark::Succeeded : StepMark::Failed,
                        ok ? Theme::kStatusSuccess : Theme::kStatusError, detail);
         }
     });
@@ -166,12 +190,10 @@ QWidget* CleanupWindow::buildLevelsPage() {
     dangerLayout->setSpacing(12);
     auto* dangerText = new QVBoxLayout();
     dangerText->setSpacing(3);
-    auto* dangerTitle = new QLabel(QStringLiteral("<span style=\"color:%1\">●</span>&nbsp; %2")
-                                       .arg(QLatin1String(Theme::kStatusError), tr("DANGER ZONE")),
-                                   danger);
+    auto* dangerTitle = new QLabel(tr("DANGER ZONE"), danger);
     dangerTitle->setObjectName(QStringLiteral("cleanupDangerHeading"));
     dangerTitle->setAccessibleName(tr("DANGER ZONE"));
-    dangerText->addWidget(dangerTitle);
+    dangerText->addWidget(withDot(dangerTitle, Theme::kStatusError, danger));
     auto* dangerDesc = new QLabel(tr("Return Motiva to a fresh-install state: settings, theme, playlists, library, "
                                      "recovery state, cache and Windows integration. Motiva restarts afterwards."),
                                   danger);
@@ -202,10 +224,9 @@ QWidget* CleanupWindow::makeLevelRow(const char* dotColor, const QString& title,
 
     auto* text = new QVBoxLayout();
     text->setSpacing(3);
-    auto* heading = makeHeading(
-        QStringLiteral("<span style=\"color:%1\">●</span>&nbsp; %2").arg(QLatin1String(dotColor), title), row);
+    auto* heading = makeHeading(title, row);
     heading->setAccessibleName(title);
-    text->addWidget(heading);
+    text->addWidget(withDot(heading, dotColor, row));
     auto* desc = new QLabel(description, row);
     desc->setObjectName(QStringLiteral("secondaryText"));
     desc->setWordWrap(true);
@@ -525,18 +546,28 @@ void CleanupWindow::runWithProgress(Op op) {
     }
     // Fresh step list for this operation.
     for (QLabel* row : std::as_const(m_stepRows)) {
-        row->deleteLater();
+        row->parentWidget()->deleteLater(); // the row container (icon + text)
     }
     m_stepRows.clear();
+    m_stepIcons.clear();
     m_stepLabels = m_manager->stepLabels(op);
     for (int i = 0; i < m_stepLabels.size(); ++i) {
-        auto* row = new QLabel(m_pages->widget(1));
+        auto* container = new QWidget(m_pages->widget(1));
+        auto* rowLayout = new QHBoxLayout(container);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(10);
+        auto* icon = new QLabel(container);
+        icon->setFixedSize(kMarkSize, kMarkSize);
+        rowLayout->addWidget(icon, 0, Qt::AlignTop);
+        auto* row = new QLabel(container);
         row->setWordWrap(true);
         // Auto-detection misses rich text that doesn't start with a tag.
         row->setTextFormat(Qt::RichText);
-        m_stepsLayout->addWidget(row);
+        rowLayout->addWidget(row, 1);
+        m_stepsLayout->addWidget(container);
         m_stepRows << row;
-        setStepRow(i, QStringLiteral("○"), Theme::kStatusNeutral, QString());
+        m_stepIcons << icon;
+        setStepRow(i, StepMark::Pending, Theme::kStatusNeutral, QString());
     }
     m_progressTitle->setText(op == Op::FactoryReset ? tr("Resetting Motiva…") : tr("Cleaning Motiva…"));
     m_progressStatus->clear();
@@ -552,18 +583,30 @@ void CleanupWindow::runWithProgress(Op op) {
     m_manager->run(op);
 }
 
-void CleanupWindow::setStepRow(int index, const QString& marker, const char* color, const QString& detail) {
+void CleanupWindow::setStepRow(int index, StepMark mark, const char* color, const QString& detail) {
     if (index < 0 || index >= m_stepRows.size()) {
         return;
     }
-    QString text = QStringLiteral("%1&nbsp;&nbsp;%2").arg(marker, m_stepLabels[index].toHtmlEscaped());
+    const char* resource = ":/status/pending.svg";
+    QString markName = tr("Pending");
+    switch (mark) {
+    case StepMark::Pending: break;
+    case StepMark::Running: resource = ":/status/arrow-right.svg"; markName = tr("In progress"); break;
+    case StepMark::Succeeded: resource = ":/status/check.svg"; markName = tr("Done"); break;
+    case StepMark::Failed: resource = ":/status/cross.svg"; markName = tr("Failed"); break;
+    }
+    // Neutral pending/running marks follow the label's palette color.
+    const QColor markColor = color ? QColor(QLatin1String(color)) : palette().color(QPalette::WindowText);
+    m_stepIcons[index]->setPixmap(Theme::tintedIcon(QLatin1String(resource), markColor, kMarkSize));
+
+    QString text = m_stepLabels[index].toHtmlEscaped();
     if (!detail.isEmpty()) {
         text += QStringLiteral("<br><span style=\"font-size:small\">%1</span>")
                     .arg(detail.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
     }
     m_stepRows[index]->setText(text);
-    m_stepRows[index]->setAccessibleName(detail.isEmpty() ? QStringLiteral("%1 %2").arg(marker, m_stepLabels[index])
-                                                          : QStringLiteral("%1 %2: %3").arg(marker, m_stepLabels[index], detail));
+    m_stepRows[index]->setAccessibleName(detail.isEmpty() ? QStringLiteral("%1 %2").arg(markName, m_stepLabels[index])
+                                                          : QStringLiteral("%1 %2: %3").arg(markName, m_stepLabels[index], detail));
     m_stepRows[index]->setStyleSheet(color ? QStringLiteral("color: %1;").arg(QLatin1String(color)) : QString());
 }
 

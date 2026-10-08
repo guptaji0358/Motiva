@@ -1,5 +1,8 @@
 #pragma once
 
+#include <functional>
+#include <vector>
+
 #include <QMainWindow>
 #include <QSystemTrayIcon>
 #include <QMenu>
@@ -48,6 +51,13 @@ public:
     explicit MainWindow(bool startMinimized, const QString& initialExplorerFile = QString(),
         qint64 initialPlaylistId = 0, const QString& initialPlaylistFile = QString(), QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // Call once the window has been shown (or deliberately kept hidden for a
+    // tray start). Runs the heavy half of startup - previous-media restore,
+    // playlist/Windows-session startup, Explorer hand-offs, wallpaper
+    // re-apply - after the complete UI is already visible, instead of before
+    // the window ever appears. Never blocks on Explorer/D3D/attach.
+    void beginDeferredStartup();
 
     // Every extension Explorer's "Set as background" verb should be
     // registered for - the same backend-decodable video containers Open
@@ -220,6 +230,10 @@ private:
     // convergence point; anything else reuses the existing
     // onWallpaperError() warning/tray-message path rather than a new one.
     void handleExplorerRequestedFile(const QString& path);
+    void completeStartup();
+    // Runs `fn` now, or - if deferred startup hasn't finished - right after
+    // it does (IPC hand-offs from a second launch must not race the restore).
+    void runAfterStartup(std::function<void()> fn);
     void createPlaylistFromExplorer(const QString& path, bool video);
     void showExplorerPlaylistError(const QString& message);
 
@@ -227,6 +241,12 @@ private:
     SettingsManager m_settings;
     RecoveryState m_recoveryState;
     InstanceIpc m_ipc;
+    bool m_startMinimized = false;
+    QString m_initialExplorerFile;
+    qint64 m_initialPlaylistId = 0;
+    QString m_initialPlaylistFile;
+    bool m_startupComplete = false;
+    std::vector<std::function<void()>> m_postStartupTasks;
     PlaylistLibrary* m_library = nullptr;
     PlaylistRotation* m_rotation = nullptr;
     PlaylistDialog* m_playlistDialog = nullptr;
@@ -274,6 +294,7 @@ private:
     QLabel* m_fileNameLabel = nullptr;
     QLabel* m_fileDetailsLabel = nullptr;
     QString m_lastVideoDetailsText;
+    QLabel* m_statusDot = nullptr;
     QLabel* m_statusLabel = nullptr;
     QToolButton* m_settingsButton = nullptr;
     QToolButton* m_playlistButton = nullptr;

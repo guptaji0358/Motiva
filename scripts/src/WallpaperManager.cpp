@@ -22,6 +22,17 @@ WallpaperManager::WallpaperManager(QObject* parent)
 
     connect(&m_attachWatcher, &QFutureWatcher<bool>::finished, this, &WallpaperManager::onAttachAttemptFinished);
 
+    // Seed the power source synchronously so anything that reads
+    // m_onBattery before the first WM_POWERBROADCAST arrives (startup
+    // restore calls setWallpaper() long before the event loop delivers it)
+    // already sees the real state instead of assuming AC. 255 = unknown,
+    // which keeps the AC default.
+    SYSTEM_POWER_STATUS powerStatus{};
+    if (GetSystemPowerStatus(&powerStatus) && powerStatus.ACLineStatus == 0) {
+        m_onBattery = true;
+        qInfo() << "[Battery] Started on battery power.";
+    }
+
     // Explorer's "Set as desktop background" (and Settings > Personalization)
     // go through IDesktopWallpaper, which does NOT broadcast WM_SETTINGCHANGE
     // and leaves HKCU\Control Panel\Desktop\Wallpaper untouched (verified

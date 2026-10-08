@@ -52,7 +52,8 @@ private:
     // Operation-specific confirmation; true = proceed.
     bool confirm(CleanupManager::Operation op);
     void runWithProgress(CleanupManager::Operation op);
-    void setStepRow(int index, const QString& marker, const char* color, const QString& detail);
+    enum class StepMark { Pending, Running, Succeeded, Failed };
+    void setStepRow(int index, StepMark mark, const char* color, const QString& detail);
     void onOperationFinished(CleanupManager::Operation op, bool allOk);
     void onProgressButton();
     static QString sizeText(qint64 bytes);
@@ -76,7 +77,8 @@ private:
     CleanupManager::Operation m_runningOp = CleanupManager::Operation::DeleteCache;
     QLabel* m_progressTitle = nullptr;
     QVBoxLayout* m_stepsLayout = nullptr;
-    QList<QLabel*> m_stepRows;
+    QList<QLabel*> m_stepRows;  // step text labels
+    QList<QLabel*> m_stepIcons; // matching SVG status marks
     QStringList m_stepLabels;
     QLabel* m_progressStatus = nullptr;
     QPushButton* m_progressButton = nullptr;

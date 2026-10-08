@@ -17,6 +17,7 @@ class QGraphicsScene;
 class QCheckBox;
 class QLabel;
 class QPushButton;
+class IconButton;
 class QTimer;
 class QToolButton;
 
@@ -85,8 +86,12 @@ public:
 signals:
     void addMediaRequested();
 
+protected:
+    void changeEvent(QEvent* event) override;
+
 private:
     void buildUi();
+    void applyDirectionIcons(); // Earlier/Later SVG icons for the active theme
     QVector<qint64> scopeOrder() const; // scope item ids in playlist order
     void rebuild();
     void scheduleRebuild();
@@ -133,8 +138,8 @@ private:
     QPushButton* m_addButton = nullptr;
     QToolButton* m_arrangeButton = nullptr;
     QCheckBox* m_autoOrganize = nullptr;
-    QPushButton* m_earlierButton = nullptr;
-    QPushButton* m_laterButton = nullptr;
+    IconButton* m_earlierButton = nullptr;
+    IconButton* m_laterButton = nullptr;
     QPushButton* m_removeButton = nullptr;
     QPushButton* m_undoButton = nullptr;
     QPushButton* m_redoButton = nullptr;

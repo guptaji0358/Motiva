@@ -2,6 +2,9 @@
 
 #include <QApplication>
 #include <QPalette>
+#include <QIcon>
+#include <QHash>
+#include <QPainter>
 
 namespace Theme {
 
@@ -643,6 +646,28 @@ bool isDarkTheme(AppTheme theme) {
 
 QString iconVariant(AppTheme theme) {
     return isDarkTheme(theme) ? QStringLiteral("dark") : QStringLiteral("light");
+}
+
+QPixmap tintedIcon(const QString& resource, const QColor& color, int logicalSize) {
+    const qreal dpr = qApp ? qApp->devicePixelRatio() : 1.0;
+    // Delegates repaint constantly; rendering the SVG each time would be wasteful.
+    static QHash<QString, QPixmap> cache;
+    const QString key = QStringLiteral("%1|%2|%3|%4").arg(resource).arg(color.rgba(), 8, 16).arg(logicalSize).arg(dpr);
+    if (const auto it = cache.constFind(key); it != cache.constEnd()) {
+        return it.value();
+    }
+    const QSize px(qRound(logicalSize * dpr), qRound(logicalSize * dpr));
+    QPixmap pm = QIcon(resource).pixmap(px);
+    if (pm.isNull()) {
+        return pm;
+    }
+    QPainter painter(&pm);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    painter.fillRect(pm.rect(), color);
+    painter.end();
+    pm.setDevicePixelRatio(dpr);
+    cache.insert(key, pm);
+    return pm;
 }
 
 AppTheme migrateLegacySettings(int legacyAppearance, int legacyUiStyle) {

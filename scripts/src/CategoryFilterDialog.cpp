@@ -3,6 +3,7 @@
 #include "PlaylistModel.h"
 #include "DialogSizing.h"
 #include "Theme.h"
+#include "IconButton.h"
 
 #include <QComboBox>
 #include <QFileInfo>
@@ -44,6 +45,25 @@ const QList<FieldSpec>& fields() {
     return list;
 }
 } // namespace
+
+void CategoryFilterDialog::applyRemoveIcon(IconButton* button) {
+    const QString v = Theme::iconVariant(Theme::currentTheme());
+    auto icon = [&v](const char* name) {
+        return QIcon(QStringLiteral(":/category/%1/%2.svg").arg(v, QLatin1String(name)));
+    };
+    button->setStateIcon(icon("remove-condition"), icon("remove-condition-hover"), QIcon(),
+                         icon("remove-condition-disabled"));
+}
+
+void CategoryFilterDialog::changeEvent(QEvent* event) {
+    QDialog::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
+        const auto buttons = findChildren<IconButton*>(QStringLiteral("removeConditionButton"));
+        for (IconButton* b : buttons) {
+            applyRemoveIcon(b);
+        }
+    }
+}
 
 CategoryFilterDialog::CategoryFilterDialog(PlaylistLibrary* library, PlaylistModel* playlist,
                                            const PlaylistFilterInfo* existing, QWidget* parent)
@@ -167,7 +187,9 @@ void CategoryFilterDialog::addRule(const FilterRule& rule) {
     r.value = new QLineEdit(r.row);
     r.value->setAccessibleName(tr("Condition value"));
     r.value->setText(rule.value);
-    auto* remove = new QPushButton(QStringLiteral("✕"), r.row);
+    auto* remove = new IconButton(r.row);
+    remove->setObjectName(QStringLiteral("removeConditionButton"));
+    applyRemoveIcon(remove);
     remove->setToolTip(tr("Remove this condition"));
     remove->setAccessibleName(tr("Remove condition"));
     remove->setFixedWidth(40);

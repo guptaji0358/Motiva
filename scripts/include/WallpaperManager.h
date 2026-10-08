@@ -257,10 +257,8 @@ private:
 
     // --- "Show video on battery" (see registerPowerNotifications) ---
     HPOWERNOTIFY m_powerNotifyHandle = nullptr;
-    // Starts optimistic (AC) - the first real WM_POWERBROADCAST after
-    // registration (Windows sends one immediately with the current state,
-    // per RegisterPowerSettingNotification's documented behavior) corrects
-    // this before it can ever matter; nothing reads it before then.
+    // Seeded from GetSystemPowerStatus in the constructor (AC if unknown);
+    // WM_POWERBROADCAST notifications keep it current afterward.
     bool m_onBattery = false;
     bool m_showVideoOnBattery = true;
     // True while the video is hidden specifically because of the battery

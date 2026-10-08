@@ -2,6 +2,32 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-08, startup robustness + SVG status icons + Motiva tooltip)
+
+**Startup**: `MainWindow`'s constructor now builds only UI/tray/IPC/power
+registration; `beginDeferredStartup()` (called from `main()` after `show()`)
+runs `completeStartup()` - media restore, Windows-session playlist startup,
+Explorer hand-offs, wallpaper re-apply, backup start. `InstanceIpc` now
+listens as the FIRST constructor step and the senders wait (bounded, sender
+process only) for the listener - previously a second launch during boot found
+no listener and exited silently ("Motiva didn't open"). IPC requests that
+arrive before startup finishes are queued (`runAfterStartup`). The modal "no
+system tray" box in `main()` is now a log line (tray is routinely missing for
+seconds after sign-in). `WallpaperManager` seeds `m_onBattery` from
+`GetSystemPowerStatus` so startup restore doesn't assume AC. The preview's
+video page shows "Loading preview..." until a frame exists (was an empty
+#161616 panel). `RefreshDesktopBackground()` at startup runs on a worker thread.
+Cold start measured 3.7 s in the UI-build phase (disk/plugin loading) vs 0.6 s warm.
+
+**Icons**: `Theme::tintedIcon()` (cached, SVG recolored via SourceIn) for
+status marks: `Assets/status/*`, `Assets/playlist/video-badge.svg`. Themed
+button icons: `Assets/flow/{dark,light}/`, `Assets/category/{dark,light}/`
+(IconButton + refresh in `changeEvent`).
+
+**Tooltips**: `MotivaToolTip` (one app-level event filter + one popup widget,
+installed in `main()`) replaces Qt's QTipLabel for widget, item-view and
+graphics-view tooltips; colors read from the active Theme at paint time.
+
 ## Current status (2026-10-05, Explorer "Motiva >" menu + playlist categories)
 
 **Explorer menu**: one cascading `shell\Motiva` verb per extension

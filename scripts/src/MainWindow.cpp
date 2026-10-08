@@ -45,6 +45,7 @@
 #include <QSet>
 #include <QProcess>
 #include <QInputDialog>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace {
 // Embedded via resources/app.qrc - loading via the Qt resource path keeps
@@ -70,6 +71,7 @@ QString playlistIconPath() {
 QString wallpaperIconPath(const char* name) {
     return QStringLiteral(":/wallpaper/%1/").arg(Theme::iconVariant(Theme::currentTheme())) + QLatin1String(name);
 }
+constexpr int kStatusDotSize = 14;
 constexpr const char* kOpenVideoIconResourcePath = ":/video/open-video.svg";
 constexpr const char* kOpenVideoIconHoverPath = ":/video/open-video-hover.svg";
 constexpr const char* kOpenVideoIconPressedPath = ":/video/open-video-pressed.svg";
@@ -240,6 +242,16 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     qint64 initialPlaylistId, const QString& initialPlaylistFile, QWidget* parent)
     : QMainWindow(parent), m_manager(std::make_unique<WallpaperManager>()) {
     qInfo() << "[Lifecycle] MainWindow construction begin, startMinimized=" << startMinimized;
+    m_startMinimized = startMinimized;
+    m_initialExplorerFile = initialExplorerFile;
+    m_initialPlaylistId = initialPlaylistId;
+    m_initialPlaylistFile = initialPlaylistFile;
+    // Listen for a second launch's hand-off before any slow work below, so a
+    // double-click during Windows startup reaches this instance instead of
+    // finding nobody to talk to. The requests are only dispatched once the
+    // event loop runs, and runAfterStartup() holds them until the deferred
+    // restore has finished.
+    m_ipc.startListening();
     setWindowTitle("Motiva");
     setWindowIcon(QIcon(kAppIconResourcePath));
     resize(860, 680);
@@ -296,13 +308,22 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // The single-instance winner (only instance that ever reaches this
     // constructor - see main.cpp) starts listening for recovery requests
     // from any later launch attempt.
-    m_ipc.startListening();
-    connect(&m_ipc, &InstanceIpc::recoverRequested, this, &MainWindow::recoverOrActivate);
+    connect(&m_ipc, &InstanceIpc::recoverRequested, this, [this] {
+        // Bring the window forward immediately; the (potentially wallpaper-
+        // attaching) recovery itself waits for startup to finish.
+        showNormal();
+        raise();
+        activateWindow();
+        runAfterStartup([this] { recoverOrActivate(); });
+    });
     // A second launch attempt invoked via Explorer's "Set as background"
     // verb while this instance is already running - see main.cpp/
     // InstanceIpc::sendSetBackgroundRequest.
-    connect(&m_ipc, &InstanceIpc::fileReceived, this, &MainWindow::onExplorerFileReceived);
-    connect(&m_ipc, &InstanceIpc::addToPlaylistReceived, this, &MainWindow::onAddToPlaylistReceived);
+    connect(&m_ipc, &InstanceIpc::fileReceived, this,
+            [this](const QString& path) { runAfterStartup([this, path] { onExplorerFileReceived(path); }); });
+    connect(&m_ipc, &InstanceIpc::addToPlaylistReceived, this, [this](qint64 id, const QString& path) {
+        runAfterStartup([this, id, path] { onAddToPlaylistReceived(id, path); });
+    });
 
     // Whenever the playlist's current image changes (any rotation trigger,
     // Show now, removal of the current image) or the playlist is switched
@@ -392,6 +413,55 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
 
     restoreSettingsToUi();
 
+    // Force the native HWND to actually exist even when starting
+    // minimized-to-tray and never shown: Qt often defers creating a
+    // widget's native window until it's shown, and WallpaperManager
+    // relies on receiving the broadcast "TaskbarCreated" message (sent to
+    // every real top-level HWND in the process) to detect Explorer
+    // restarts (see WallpaperManager::nativeEventFilter) - confirmed by
+    // testing that this message is never received at all when the only
+    // top-level widget in the process was hidden without ever having been
+    // shown, since no native window existed yet to receive it.
+    (void)winId();
+    // Registers for the AC/battery power-source notification on this
+    // now-guaranteed-to-exist HWND - see WallpaperManager::
+    // registerPowerNotifications and the "Show video on battery" setting.
+    // Placed after the winId() force-create above for the same reason
+    // that call exists: the native HWND must be real before anything can
+    // register against it.
+    m_manager->registerPowerNotifications(reinterpret_cast<HWND>(winId()));
+    // Lock -> Unlock playlist trigger, on the same stable HWND.
+    m_rotation->registerSessionNotifications(reinterpret_cast<HWND>(winId()));
+
+    if (startMinimized) {
+        hide();
+    }
+    StartupDiagnostics::instance().mark("uiReady");
+    qInfo() << "[Lifecycle] MainWindow UI construction complete (media restore deferred until shown).";
+}
+
+void MainWindow::beginDeferredStartup() {
+    // Force the first paint of the finished, themed window now so it is on
+    // screen before the heavier restore work below runs on the GUI thread.
+    if (isVisible()) {
+        repaint();
+    }
+    QTimer::singleShot(0, this, &MainWindow::completeStartup);
+}
+
+void MainWindow::runAfterStartup(std::function<void()> fn) {
+    if (m_startupComplete) {
+        fn();
+    } else {
+        m_postStartupTasks.push_back(std::move(fn));
+    }
+}
+
+void MainWindow::completeStartup() {
+    if (m_startupComplete) {
+        return;
+    }
+    qInfo() << "[Lifecycle] Deferred startup begin.";
     // Load (but don't attach to the desktop) whatever video was previously
     // selected, purely so the in-app preview has something to show.
     if (isUsableVideoSource(m_selectedVideoPath)) {
@@ -451,7 +521,10 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // removal) its own detach path may never have run this. Harmless/
     // idempotent if nothing was ever wrong: it just re-applies whatever
     // wallpaper Explorer already has configured.
-    WindowsDesktopWallpaper::RefreshDesktopBackground();
+    // Off the GUI thread: it does an out-of-process COM call and a
+    // broadcast SPI_SETDESKWALLPAPER, either of which can stall for seconds
+    // while Explorer is still initializing right after sign-in.
+    (void)QtConcurrent::run([] { WindowsDesktopWallpaper::RefreshDesktopBackground(); });
 
     // Self-heal, gated purely on the user's own opt-in settings (never
     // registered "just because the app started" - see CLAUDE.md's
@@ -477,14 +550,14 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // main.cpp) - applied last, after the rest of construction/restore
     // above, so it correctly supersedes whatever was merely restored from
     // a previous session.
-    if (!initialExplorerFile.isEmpty()) {
-        handleExplorerRequestedFile(initialExplorerFile);
+    if (!m_initialExplorerFile.isEmpty()) {
+        handleExplorerRequestedFile(m_initialExplorerFile);
     }
-    if (!initialPlaylistFile.isEmpty()) {
-        // After construction and main()'s show(), so a "Create New Playlist"
-        // name dialog has a visible parent window.
-        QTimer::singleShot(0, this, [this, initialPlaylistId, initialPlaylistFile] {
-            onAddToPlaylistReceived(initialPlaylistId, initialPlaylistFile);
+    if (!m_initialPlaylistFile.isEmpty()) {
+        // Runs after the window is shown, so a "Create New Playlist" name
+        // dialog has a visible parent window.
+        QTimer::singleShot(0, this, [this] {
+            onAddToPlaylistReceived(m_initialPlaylistId, m_initialPlaylistFile);
         });
     }
     // An explicit Explorer "Set as background" above switches the playlist
@@ -496,32 +569,15 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
         onSetWallpaper();
     }
 
-    // Force the native HWND to actually exist even when starting
-    // minimized-to-tray and never shown: Qt often defers creating a
-    // widget's native window until it's shown, and WallpaperManager
-    // relies on receiving the broadcast "TaskbarCreated" message (sent to
-    // every real top-level HWND in the process) to detect Explorer
-    // restarts (see WallpaperManager::nativeEventFilter) - confirmed by
-    // testing that this message is never received at all when the only
-    // top-level widget in the process was hidden without ever having been
-    // shown, since no native window existed yet to receive it.
-    (void)winId();
-    // Registers for the AC/battery power-source notification on this
-    // now-guaranteed-to-exist HWND - see WallpaperManager::
-    // registerPowerNotifications and the "Show video on battery" setting.
-    // Placed after the winId() force-create above for the same reason
-    // that call exists: the native HWND must be real before anything can
-    // register against it.
-    m_manager->registerPowerNotifications(reinterpret_cast<HWND>(winId()));
-    // Lock -> Unlock playlist trigger, on the same stable HWND.
-    m_rotation->registerSessionNotifications(reinterpret_cast<HWND>(winId()));
-
-    if (startMinimized) {
-        hide();
-    }
     m_backup->start(); // only does anything if the user turned Backup on
     StartupDiagnostics::instance().mark("mainWindowReady");
+    m_startupComplete = true;
     qInfo() << "[Lifecycle] MainWindow construction complete.";
+    auto tasks = std::move(m_postStartupTasks);
+    m_postStartupTasks.clear();
+    for (auto& task : tasks) {
+        task();
+    }
 }
 
 MainWindow::~MainWindow() = default;
@@ -707,8 +763,17 @@ void MainWindow::buildUi() {
     root->addLayout(infoRow);
 
     // --- Status ---
+    // The status dot is a real SVG mark (Assets/status/status-dot.svg),
+    // recolored per state in updateStatusUi(), not a "●" character.
+    auto* statusRow = new QHBoxLayout();
+    statusRow->setSpacing(8);
+    m_statusDot = new QLabel(central);
+    m_statusDot->setFixedSize(kStatusDotSize, kStatusDotSize);
+    m_statusDot->setAccessibleName(QString()); // decorative; the text label carries the state
+    statusRow->addWidget(m_statusDot, 0, Qt::AlignVCenter);
     m_statusLabel = new QLabel(central);
-    root->addWidget(m_statusLabel);
+    statusRow->addWidget(m_statusLabel, 1);
+    root->addLayout(statusRow);
 
     // --- Primary action: the one obvious next step ---
     // objectName "primaryButton" is what gives this its distinct accent
@@ -889,7 +954,9 @@ void MainWindow::updateStatusUi() {
     if (isPlaylistDrivingMedia() && (m_uiState == WallpaperUiState::Ready || m_uiState == WallpaperUiState::Active)) {
         text += tr("  •  Active playlist: %1").arg(m_library->activePlaylist()->name());
     }
-    m_statusLabel->setText(QStringLiteral("●  ") + text);
+    m_statusLabel->setText(text);
+    m_statusDot->setPixmap(Theme::tintedIcon(QStringLiteral(":/status/status-dot.svg"), QColor(QLatin1String(color)),
+                                             kStatusDotSize));
     m_statusLabel->setStyleSheet(QStringLiteral("color: %1; font-weight: 600; padding: 2px 0;").arg(color));
 }
 
@@ -1223,6 +1290,12 @@ void MainWindow::refreshDropZoneVisual() {
     // replaces) - never both pages at once, and the animation never
     // overlaps a playing video.
     const bool showDropZone = m_dragHintActive || m_dragInvalidActive || m_selectedVideoPath.isEmpty();
+    // A source is selected but its first frame hasn't been decoded yet (cold
+    // start after Windows boots, slow disk, web video): the video page would
+    // otherwise be an empty near-black panel, so say what is happening.
+    if (!showDropZone && m_previewLabel && m_previewLabel->pixmap().isNull()) {
+        m_previewLabel->setText(tr("Loading preview…"));
+    }
     m_previewStack->setCurrentIndex(showDropZone ? kDropZonePageIndex : kVideoPageIndex);
     if (showDropZone && m_previewHost) {
         m_previewHost->setAspect(0.0); // the drop zone uses the whole preview area

@@ -40,5 +40,25 @@
         <file alias="checkbox/check.svg">../Assets/checkbox/check.svg</file>
         <file alias="playlist/light/playlist.svg">../Assets/playlist/light/playlist.svg</file>
         <file alias="playlist/dark/playlist.svg">../Assets/playlist/dark/playlist.svg</file>
+        <file alias="flow/light/earlier.svg">../Assets/flow/light/earlier.svg</file>
+        <file alias="flow/light/earlier-disabled.svg">../Assets/flow/light/earlier-disabled.svg</file>
+        <file alias="flow/light/later.svg">../Assets/flow/light/later.svg</file>
+        <file alias="flow/light/later-disabled.svg">../Assets/flow/light/later-disabled.svg</file>
+        <file alias="category/light/remove-condition.svg">../Assets/category/light/remove-condition.svg</file>
+        <file alias="category/light/remove-condition-hover.svg">../Assets/category/light/remove-condition-hover.svg</file>
+        <file alias="category/light/remove-condition-disabled.svg">../Assets/category/light/remove-condition-disabled.svg</file>
+        <file alias="flow/dark/earlier.svg">../Assets/flow/dark/earlier.svg</file>
+        <file alias="flow/dark/earlier-disabled.svg">../Assets/flow/dark/earlier-disabled.svg</file>
+        <file alias="flow/dark/later.svg">../Assets/flow/dark/later.svg</file>
+        <file alias="flow/dark/later-disabled.svg">../Assets/flow/dark/later-disabled.svg</file>
+        <file alias="category/dark/remove-condition.svg">../Assets/category/dark/remove-condition.svg</file>
+        <file alias="category/dark/remove-condition-hover.svg">../Assets/category/dark/remove-condition-hover.svg</file>
+        <file alias="category/dark/remove-condition-disabled.svg">../Assets/category/dark/remove-condition-disabled.svg</file>
+        <file alias="status/status-dot.svg">../Assets/status/status-dot.svg</file>
+        <file alias="status/check.svg">../Assets/status/check.svg</file>
+        <file alias="status/cross.svg">../Assets/status/cross.svg</file>
+        <file alias="status/arrow-right.svg">../Assets/status/arrow-right.svg</file>
+        <file alias="status/pending.svg">../Assets/status/pending.svg</file>
+        <file alias="playlist/video-badge.svg">../Assets/playlist/video-badge.svg</file>
     </qresource>
 </RCC>

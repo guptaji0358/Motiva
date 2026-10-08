@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QColor>
+#include <QPixmap>
 
 // Centralized Motiva visual design system - see the "Motiva Theme System"
 // task. A Theme is a single, complete, explicitly-defined visual identity
@@ -83,6 +84,13 @@ bool isDarkTheme(AppTheme theme);
 // genuinely needs to differ" instruction. Used everywhere an icon path is
 // built, e.g. ":/settings-icon/" + iconVariant(theme) + "/settings.svg".
 QString iconVariant(AppTheme theme);
+
+// A single-colour SVG glyph (Assets/status/*, Assets/playlist/video-badge.svg:
+// drawn in black) rendered at `logicalSize` and recolored to `color` - the
+// same SourceIn recoloring DropZoneWidget uses. For small status/badge
+// marks whose color is a status color or comes from the active palette, so
+// they need no per-theme artwork. Uses the regular QIcon/SVG engine.
+QPixmap tintedIcon(const QString& resource, const QColor& color, int logicalSize);
 
 // One-time, pure (no I/O) migration from the old two-axis Appearance
 // (0=System/1=Light/2=Dark) x Visual Style (0=ModernAurora/1=MotivaOnyx)
