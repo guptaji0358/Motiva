@@ -29,6 +29,8 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QAction>
+#include "IconButton.h"
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -524,6 +526,24 @@ void PlaylistView::keyPressEvent(QKeyEvent* event) {
     QListView::keyPressEvent(event);
 }
 
+void PlaylistDialog::applyThemedIcons() {
+    const QString v = Theme::iconVariant(Theme::currentTheme());
+    const auto icon = [&v](const char* n) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(n))); };
+    if (m_addButton) {
+        m_addButton->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
+    }
+    if (m_searchAction) {
+        m_searchAction->setIcon(icon("search"));
+    }
+}
+
+void PlaylistDialog::changeEvent(QEvent* event) {
+    QDialog::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
+        applyThemedIcons();
+    }
+}
+
 void PlaylistView::changeEvent(QEvent* event) {
     QListView::changeEvent(event);
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) {
@@ -832,7 +852,9 @@ QWidget* PlaylistDialog::buildEditor() {
     });
     filterRow->addWidget(m_arrangeCombo);
     m_itemSearch = new QLineEdit(editor);
-    m_itemSearch->setPlaceholderText(tr("🔎  Search this playlist…"));
+    m_itemSearch->setPlaceholderText(tr("Search this playlist…"));
+    m_searchAction = m_itemSearch->addAction(QIcon(), QLineEdit::LeadingPosition);
+    applyThemedIcons();
     m_itemSearch->setClearButtonEnabled(true);
     m_itemSearch->setAccessibleName(tr("Search this playlist"));
     m_itemSearch->setMinimumWidth(230);
@@ -898,7 +920,8 @@ QWidget* PlaylistDialog::buildEditor() {
 
     auto* actions = new QHBoxLayout();
     actions->setSpacing(8);
-    m_addButton = new QPushButton(editor);
+    m_addButton = new IconButton(editor);
+    applyThemedIcons();
     connect(m_addButton, &QPushButton::clicked, this, &PlaylistDialog::onAddMedia);
     actions->addWidget(m_addButton);
     m_showNowButton = new QPushButton(tr("Show Now"), editor);
@@ -1725,7 +1748,7 @@ void PlaylistDialog::updateUi() {
     m_activeCheck->setChecked(m->isActive());
     m_binding = false;
 
-    m_addButton->setText(video ? tr("+  Add Videos") : tr("+  Add Images"));
+    m_addButton->setText(video ? tr("Add Videos") : tr("Add Images"));
     m_addButton->setToolTip(video ? tr("Add one or more video files to the end of the playlist")
                                   : tr("Add one or more image files to the end of the playlist"));
     m_settingsStack->setCurrentIndex(video ? 1 : 0);

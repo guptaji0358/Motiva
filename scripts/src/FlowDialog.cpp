@@ -183,10 +183,17 @@ public:
             pill(QRectF(kNodeW - 14 - w, 14, w, sfm.height() + 4), pal.accent, pal.selectionText, now);
         }
         if (m_last) {
-            const QString loop = QStringLiteral("↻ #1");
-            const qreal w = sfm.horizontalAdvance(loop) + 14;
-            pill(QRectF(kNodeW - 14 - w, thumb.bottom() - sfm.height() - 10, w, sfm.height() + 4),
-                 QColor(0, 0, 0, 170), Qt::white, loop);
+            // "Loops back to #1": SVG loop mark + text, not a glyph.
+            const QString loop = QStringLiteral("#1");
+            const int iconSize = sfm.height() - 2;
+            const qreal w = sfm.horizontalAdvance(loop) + iconSize + 20;
+            const QRectF r(kNodeW - 14 - w, thumb.bottom() - sfm.height() - 10, w, sfm.height() + 4);
+            pill(r, QColor(0, 0, 0, 170), Qt::white, QString());
+            p->drawPixmap(QPointF(r.left() + 8, r.center().y() - iconSize / 2.0),
+                          Theme::tintedIcon(QStringLiteral(":/flow/loop.svg"), Qt::white, iconSize));
+            p->setPen(Qt::white);
+            p->drawText(QRectF(r.left() + 8 + iconSize + 4, r.top(), sfm.horizontalAdvance(loop) + 2, r.height()),
+                        Qt::AlignLeft | Qt::AlignVCenter, loop);
         }
 
         // Name + type
@@ -505,6 +512,8 @@ void FlowDialog::applyDirectionIcons() {
     auto icon = [&v](const char* name) { return QIcon(QStringLiteral(":/flow/%1/%2.svg").arg(v, QLatin1String(name))); };
     m_earlierButton->setStateIcon(icon("earlier"), QIcon(), QIcon(), icon("earlier-disabled"));
     m_laterButton->setStateIcon(icon("later"), QIcon(), QIcon(), icon("later-disabled"));
+    const auto add = [&v](const char* n) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(n))); };
+    m_addButton->setStateIcon(add("add"), QIcon(), QIcon(), add("add-disabled"));
 }
 
 void FlowDialog::changeEvent(QEvent* event) {
@@ -533,13 +542,13 @@ void FlowDialog::buildUi() {
 
     auto* bar = new QHBoxLayout();
     bar->setSpacing(8);
-    m_addButton = new QPushButton(tr("+  Add Media"), this);
+    m_addButton = new IconButton(QIcon(), tr("Add Media"), this);
     m_addButton->setToolTip(tr("Add files to this playlist (they are added at the end of the sequence). Nothing is copied."));
     connect(m_addButton, &QPushButton::clicked, this, &FlowDialog::addMediaRequested);
     bar->addWidget(m_addButton);
 
     m_arrangeButton = new QToolButton(this);
-    m_arrangeButton->setText(tr("Arrange  ▾"));
+    m_arrangeButton->setText(tr("Arrange")); // Qt draws the menu indicator
     m_arrangeButton->setPopupMode(QToolButton::InstantPopup);
     m_arrangeButton->setToolTip(tr("Rewrite the saved sequence by file name. This changes the order the wallpaper follows "
                                    "(you can undo it here)."));

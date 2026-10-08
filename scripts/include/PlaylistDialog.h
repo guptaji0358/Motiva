@@ -6,6 +6,8 @@
 #include "LibraryDatabase.h" // PlaylistFilterInfo
 
 class BackupManager;
+class IconButton;
+class QAction;
 class PlaylistLibrary;
 class PlaylistModel;
 class QLineEdit;
@@ -115,11 +117,13 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+    void changeEvent(QEvent* event) override;
     // Delete / D on the My Playlists list (only while the list itself has
     // focus - an inline rename editor or any text field keeps its keys).
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    void applyThemedIcons(); // add/search SVGs for the active theme
     void buildUi();
     QWidget* buildSidebar();
     QWidget* buildEditor();
@@ -197,7 +201,8 @@ private:
     PlaylistView* m_view = nullptr;
     QLabel* m_hintLabel = nullptr;
     QLabel* m_noticeLabel = nullptr;
-    QPushButton* m_addButton = nullptr;
+    IconButton* m_addButton = nullptr;
+    QAction* m_searchAction = nullptr;
     QPushButton* m_showNowButton = nullptr;
     QPushButton* m_clearButton = nullptr;
     QFrame* m_missingBanner = nullptr;

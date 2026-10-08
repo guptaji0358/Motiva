@@ -135,7 +135,7 @@ private:
     QLabel* m_title = nullptr;
     QLabel* m_summary = nullptr;
     QLabel* m_status = nullptr;
-    QPushButton* m_addButton = nullptr;
+    IconButton* m_addButton = nullptr;
     QToolButton* m_arrangeButton = nullptr;
     QCheckBox* m_autoOrganize = nullptr;
     IconButton* m_earlierButton = nullptr;

@@ -60,5 +60,12 @@
         <file alias="status/arrow-right.svg">../Assets/status/arrow-right.svg</file>
         <file alias="status/pending.svg">../Assets/status/pending.svg</file>
         <file alias="playlist/video-badge.svg">../Assets/playlist/video-badge.svg</file>
+        <file alias="playlist/dark/add.svg">../Assets/playlist/dark/add.svg</file>
+        <file alias="playlist/dark/add-disabled.svg">../Assets/playlist/dark/add-disabled.svg</file>
+        <file alias="playlist/dark/search.svg">../Assets/playlist/dark/search.svg</file>
+        <file alias="playlist/light/add.svg">../Assets/playlist/light/add.svg</file>
+        <file alias="playlist/light/add-disabled.svg">../Assets/playlist/light/add-disabled.svg</file>
+        <file alias="playlist/light/search.svg">../Assets/playlist/light/search.svg</file>
+        <file alias="flow/loop.svg">../Assets/flow/loop.svg</file>
     </qresource>
 </RCC>
