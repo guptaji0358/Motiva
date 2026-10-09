@@ -74,6 +74,10 @@
         <file alias="playlist/light/add.svg">../Assets/playlist/light/add.svg</file>
         <file alias="playlist/light/add-disabled.svg">../Assets/playlist/light/add-disabled.svg</file>
         <file alias="playlist/light/search.svg">../Assets/playlist/light/search.svg</file>
+        <file alias="playlist/dark/more.svg">../Assets/playlist/dark/more.svg</file>
+        <file alias="playlist/dark/more-disabled.svg">../Assets/playlist/dark/more-disabled.svg</file>
+        <file alias="playlist/light/more.svg">../Assets/playlist/light/more.svg</file>
+        <file alias="playlist/light/more-disabled.svg">../Assets/playlist/light/more-disabled.svg</file>
         <file alias="flow/loop.svg">../Assets/flow/loop.svg</file>
     </qresource>
 </RCC>

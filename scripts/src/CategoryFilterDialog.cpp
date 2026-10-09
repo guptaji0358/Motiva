@@ -55,9 +55,20 @@ void CategoryFilterDialog::applyRemoveIcon(IconButton* button) {
                          icon("remove-condition-disabled"));
 }
 
+namespace {
+void applyAddIcon(IconButton* button) {
+    const QString v = Theme::iconVariant(Theme::currentTheme());
+    auto icon = [&v](const char* name) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(name))); };
+    button->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
+}
+} // namespace
+
 void CategoryFilterDialog::changeEvent(QEvent* event) {
     QDialog::changeEvent(event);
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
+        if (auto* add = findChild<IconButton*>(QStringLiteral("addConditionButton"))) {
+            applyAddIcon(add);
+        }
         const auto buttons = findChildren<IconButton*>(QStringLiteral("removeConditionButton"));
         for (IconButton* b : buttons) {
             applyRemoveIcon(b);
@@ -114,7 +125,9 @@ CategoryFilterDialog::CategoryFilterDialog(PlaylistLibrary* library, PlaylistMod
     m_rulesLayout = new QVBoxLayout();
     m_rulesLayout->setSpacing(6);
     root->addLayout(m_rulesLayout);
-    auto* addRuleButton = new QPushButton(tr("+ Add Condition"), this);
+    auto* addRuleButton = new IconButton(QIcon(), tr("Add Condition"), this);
+    addRuleButton->setObjectName(QStringLiteral("addConditionButton"));
+    applyAddIcon(addRuleButton);
     connect(addRuleButton, &QPushButton::clicked, this, [this] { addRule(); });
     auto* addRow = new QHBoxLayout();
     addRow->addWidget(addRuleButton);

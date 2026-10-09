@@ -535,6 +535,15 @@ void PlaylistDialog::applyThemedIcons() {
     if (m_searchAction) {
         m_searchAction->setIcon(icon("search"));
     }
+    // The "+" / "..." marks these buttons used to carry as text.
+    for (IconButton* b : {m_newImageButton, m_newVideoButton, m_buildCategoryButton}) {
+        if (b) {
+            b->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
+        }
+    }
+    if (m_categoryMenuButton) {
+        m_categoryMenuButton->setStateIcon(icon("more"), QIcon(), QIcon(), icon("more-disabled"));
+    }
 }
 
 void PlaylistDialog::changeEvent(QEvent* event) {
@@ -746,15 +755,20 @@ QWidget* PlaylistDialog::buildSidebar() {
     auto* buttons = new QHBoxLayout();
     buttons->setSpacing(6);
     // Two direct buttons - no type menu (that dropdown was what Ctrl+N popped).
-    auto* newImage = new QPushButton(tr("+ Image Playlist"), panel);
+    m_newImageButton = new IconButton(QIcon(), tr("Image Playlist"), panel);
+    m_newImageButton->setAccessibleName(tr("New Image Playlist"));
+    auto* newImage = m_newImageButton;
     newImage->setToolTip(tr("New image playlist (Ctrl+Alt+N)"));
     connect(newImage, &QPushButton::clicked, this, [this] { createPlaylist(false); });
     buttons->addWidget(newImage);
-    auto* newVideo = new QPushButton(tr("+ Video Playlist"), panel);
+    m_newVideoButton = new IconButton(QIcon(), tr("Video Playlist"), panel);
+    m_newVideoButton->setAccessibleName(tr("New Video Playlist"));
+    auto* newVideo = m_newVideoButton;
     newVideo->setToolTip(tr("New video playlist (Ctrl+Shift+N)"));
     connect(newVideo, &QPushButton::clicked, this, [this] { createPlaylist(true); });
     buttons->addWidget(newVideo);
     col->addLayout(buttons);
+    applyThemedIcons();
     return panel;
 }
 
@@ -825,7 +839,7 @@ QWidget* PlaylistDialog::buildEditor() {
     });
     filterRow->addWidget(m_categoryCombo);
     // Same actions as the right-click menu, reachable by keyboard too.
-    m_categoryMenuButton = new QPushButton(QStringLiteral("⋯"), editor);
+    m_categoryMenuButton = new IconButton(QIcon(), QString(), editor); // three-dots SVG, set in applyThemedIcons()
     m_categoryMenuButton->setAccessibleName(tr("Category actions"));
     m_categoryMenuButton->setToolTip(tr("Edit, rename or delete this category"));
     m_categoryMenuButton->setFixedWidth(40);
@@ -833,7 +847,9 @@ QWidget* PlaylistDialog::buildEditor() {
         showCategoryMenu(m_categoryMenuButton->mapToGlobal(QPoint(0, m_categoryMenuButton->height())));
     });
     filterRow->addWidget(m_categoryMenuButton);
-    auto* buildCategory = new QPushButton(tr("+ Build Category"), editor);
+    m_buildCategoryButton = new IconButton(QIcon(), tr("Build Category"), editor);
+    m_buildCategoryButton->setAccessibleName(tr("Build Category"));
+    auto* buildCategory = m_buildCategoryButton;
     buildCategory->setToolTip(tr("Save a filter for this playlist, e.g. file names containing \"anime\""));
     connect(buildCategory, &QPushButton::clicked, this, &PlaylistDialog::onBuildCategory);
     filterRow->addWidget(buildCategory);
@@ -1721,7 +1737,7 @@ void PlaylistDialog::updateUi() {
     PlaylistModel* m = current();
     m_editorStack->setCurrentIndex(m ? 1 : 0);
     m_emptyLabel->setText(hasPlaylists ? tr("Select a playlist on the left.")
-                                       : tr("Create a playlist with \"+ Image Playlist\" or \"+ Video Playlist\" to get started.\n\n"
+                                       : tr("Create a playlist with \"Image Playlist\" or \"Video Playlist\" to get started.\n\n"
                                             "Image playlists change image on unlock, at Windows start or on a timer.\n"
                                             "Video playlists play their videos one after another."));
     if (!m) {

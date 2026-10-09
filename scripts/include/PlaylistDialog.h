@@ -188,7 +188,10 @@ private:
 
     QLabel* m_categoryLabel = nullptr;
     QComboBox* m_categoryCombo = nullptr;
-    QPushButton* m_categoryMenuButton = nullptr;
+    IconButton* m_categoryMenuButton = nullptr;
+    IconButton* m_newImageButton = nullptr;
+    IconButton* m_newVideoButton = nullptr;
+    IconButton* m_buildCategoryButton = nullptr;
     QComboBox* m_arrangeCombo = nullptr;
     QPushButton* m_flowButton = nullptr;
     QLineEdit* m_itemSearch = nullptr;
