@@ -113,7 +113,8 @@ public:
 signals:
     // "Set as Wallpaper": MainWindow activates the playlist and applies its
     // current item through the normal Set as Wallpaper path.
-    void applyToDesktopRequested(qint64 playlistId);
+    // categoryId 0 = the whole playlist ("All").
+    void applyToDesktopRequested(qint64 playlistId, qint64 categoryId);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -157,6 +158,10 @@ private:
     void selectRow(int row);
     void showNotice(const QString& text);
     PlaylistModel* current() const;
+    qint64 selectedCategoryId() const; // 0 = All
+    // True when the open playlist is active AND limited to the category selected here.
+    bool isSelectionActive() const;
+    void activateSelection(); // setActive(open playlist, selected category)
 
     // --- virtual categories: saved filters of the open playlist ---
     // Reloads the Category selector for the open playlist; resetToAll picks

@@ -8,6 +8,10 @@
 
 namespace {
 constexpr const char* kActiveKey = "active_playlist_id";
+// The active source is (playlist id, category id, source type), all by stable
+// database id - never by name. "playlist" = the whole playlist ("All").
+constexpr const char* kActiveCategoryKey = "active_category_id";
+constexpr const char* kActiveSourceKey = "active_source_type";
 constexpr const char* kSelectedKey = "selected_playlist_id";
 constexpr const char* kLegacyMigratedKey = "legacy_settings_migrated";
 } // namespace
@@ -112,11 +116,8 @@ LibraryDatabase::OpenResult PlaylistLibrary::open() {
     m_selectedId = m_db.meta(QLatin1String(kSelectedKey)).toLongLong();
     const qint64 active = m_db.meta(QLatin1String(kActiveKey)).toLongLong();
     if (active > 0 && m_list.rowOf(active) >= 0) {
-        m_activeId = active;
-        m_list.m_activeId = active;
-        if (PlaylistModel* m = playlist(active)) {
-            m->setActive(true);
-        }
+        restoreActiveSource(active, m_db.meta(QLatin1String(kActiveCategoryKey)).toLongLong(),
+                            m_db.meta(QLatin1String(kActiveSourceKey)) == QLatin1String("category"));
     }
     if (m_list.rowOf(m_selectedId) < 0) {
         m_selectedId = m_activeId ? m_activeId : m_list.idAt(0);
@@ -124,6 +125,120 @@ LibraryDatabase::OpenResult PlaylistLibrary::open() {
     qInfo() << "[Library]" << QDir::toNativeSeparators(m_db.path()) << "-" << playlistCount() << "playlist(s), active="
             << m_activeId << "persistent=" << m_db.isPersistent();
     return result;
+}
+
+void PlaylistLibrary::restoreActiveSource(qint64 playlistId, qint64 categoryId, bool categoryType) {
+    PlaylistModel* m = playlist(playlistId);
+    if (!m) {
+        return;
+    }
+    if (categoryType || categoryId > 0) {
+        // The saved source was a category: restore exactly that, or - if it is
+        // gone or empty - switch the source off and say so. Never silently
+        // fall back to rotating the whole parent playlist.
+        bool found = false;
+        const QSet<qint64> items = categoryId > 0 ? categoryItemIds(playlistId, categoryId, &found) : QSet<qint64>();
+        if (!found || items.isEmpty()) {
+            const QString notice = found ? tr("The category last used as your wallpaper source no longer has any media in "
+                                              "playlist \"%1\", so it was not restored.")
+                                         : tr("The category last used as your wallpaper source no longer exists in "
+                                              "playlist \"%1\", so it was not restored.");
+            m_openNotice += (m_openNotice.isEmpty() ? QString() : QStringLiteral("\n\n")) +
+                notice.arg(m->name()) + QLatin1Char(' ') + tr("Pick a playlist or category and choose Set as Wallpaper.");
+            qWarning() << "[Library] Saved active category" << categoryId << "of playlist" << playlistId
+                       << (found ? "is empty" : "no longer exists") << "- no active source restored.";
+            m_db.setMeta(QLatin1String(kActiveKey), QString());
+            m_db.setMeta(QLatin1String(kActiveCategoryKey), QString());
+            m_db.setMeta(QLatin1String(kActiveSourceKey), QStringLiteral("playlist"));
+            return;
+        }
+        m_activeCategoryId = categoryId;
+        m->setScope(&items);
+    }
+    m_activeId = playlistId;
+    m_list.m_activeId = playlistId;
+    m->setActive(true);
+    if (m->isScoped() && !m->inScope(m->itemIdAt(m->currentIndex()))) {
+        m->ensureCurrentAvailable(); // the saved current item left the category meanwhile
+    }
+    qInfo() << "[Library] Restored active source: playlist" << playlistId << "category" << m_activeCategoryId;
+}
+
+bool PlaylistLibrary::persistActiveSource(qint64 playlistId, qint64 categoryId) {
+    // Category and type first, the playlist id last, so an interruption never
+    // leaves a different playlist paired with the previous playlist's category.
+    return m_db.setMeta(QLatin1String(kActiveCategoryKey), categoryId > 0 ? QString::number(categoryId) : QString()) &&
+           m_db.setMeta(QLatin1String(kActiveSourceKey),
+                        categoryId > 0 ? QStringLiteral("category") : QStringLiteral("playlist")) &&
+           m_db.setMeta(QLatin1String(kActiveKey), playlistId > 0 ? QString::number(playlistId) : QString());
+}
+
+QSet<qint64> PlaylistLibrary::categoryItemIds(qint64 playlistId, qint64 categoryId, bool* found) {
+    if (found) {
+        *found = true;
+    }
+    if (categoryId <= 0) {
+        return m_db.matchingItems(playlistId, nullptr, QString());
+    }
+    for (const PlaylistFilterInfo& f : m_db.playlistFilters(playlistId)) {
+        if (f.id == categoryId) {
+            QSet<qint64> ids = m_db.matchingItems(playlistId, f.isSelection() ? nullptr : &f.definition, QString());
+            if (f.isSelection()) {
+                ids.intersect(f.itemIds); // hand-picked: exactly the chosen items
+            }
+            return ids;
+        }
+    }
+    if (found) {
+        *found = false;
+    }
+    return {};
+}
+
+QString PlaylistLibrary::activeCategoryName() {
+    if (m_activeId <= 0 || m_activeCategoryId <= 0) {
+        return {};
+    }
+    for (const PlaylistFilterInfo& f : m_db.playlistFilters(m_activeId)) {
+        if (f.id == m_activeCategoryId) {
+            return f.name;
+        }
+    }
+    return {};
+}
+
+void PlaylistLibrary::refreshActiveScope() {
+    if (m_activeId <= 0 || m_activeCategoryId <= 0 || m_refreshingScope) {
+        return;
+    }
+    PlaylistModel* m = m_models.value(m_activeId);
+    if (!m) {
+        return;
+    }
+    m_refreshingScope = true;
+    bool found = false;
+    const QSet<qint64> items = categoryItemIds(m_activeId, m_activeCategoryId, &found);
+    if (!found || items.isEmpty()) {
+        const QString name = m->name();
+        qWarning() << "[Library] Active category" << m_activeCategoryId << (found ? "is now empty" : "was deleted")
+                   << "- switching the wallpaper source off.";
+        m_refreshingScope = false;
+        setActive(0);
+        emit sourceNotice(found ? tr("The active category in \"%1\" has no media left, so Motiva stopped using it as "
+                                      "the wallpaper source. The current wallpaper stays until you choose another.").arg(name)
+                                 : tr("The active category in \"%1\" was deleted, so Motiva stopped using it as the "
+                                      "wallpaper source. The current wallpaper stays until you choose another.").arg(name));
+        return;
+    }
+    const bool changed = m->scopeItemIds() != items;
+    m->setScope(&items); // follows condition categories as media is added/removed
+    if (!m->inScope(m->itemIdAt(m->currentIndex()))) {
+        m->ensureCurrentAvailable();
+    }
+    m_refreshingScope = false;
+    if (changed) {
+        emit activeScopeChanged(); // reconfigures the timer, refreshes "item x of y"
+    }
 }
 
 void PlaylistLibrary::migrateLegacyImagePlaylist() {
@@ -192,7 +307,12 @@ PlaylistModel* PlaylistLibrary::playlist(qint64 id) {
     }
     auto* model = new PlaylistModel(&m_db, m_list.m_rows[row], nullptr);
     model->setActive(id == m_activeId);
-    connect(model, &PlaylistModel::contentsChanged, this, [this, id] { refreshListCounts(id); });
+    connect(model, &PlaylistModel::contentsChanged, this, [this, id] {
+        refreshListCounts(id);
+        if (id == m_activeId) {
+            refreshActiveScope();
+        }
+    });
     connect(model, &PlaylistModel::errorOccurred, this, &PlaylistLibrary::errorOccurred);
     connect(model, &PlaylistModel::currentChanged, this, [this, id] {
         if (id == m_activeId) {
@@ -207,32 +327,65 @@ PlaylistModel* PlaylistLibrary::activePlaylist() {
     return playlist(m_activeId);
 }
 
-bool PlaylistLibrary::setActive(qint64 id) {
+bool PlaylistLibrary::setActive(qint64 id, qint64 categoryId) {
+    if (id <= 0) {
+        id = 0;
+        categoryId = 0;
+    } else if (categoryId < 0) {
+        categoryId = (id == m_activeId) ? m_activeCategoryId : 0; // keep the scope when only re-asserting the playlist
+    }
+    PlaylistModel* target = nullptr;
     if (id > 0) {
-        PlaylistModel* m = playlist(id);
-        if (!m || !m->ensureCurrentAvailable()) {
+        target = playlist(id);
+        if (!target) {
+            return false;
+        }
+        QSet<qint64> scope;
+        if (categoryId > 0) {
+            bool found = false;
+            scope = categoryItemIds(id, categoryId, &found);
+            if (!found || scope.isEmpty()) {
+                emit sourceNotice(found ? tr("That category has no media yet - add or select some media first.")
+                                         : tr("That category no longer exists."));
+                return false;
+            }
+        }
+        // Scope the model BEFORE choosing the starting item, so playback
+        // begins inside the category. On failure the previous scope returns.
+        target->setScope(categoryId > 0 ? &scope : nullptr);
+        if (!target->ensureCurrentAvailable()) {
+            if (id == m_activeId && m_activeCategoryId > 0) {
+                const QSet<qint64> previous = categoryItemIds(id, m_activeCategoryId);
+                target->setScope(&previous);
+            } else {
+                target->setScope(nullptr);
+            }
             return false;
         }
     }
-    if (id == m_activeId) {
+    if (id == m_activeId && categoryId == m_activeCategoryId) {
         return true;
     }
-    if (!m_db.setMeta(QLatin1String(kActiveKey), id > 0 ? QString::number(id) : QString())) {
+    if (!persistActiveSource(id, categoryId)) {
         emit errorOccurred(m_db.lastError());
         return false;
     }
-    if (PlaylistModel* previous = m_models.value(m_activeId)) {
+    PlaylistModel* previous = m_models.value(m_activeId);
+    if (previous && previous != target) {
         previous->setActive(false);
+        previous->setScope(nullptr);
     }
     m_activeId = id;
-    if (PlaylistModel* now = playlist(id)) {
-        now->setActive(true);
+    m_activeCategoryId = categoryId;
+    if (target) {
+        target->setActive(true);
     }
     m_list.m_activeId = id;
     if (!m_list.m_rows.isEmpty()) {
         emit m_list.dataChanged(m_list.index(0), m_list.index(m_list.m_rows.size() - 1));
     }
-    qInfo() << "[Library] Active playlist ->" << (id > 0 ? playlist(id)->name() : QStringLiteral("none"));
+    qInfo() << "[Library] Active source ->" << (id > 0 ? playlist(id)->name() : QStringLiteral("none"))
+            << "category" << categoryId << "-" << (target ? target->scopeCount() : 0) << "item(s) in rotation";
     emit activeChanged(id);
     return true;
 }
@@ -355,6 +508,7 @@ void PlaylistLibrary::closeForCleanup() {
     qDeleteAll(m_models);
     m_models.clear();
     m_activeId = 0;
+    m_activeCategoryId = 0;
     m_selectedId = 0;
     m_list.beginResetModel();
     m_list.m_rows.clear();
@@ -397,6 +551,9 @@ bool PlaylistLibrary::setCategoryItems(qint64 categoryId, qint64 playlistId, con
         return false;
     }
     emit filtersChanged(playlistId);
+    if (playlistId == m_activeId) {
+        refreshActiveScope(); // hand-picked members changed
+    }
     return true;
 }
 
@@ -418,6 +575,9 @@ bool PlaylistLibrary::updateFilter(qint64 filterId, qint64 playlistId, const QSt
         return false;
     }
     emit filtersChanged(playlistId);
+    if (playlistId == m_activeId) {
+        refreshActiveScope();
+    }
     return true;
 }
 
@@ -427,5 +587,8 @@ bool PlaylistLibrary::deleteFilter(qint64 filterId, qint64 playlistId) {
         return false;
     }
     emit filtersChanged(playlistId);
+    if (playlistId == m_activeId && filterId == m_activeCategoryId) {
+        refreshActiveScope(); // the active category is gone: source switched off with a notice
+    }
     return true;
 }

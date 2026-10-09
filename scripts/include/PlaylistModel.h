@@ -56,6 +56,19 @@ public:
     // Set by PlaylistLibrary: this playlist currently controls the wallpaper.
     bool isActive() const { return m_active; }
 
+    // Playback scope (set by PlaylistLibrary while this playlist is active):
+    // when scoped, advance()/ensureCurrentAvailable() only ever land on items
+    // in the scope - a category's members - while the stored order, and every
+    // item outside the scope, stay untouched. Unscoped = the whole playlist.
+    bool isScoped() const { return m_scoped; }
+    bool inScope(qint64 itemId) const { return !m_scoped || m_scope.contains(itemId); }
+    QSet<qint64> scopeItemIds() const { return m_scope; }
+    // Items playback rotates through (the whole playlist when unscoped).
+    int scopeCount() const;
+    // 1-based position of the current item among the scope's items in
+    // playlist order; 0 if there is no current item or it is outside the scope.
+    int scopePosition() const;
+
     int count() const { return m_items.size(); }
     QString pathAt(int row) const;
     bool isAvailable(int row) const;
@@ -109,6 +122,8 @@ signals:
 private:
     friend class PlaylistLibrary;
     void setActive(bool active);
+    // nullptr = whole playlist. Ids that are not items of this playlist are ignored.
+    void setScope(const QSet<qint64>* itemIds);
     void setNameLocal(const QString& name) { m_name = name; }
     void setRotationLocal(const RotationSettings& r) { m_rotation = r; }
 
@@ -124,6 +139,7 @@ private:
     void loadItems();
 
     bool persistCurrent();
+    bool isUsable(int row) const; // available and inside the playback scope
     int nextAvailableAfter(int from, bool wrap);
     void updateAvailability(int row);
     void emitRowChanged(int row);
@@ -136,6 +152,8 @@ private:
     PlaylistType m_type;
     RotationSettings m_rotation;
     bool m_active = false;
+    bool m_scoped = false;
+    QSet<qint64> m_scope;
     QVector<Item> m_items;
     int m_current = -1;
 

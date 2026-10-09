@@ -82,6 +82,9 @@ public:
 
     // Re-reads the scope and playlist (after media was added elsewhere).
     void refresh();
+    // The category this diagram's scope is (0 = the whole playlist); used when
+    // "Show now" has to activate the playlist, so it activates this same scope.
+    void setScopeCategoryId(qint64 categoryId) { m_scopeCategoryId = categoryId; }
 
 signals:
     void addMediaRequested();
@@ -119,6 +122,7 @@ private:
     PlaylistLibrary* m_library;
     PlaylistModel* m_playlist;
     QString m_scopeName;
+    qint64 m_scopeCategoryId = 0;
     ScopeProvider m_scopeItems;
     QSet<qint64> m_scope;
     QHash<qint64, QPointF> m_positions; // saved node layout (item id -> scene pos)

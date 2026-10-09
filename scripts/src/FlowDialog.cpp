@@ -632,8 +632,8 @@ void FlowDialog::buildUi() {
             m_status->setText(tr("That file can't be found on disk, so it can't be shown."));
             return;
         }
-        if (!m_playlist->isActive()) {
-            m_library->setActive(m_playlist->id());
+        if (!m_playlist->isActive() || m_library->activeCategoryId() != m_scopeCategoryId) {
+            m_library->setActive(m_playlist->id(), m_scopeCategoryId);
         }
         m_status->setText(tr("Showing \"%1\" now.").arg(QFileInfo(m_playlist->pathAt(row)).fileName()));
     });
@@ -783,7 +783,10 @@ void FlowDialog::rebuild() {
     m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-400, -300, 400, 300));
 
     const bool whole = n == m_playlist->count();
-    m_title->setText(tr("Wallpaper Flow — %1").arg(m_scopeName));
+    // Say when this diagram IS what the wallpaper is currently rotating.
+    const bool isActiveSequence = m_playlist->isActive() && m_library->activeCategoryId() == m_scopeCategoryId;
+    m_title->setText(isActiveSequence ? tr("Wallpaper Flow — %1  (active sequence)").arg(m_scopeName)
+                                      : tr("Wallpaper Flow — %1").arg(m_scopeName));
     m_summary->setText(timingSummary() + QLatin1Char(' ') +
                        (whole ? tr("#n is an item's place in the sequence.")
                               : tr("Showing %1 of %2 items; the others keep their places in the playlist. #n is the place "

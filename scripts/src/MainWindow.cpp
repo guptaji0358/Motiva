@@ -334,6 +334,19 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
         applyPlaylistItem();
         syncPlaylistDialogState();
     });
+    connect(m_library, &PlaylistLibrary::sourceNotice, this, [this](const QString& message) {
+        if (m_playlistDialog && m_playlistDialog->isVisible()) {
+            return; // PlaylistDialog shows it in its own notice line
+        }
+        if (m_tray) {
+            m_tray->showMessage(tr("Motiva playlists"), message, QSystemTrayIcon::Information, 8000);
+        }
+    });
+    connect(m_library, &PlaylistLibrary::activeScopeChanged, this, [this] {
+        applyVideoInfoUi(); // "item x of y" follows the category's membership
+        updateStatusUi();
+        syncPlaylistDialogState();
+    });
     // Switching the active playlist safely switches the wallpaper source:
     // the new playlist's current item replaces the current media in place.
     // Only one playlist is ever active (PlaylistLibrary), so two playlists
@@ -880,7 +893,10 @@ void MainWindow::applyVideoInfoUi() {
     }
     if (isPlaylistDrivingMedia()) {
         const PlaylistModel* active = m_library->activePlaylist();
-        parts << tr("Playlist \"%1\" %2 of %3").arg(active->name()).arg(active->currentIndex() + 1).arg(active->count());
+        const QString category = m_library->activeCategoryName();
+        parts << tr("Playlist \"%1\"%2 %3 of %4")
+                     .arg(active->name(), category.isEmpty() ? QString() : tr(" > %1").arg(category))
+                     .arg(active->scopePosition()).arg(active->scopeCount());
     }
     const QSize size = m_manager->player()->videoNativeSize();
     if (size.isValid() && !size.isEmpty()) {
@@ -952,7 +968,9 @@ void MainWindow::updateStatusUi() {
     }
     // Makes it obvious whether one image or the playlist is in use.
     if (isPlaylistDrivingMedia() && (m_uiState == WallpaperUiState::Ready || m_uiState == WallpaperUiState::Active)) {
-        text += tr("  •  Active playlist: %1").arg(m_library->activePlaylist()->name());
+        const QString category = m_library->activeCategoryName();
+        text += category.isEmpty() ? tr("  •  Active playlist: %1").arg(m_library->activePlaylist()->name())
+                                   : tr("  •  Active category: %1 > %2").arg(m_library->activePlaylist()->name(), category);
     }
     m_statusLabel->setText(text);
     m_statusDot->setPixmap(Theme::tintedIcon(QStringLiteral(":/status/status-dot.svg"), QColor(QLatin1String(color)),
@@ -1856,8 +1874,11 @@ void MainWindow::onPlayerEndOfMedia() {
     }
 }
 
-void MainWindow::onApplyPlaylistToDesktop(qint64 playlistId) {
-    if (m_library->activeId() != playlistId && !m_library->setActive(playlistId)) {
+void MainWindow::onApplyPlaylistToDesktop(qint64 playlistId, qint64 categoryId) {
+    // The same playlist pipeline for a whole playlist (categoryId 0) and for
+    // one of its categories: the category only limits which items rotate.
+    if ((m_library->activeId() != playlistId || m_library->activeCategoryId() != categoryId) &&
+        !m_library->setActive(playlistId, categoryId)) {
         return; // nothing available - PlaylistDialog keeps its button disabled for this
     }
     applyPlaylistItem();

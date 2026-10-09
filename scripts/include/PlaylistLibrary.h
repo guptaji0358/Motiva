@@ -5,6 +5,7 @@
 #include <QAbstractListModel>
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QVector>
 
 class PlaylistModel;
@@ -88,8 +89,22 @@ public:
 
     qint64 activeId() const { return m_activeId; }
     PlaylistModel* activePlaylist();
-    // Activates `id` (0 = none). Requires at least one available item.
-    bool setActive(qint64 id);
+    // The category (playlist_categories.id) the active playlist is limited to;
+    // 0 = the whole playlist ("All"). Always one of the active playlist's own
+    // categories while activeId() > 0.
+    qint64 activeCategoryId() const { return m_activeCategoryId; }
+    QString activeCategoryName(); // empty when the whole playlist is the source
+    // playlist_items.id of the items category `categoryId` of `playlistId`
+    // currently contains (recomputed from the database each call, so a
+    // condition category follows media added later). categoryId 0 = every
+    // item. `found` is false when the category does not belong to the playlist.
+    QSet<qint64> categoryItemIds(qint64 playlistId, qint64 categoryId, bool* found = nullptr);
+    // Activates playlist `id` (0 = none), optionally limited to one of its
+    // categories. categoryId < 0 keeps the current category when `id` is
+    // already active, else uses the whole playlist; 0 = whole playlist.
+    // Fails (false, current source unchanged) if the playlist or category has
+    // no available item. The playlist's stored order is never touched.
+    bool setActive(qint64 id, qint64 categoryId = -1);
 
     qint64 selectedId() const { return m_selectedId; }
     void setSelected(qint64 id);
@@ -129,7 +144,13 @@ public:
 
 
 signals:
+    // Fires when the active playlist OR its category changes.
     void activeChanged(qint64 id);
+    // The active category's membership changed (media added/removed, rules edited).
+    void activeScopeChanged();
+    // Something about the active wallpaper source the user should know (a category
+    // emptied/was deleted, a category cannot be activated). Not a save failure.
+    void sourceNotice(const QString& message);
     // The active playlist's current item changed (advance, Show now, removal).
     void activeCurrentChanged();
     // The active playlist's own settings changed (rotation).
@@ -147,12 +168,19 @@ private:
     void reloadList();
     void migrateLegacyImagePlaylist();
     void refreshListCounts(qint64 id);
+    // Re-resolves the active category's members into the active model; if the
+    // category vanished or emptied, the source is switched off with a notice.
+    void refreshActiveScope();
+    bool persistActiveSource(qint64 playlistId, qint64 categoryId);
+    void restoreActiveSource(qint64 playlistId, qint64 categoryId, bool categoryType);
 
     SettingsManager* m_settings;
     LibraryDatabase m_db;
     PlaylistListModel m_list;
     QHash<qint64, PlaylistModel*> m_models;
     qint64 m_activeId = 0;
+    qint64 m_activeCategoryId = 0;
+    bool m_refreshingScope = false;
     qint64 m_selectedId = 0;
     QString m_openNotice;
 };

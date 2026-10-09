@@ -249,6 +249,37 @@ void PlaylistModel::setActive(bool active) {
     }
 }
 
+void PlaylistModel::setScope(const QSet<qint64>* itemIds) {
+    m_scoped = itemIds != nullptr;
+    m_scope = itemIds ? *itemIds : QSet<qint64>();
+}
+
+int PlaylistModel::scopeCount() const {
+    if (!m_scoped) {
+        return m_items.size();
+    }
+    int n = 0;
+    for (const Item& item : m_items) {
+        n += m_scope.contains(item.itemId) ? 1 : 0;
+    }
+    return n;
+}
+
+int PlaylistModel::scopePosition() const {
+    if (m_current < 0 || m_current >= m_items.size() || !inScope(m_items[m_current].itemId)) {
+        return 0;
+    }
+    int position = 0;
+    for (int i = 0; i <= m_current; ++i) {
+        position += inScope(m_items[i].itemId) ? 1 : 0;
+    }
+    return position;
+}
+
+bool PlaylistModel::isUsable(int row) const {
+    return row >= 0 && row < m_items.size() && m_items[row].available && inScope(m_items[row].itemId);
+}
+
 void PlaylistModel::emitRowChanged(int row) {
     if (row >= 0 && row < m_items.size()) {
         emit dataChanged(index(row), index(row));
@@ -364,7 +395,7 @@ bool PlaylistModel::removeAt(int row) {
     } else if (wasCurrent) {
         // The item that followed takes its place in the sequence.
         const int candidate = row % m_items.size();
-        m_current = isAvailable(candidate) ? candidate : nextAvailableAfter(candidate, true);
+        m_current = isUsable(candidate) ? candidate : nextAvailableAfter(candidate, true);
         if (m_current < 0) {
             m_current = candidate;
         }
@@ -513,7 +544,7 @@ int PlaylistModel::nextAvailableAfter(int from, bool wrap) {
             break;
         }
         updateAvailability(row);
-        if (m_items[row].available) {
+        if (isUsable(row)) {
             return row;
         }
     }
@@ -540,10 +571,13 @@ bool PlaylistModel::advance(bool wrap) {
 
 bool PlaylistModel::ensureCurrentAvailable() {
     updateAvailability(m_current);
-    if (isAvailable(m_current)) {
+    if (isUsable(m_current)) {
         return true;
     }
-    const int next = nextAvailableAfter(m_current, true);
+    // Current is missing or (scoped) outside the category: enter the scope
+    // at its first usable item in playlist order.
+    const int next = (m_scoped && !inScope(itemIdAt(m_current))) ? nextAvailableAfter(-1, true)
+                                                                  : nextAvailableAfter(m_current, true);
     if (next < 0) {
         return false;
     }

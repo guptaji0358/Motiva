@@ -141,7 +141,7 @@ private slots:
     // "Set as Wallpaper" from PlaylistDialog: makes `playlistId` the active
     // playlist, makes its current item the current media, and runs the
     // normal Set as Wallpaper path if the wallpaper isn't already active.
-    void onApplyPlaylistToDesktop(qint64 playlistId);
+    void onApplyPlaylistToDesktop(qint64 playlistId, qint64 categoryId);
     // A video finished (VideoPlayer::endOfMedia). Advances an active video
     // playlist; does nothing for standalone media.
     void onPlayerEndOfMedia();

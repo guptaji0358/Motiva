@@ -634,6 +634,8 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     connect(m_library, &PlaylistLibrary::resetFinished, this, [this] { selectPlaylist(m_library->selectedId()); });
     connect(m_library, &PlaylistLibrary::activeChanged, this, [this] { bindSelectedPlaylist(); });
     connect(m_library, &PlaylistLibrary::activeCurrentChanged, this, &PlaylistDialog::updateUi);
+    connect(m_library, &PlaylistLibrary::sourceNotice, this, [this](const QString& message) { showNotice(message); });
+    connect(m_library, &PlaylistLibrary::activeScopeChanged, this, &PlaylistDialog::updateUi);
     connect(m_library, &PlaylistLibrary::errorOccurred, this, [this](const QString& message) {
         if (isVisible()) {
             QMessageBox::warning(this, tr("Playlist library"),
@@ -695,7 +697,7 @@ void PlaylistDialog::buildUi() {
     m_applyButton->setMinimumHeight(38);
     connect(m_applyButton, &QPushButton::clicked, this, [this] {
         if (PlaylistModel* m = current()) {
-            emit applyToDesktopRequested(m->id());
+            emit applyToDesktopRequested(m->id(), selectedCategoryId());
         }
     });
     footer->addWidget(m_applyButton);
@@ -786,13 +788,13 @@ QWidget* PlaylistDialog::buildEditor() {
     QFont af = m_activeCheck->font();
     af.setBold(true);
     m_activeCheck->setFont(af);
-    m_activeCheck->setToolTip(tr("The active playlist decides what is shown and changes it automatically. "
-                                 "Only one playlist can be active. Turning it off keeps the current item."));
+    m_activeCheck->setToolTip(tr("The active playlist - or the selected category of it - decides what is shown and "
+                                 "changes it automatically. Only one source can be active. Turning it off keeps the current item."));
     connect(m_activeCheck, &QCheckBox::toggled, this, [this](bool checked) {
         if (m_binding || !current()) {
             return;
         }
-        const bool ok = m_library->setActive(checked ? current()->id() : 0);
+        const bool ok = checked ? m_library->setActive(current()->id(), selectedCategoryId()) : m_library->setActive(0);
         if (!ok && checked) {
             m_binding = true;
             m_activeCheck->setChecked(false);
@@ -1072,6 +1074,22 @@ QWidget* PlaylistDialog::buildEditor() {
 
 PlaylistModel* PlaylistDialog::current() const {
     return m_view ? m_view->playlist() : nullptr;
+}
+
+qint64 PlaylistDialog::selectedCategoryId() const {
+    const PlaylistFilterInfo* filter = currentFilter();
+    return filter ? filter->id : 0;
+}
+
+bool PlaylistDialog::isSelectionActive() const {
+    const PlaylistModel* m = current();
+    return m && m->isActive() && m_library->activeCategoryId() == selectedCategoryId();
+}
+
+void PlaylistDialog::activateSelection() {
+    if (PlaylistModel* m = current()) {
+        m_library->setActive(m->id(), selectedCategoryId());
+    }
 }
 
 void PlaylistDialog::selectPlaylist(qint64 id) {
@@ -1684,8 +1702,8 @@ void PlaylistDialog::onShowNow() {
     }
     // Choosing an item to show is using this playlist - make it the active
     // one so the item is applied (and rotation continues from it).
-    if (!m->isActive()) {
-        m_library->setActive(m->id());
+    if (!isSelectionActive()) {
+        activateSelection(); // the category being viewed (the shown item belongs to it)
     }
     showNotice(QString());
 }
@@ -1723,7 +1741,9 @@ void PlaylistDialog::updateUi() {
     QString summary = countText(count, video ? tr("%1 video") : tr("%1 image"), video ? tr("%1 videos") : tr("%1 images"));
     if (count > 0) {
         if (m->isActive()) {
-            summary += QStringLiteral("  •  ") + tr("Active - item %1 of %2").arg(currentRow + 1).arg(count);
+            const QString category = m_library->activeCategoryName();
+            summary += QStringLiteral("  •  ") + (category.isEmpty() ? tr("Active") : tr("Active category: %1").arg(category)) +
+                tr(" - item %1 of %2").arg(m->scopePosition()).arg(m->scopeCount());
             summary += m_onDesktop ? tr("  •  On the desktop") : tr("  •  Not on the desktop yet");
         } else if (currentRow >= 0) {
             summary += QStringLiteral("  •  ") + tr("Not active - resumes at item %1").arg(currentRow + 1);
@@ -1745,7 +1765,8 @@ void PlaylistDialog::updateUi() {
     // Categories belong to this playlist - say so.
     m_categoryLabel->setText(tr("Categories of \"%1\":").arg(m->name().size() > 24 ? m->name().left(23) + QStringLiteral("…") : m->name()));
     m_binding = true;
-    m_activeCheck->setChecked(m->isActive());
+    m_activeCheck->setChecked(isSelectionActive());
+    m_activeCheck->setText(currentFilter() ? tr("Use this category") : tr("Use this playlist"));
     m_binding = false;
 
     m_addButton->setText(video ? tr("Add Videos") : tr("Add Images"));
@@ -1758,9 +1779,21 @@ void PlaylistDialog::updateUi() {
     updateMissingBanner(row);
     m_clearButton->setEnabled(count > 0);
 
-    const bool onDesktop = m_onDesktop && m->isActive();
-    m_applyButton->setText(onDesktop ? tr("This playlist is on the desktop") : tr("Set as Wallpaper"));
-    m_applyButton->setEnabled(!onDesktop && available > 0);
+    const bool onDesktop = m_onDesktop && isSelectionActive();
+    int usable = available; // available items in the selected category ("All" = the playlist)
+    if (currentFilter()) {
+        usable = 0;
+        const QSet<qint64> members = categoryItemIds(QString());
+        for (int r = 0; r < count; ++r) {
+            usable += (members.contains(m->itemIdAt(r)) && m->isAvailable(r)) ? 1 : 0;
+        }
+    }
+    m_applyButton->setText(onDesktop ? (currentFilter() ? tr("This category is on the desktop") : tr("This playlist is on the desktop"))
+                                     : tr("Set as Wallpaper"));
+    m_applyButton->setToolTip(currentFilter() ? tr("Rotate only the %1 item(s) of the selected category on the desktop. "
+                                                   "The playlist's order is not changed.").arg(usable)
+                                              : QString());
+    m_applyButton->setEnabled(!onDesktop && usable > 0);
 }
 
 // ------------------------------------------------------- shortcuts helpers
@@ -1842,6 +1875,7 @@ void PlaylistDialog::openFlow() {
     const PlaylistFilterInfo* filter = currentFilter();
     const QString scopeName = tr("%1 > %2").arg(m->name(), filter ? filter->name : tr("All"));
     FlowDialog flow(m_library, m, scopeName, [this] { return categoryItemIds(QString()); }, this);
+    flow.setScopeCategoryId(selectedCategoryId());
     connect(&flow, &FlowDialog::addMediaRequested, this, [this, &flow] {
         onAddMedia();
         flow.refresh();
@@ -2002,7 +2036,10 @@ void PlaylistDialog::onDeleteCategory() {
     const auto answer = QMessageBox::question(
         this, tr("Delete Category"),
         tr("Delete the category \"%1\"?\n\nOnly the saved filter is removed. Every item stays in \"%2\".")
-            .arg(copy.name, m->name()),
+                .arg(copy.name, m->name()) +
+            (m_library->activeId() == m->id() && m_library->activeCategoryId() == copy.id
+                 ? tr("\n\nThis category is the current wallpaper source; Motiva will stop rotating until you choose another.")
+                 : QString()),
         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
     if (answer == QMessageBox::Yes && m_library->deleteFilter(copy.id, m->id())) {
         m_categoryCombo->setCurrentIndex(0);

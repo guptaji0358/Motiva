@@ -26,6 +26,7 @@ PlaylistRotation::PlaylistRotation(PlaylistLibrary* library, SettingsManager* se
         reconfigureTimer();
     });
     connect(m_library, &PlaylistLibrary::playlistsChanged, this, &PlaylistRotation::reconfigureTimer);
+    connect(m_library, &PlaylistLibrary::activeScopeChanged, this, &PlaylistRotation::reconfigureTimer);
     // Whatever changed the image (any trigger, Show now, removal), the new
     // image gets a full interval before the timer moves on from it.
     connect(m_library, &PlaylistLibrary::activeCurrentChanged, this, [this]() {
@@ -150,7 +151,7 @@ bool PlaylistRotation::consumeNewWindowsSession() {
 
 void PlaylistRotation::reconfigureTimer() {
     PlaylistModel* active = m_library->activePlaylist();
-    const bool shouldRun = active && !active->isVideo() && active->rotation().onInterval && active->count() > 1;
+    const bool shouldRun = active && !active->isVideo() && active->rotation().onInterval && active->scopeCount() > 1;
     if (!shouldRun) {
         if (m_intervalTimer.isActive()) {
             qInfo() << "[Rotation] Interval timer stopped.";
