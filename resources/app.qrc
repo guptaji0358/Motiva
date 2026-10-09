@@ -51,6 +51,14 @@
         <file alias="flow/dark/earlier-disabled.svg">../Assets/flow/dark/earlier-disabled.svg</file>
         <file alias="flow/dark/later.svg">../Assets/flow/dark/later.svg</file>
         <file alias="flow/dark/later-disabled.svg">../Assets/flow/dark/later-disabled.svg</file>
+        <file alias="flow/dark/zoom-in.svg">../Assets/flow/dark/zoom-in.svg</file>
+        <file alias="flow/dark/zoom-in-disabled.svg">../Assets/flow/dark/zoom-in-disabled.svg</file>
+        <file alias="flow/light/zoom-in.svg">../Assets/flow/light/zoom-in.svg</file>
+        <file alias="flow/light/zoom-in-disabled.svg">../Assets/flow/light/zoom-in-disabled.svg</file>
+        <file alias="flow/dark/zoom-out.svg">../Assets/flow/dark/zoom-out.svg</file>
+        <file alias="flow/dark/zoom-out-disabled.svg">../Assets/flow/dark/zoom-out-disabled.svg</file>
+        <file alias="flow/light/zoom-out.svg">../Assets/flow/light/zoom-out.svg</file>
+        <file alias="flow/light/zoom-out-disabled.svg">../Assets/flow/light/zoom-out-disabled.svg</file>
         <file alias="category/dark/remove-condition.svg">../Assets/category/dark/remove-condition.svg</file>
         <file alias="category/dark/remove-condition-hover.svg">../Assets/category/dark/remove-condition-hover.svg</file>
         <file alias="category/dark/remove-condition-disabled.svg">../Assets/category/dark/remove-condition-disabled.svg</file>

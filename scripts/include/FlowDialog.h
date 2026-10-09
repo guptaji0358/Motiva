@@ -14,7 +14,9 @@ class FlowNodeItem;
 class PlaylistLibrary;
 class PlaylistModel;
 class QGraphicsScene;
+class QAction;
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QPushButton;
 class IconButton;
@@ -31,6 +33,18 @@ public:
     explicit FlowView(QWidget* parent = nullptr);
 
     QList<FlowNodeItem*> selectedNodes() const;
+
+    // Uniform zoom limits (the view's scale factor; 1.0 = 100%). The scene and
+    // the media are never resized - only how large the view draws them.
+    static constexpr qreal kMinZoom = 0.12;
+    static constexpr qreal kMaxZoom = 2.5;
+    qreal zoomFactor() const { return transform().m11(); }
+    bool canZoomIn() const { return zoomFactor() < kMaxZoom - 1e-6; }
+    bool canZoomOut() const { return zoomFactor() > kMinZoom + 1e-6; }
+    // Multiplies the zoom by `factor`, clamped to the limits, around the
+    // view's centre (the wheel zooms around the cursor instead).
+    void zoomBy(qreal factor, bool aroundCursor = false);
+    void resetZoom(); // 100%, centred on the diagram
     // Forget item pointers before the scene is cleared.
     void clearInteraction();
 
@@ -41,6 +55,7 @@ signals:
     // Nodes were moved on the canvas: LAYOUT only, the sequence is unchanged.
     void nodesMoved(const QHash<qint64, QPointF>& positions);
     void nodeActivated(qint64 itemId);
+    void zoomChanged();
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
@@ -116,6 +131,14 @@ private:
     // saves those positions (layout only - never touches the sequence).
     void organizeLayout();
     QPointF defaultSlot(int rank) const;
+    // Zoom (view scale) and grid columns (node layout) are independent.
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
+    void fitAll();
+    void updateZoomUi();
+    void setColumns(int columns, bool persist);
+    void updateGridUi();
     QString timingSummary() const;
     QVector<qint64> selectedIds() const; // in sequence order
 
@@ -142,6 +165,16 @@ private:
     IconButton* m_addButton = nullptr;
     QToolButton* m_arrangeButton = nullptr;
     QCheckBox* m_autoOrganize = nullptr;
+    int m_columns = 6; // grid columns of the default/auto layout; rows are automatic
+    IconButton* m_zoomInButton = nullptr;
+    IconButton* m_zoomOutButton = nullptr;
+    QLabel* m_zoomLabel = nullptr;
+    QComboBox* m_columnsCombo = nullptr;
+    QLabel* m_rowsLabel = nullptr;
+    QPushButton* m_gridResetButton = nullptr;
+    QAction* m_zoomInAction = nullptr;
+    QAction* m_zoomOutAction = nullptr;
+    QAction* m_zoomResetAction = nullptr;
     IconButton* m_earlierButton = nullptr;
     IconButton* m_laterButton = nullptr;
     QPushButton* m_removeButton = nullptr;

@@ -4,8 +4,11 @@
 #include "DialogSizing.h"
 #include "Theme.h"
 #include "IconButton.h"
+#include "PlaylistDialog.h"
 
+#include <QAction>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QCollator>
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -42,7 +45,11 @@ constexpr qreal kNodeW = 176;
 constexpr qreal kNodeH = 146;
 constexpr qreal kGapX = 80;
 constexpr qreal kGapY = 60;
-constexpr int kColumns = 6; // default layout: rows of this many nodes, snaking left-right-left
+constexpr int kDefaultColumns = 6; // default layout: rows of this many nodes, snaking left-right-left
+constexpr int kMinColumns = 1;
+constexpr int kMaxColumns = 12;  // 12 x (176+80) = ~3000 scene units: still fits at the minimum zoom
+constexpr qreal kZoomStep = 1.25;
+constexpr const char* kColumnsKey = "flow/columns";
 constexpr int kMaxUndo = 100;
 
 QString tx(const char* text) {
@@ -355,12 +362,31 @@ void FlowView::wheelEvent(QWheelEvent* event) {
         QGraphicsView::wheelEvent(event);
         return;
     }
-    const qreal factor = event->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
-    const qreal next = transform().m11() * factor;
-    if (next > 0.12 && next < 2.5) {
-        scale(factor, factor);
-    }
+    zoomBy(event->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15, /*aroundCursor=*/true);
     event->accept();
+}
+
+void FlowView::zoomBy(qreal factor, bool aroundCursor) {
+    const qreal current = zoomFactor();
+    const qreal target = qBound(kMinZoom, current * factor, kMaxZoom);
+    if (qFuzzyCompare(target, current)) {
+        return;
+    }
+    setTransformationAnchor(aroundCursor ? QGraphicsView::AnchorUnderMouse : QGraphicsView::AnchorViewCenter);
+    scale(target / current, target / current); // uniform: aspect ratios are preserved
+    setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    emit zoomChanged();
+}
+
+void FlowView::resetZoom() {
+    if (scene()) {
+        const QPointF center = scene()->itemsBoundingRect().center();
+        resetTransform();
+        centerOn(center);
+    } else {
+        resetTransform();
+    }
+    emit zoomChanged();
 }
 
 void FlowView::mousePressEvent(QMouseEvent* event) {
@@ -488,6 +514,11 @@ FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const 
       m_scopeItems(std::move(scopeItems)) {
     setWindowTitle(tr("Wallpaper Flow"));
     setWindowIcon(QIcon(QStringLiteral(":/playlist/%1/playlist.svg").arg(Theme::iconVariant(Theme::currentTheme()))));
+    {
+        bool ok = false;
+        const int saved = QSettings().value(QLatin1String(kColumnsKey), kDefaultColumns).toInt(&ok);
+        m_columns = ok ? qBound(kMinColumns, saved, kMaxColumns) : kDefaultColumns;
+    }
     buildUi();
 
     m_rebuildTimer = new QTimer(this);
@@ -502,8 +533,7 @@ FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const 
     connect(m_playlist, &QAbstractItemModel::dataChanged, this, [this] { m_scene->update(); });
 
     refresh();
-    QTimer::singleShot(0, this, [this] { m_view->fitInView(m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 40),
-                                                           Qt::KeepAspectRatio); });
+    QTimer::singleShot(0, this, [this] { fitAll(); });
     DialogSizing::applyComfortableSize(this, QSize(1120, 740));
 }
 
@@ -514,11 +544,13 @@ void FlowDialog::applyDirectionIcons() {
     m_laterButton->setStateIcon(icon("later"), QIcon(), QIcon(), icon("later-disabled"));
     const auto add = [&v](const char* n) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(n))); };
     m_addButton->setStateIcon(add("add"), QIcon(), QIcon(), add("add-disabled"));
+    m_zoomInButton->setStateIcon(icon("zoom-in"), QIcon(), QIcon(), icon("zoom-in-disabled"));
+    m_zoomOutButton->setStateIcon(icon("zoom-out"), QIcon(), QIcon(), icon("zoom-out-disabled"));
 }
 
 void FlowDialog::changeEvent(QEvent* event) {
     QDialog::changeEvent(event);
-    if ((event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) && m_earlierButton) {
+    if ((event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) && m_zoomOutButton) {
         applyDirectionIcons();
     }
 }
@@ -570,7 +602,7 @@ void FlowDialog::buildUi() {
         if (on) {
             m_layoutPending = true;
             rebuild();
-            m_view->fitInView(m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 40), Qt::KeepAspectRatio);
+            fitAll();
             m_status->setText(tr("Auto-organize is on. The diagram was arranged; the sequence was not changed."));
         } else {
             m_status->setText(tr("Auto-organize is off. Your arrangement is kept as it is."));
@@ -586,6 +618,8 @@ void FlowDialog::buildUi() {
     m_laterButton->setToolTip(tr("Move the selected item one step later in the sequence (Ctrl+Right)"));
     connect(m_laterButton, &QPushButton::clicked, this, [this] { moveSelected(+1); });
     bar->addWidget(m_laterButton);
+    m_zoomOutButton = new IconButton(QIcon(), QString(), this);
+    m_zoomInButton = new IconButton(QIcon(), QString(), this);
     applyDirectionIcons();
     m_removeButton = new QPushButton(tr("Remove"), this);
     m_removeButton->setToolTip(tr("Remove the selected items from this playlist (Delete). No files are deleted."));
@@ -602,17 +636,90 @@ void FlowDialog::buildUi() {
     bar->addWidget(m_redoButton);
     bar->addStretch();
     auto* fit = new QPushButton(tr("Fit"), this);
-    fit->setToolTip(tr("Zoom to show the whole diagram (Ctrl+wheel zooms, middle-drag pans)"));
+    fit->setToolTip(tr("Zoom to show the whole diagram (Ctrl+wheel zooms, Ctrl+0 resets to 100%, middle-drag pans)"));
     connect(fit, &QPushButton::clicked, this, [this] {
-        m_view->fitInView(m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 40), Qt::KeepAspectRatio);
+        fitAll();
     });
     bar->addWidget(fit);
     root->addLayout(bar);
+
+    // View row: zoom (how large the diagram is drawn) and grid columns (how the
+    // default layout is arranged). Independent of each other.
+    auto* viewBar = new QHBoxLayout();
+    viewBar->setSpacing(8);
+    auto* gridLabel = new QLabel(tr("Grid layout"), this);
+    gridLabel->setObjectName(QStringLiteral("secondaryText"));
+    viewBar->addWidget(gridLabel);
+    auto* columnsLabel = new QLabel(tr("Columns:"), this);
+    viewBar->addWidget(columnsLabel);
+    m_columnsCombo = new QComboBox(this);
+    for (int c = kMinColumns; c <= kMaxColumns; ++c) {
+        m_columnsCombo->addItem(QString::number(c), c);
+    }
+    m_columnsCombo->setAccessibleName(tr("Grid columns"));
+    m_columnsCombo->setToolTip(tr("How many nodes sit in each row of the layout (default %1). Changing it re-lays out the "
+                                  "diagram; the sequence and the zoom are not changed.").arg(kDefaultColumns));
+    columnsLabel->setBuddy(m_columnsCombo);
+    viewBar->addWidget(m_columnsCombo);
+    m_rowsLabel = new QLabel(this);
+    m_rowsLabel->setToolTip(tr("Rows are worked out automatically from the number of items and the columns."));
+    viewBar->addWidget(m_rowsLabel);
+    m_gridResetButton = new QPushButton(tr("Reset to Default"), this);
+    m_gridResetButton->setToolTip(tr("Go back to %1 columns").arg(kDefaultColumns));
+    viewBar->addWidget(m_gridResetButton);
+    viewBar->addStretch();
+
+    for (IconButton* b : {m_zoomOutButton, m_zoomInButton}) {
+        b->setFixedSize(36, 32);
+        b->setIconSize(QSize(18, 18));
+    }
+    m_zoomOutButton->setAccessibleName(tr("Zoom Out"));
+    m_zoomInButton->setAccessibleName(tr("Zoom In"));
+    m_zoomLabel = new QLabel(this);
+    m_zoomLabel->setMinimumWidth(44);
+    m_zoomLabel->setAlignment(Qt::AlignCenter);
+    m_zoomLabel->setObjectName(QStringLiteral("secondaryText"));
+    viewBar->addWidget(m_zoomOutButton);
+    viewBar->addWidget(m_zoomLabel);
+    viewBar->addWidget(m_zoomInButton);
+    root->addLayout(viewBar);
 
     m_scene = new QGraphicsScene(this);
     m_view = new FlowView(this);
     m_view->setScene(m_scene);
     root->addWidget(m_view, 1);
+
+    // One QAction per zoom command: the shortcuts and the context menu share it.
+    // Ctrl+= is accepted too (the "+" key needs Shift on many layouts). The
+    // shortcuts do nothing while a text field or spin box is being edited.
+    auto makeAction = [this](const QString& text, const QList<QKeySequence>& keys, void (FlowDialog::*slot)()) {
+        auto* a = new QAction(text, this);
+        a->setShortcuts(keys);
+        a->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        addAction(a);
+        connect(a, &QAction::triggered, this, [this, slot] {
+            if (!PlaylistDialog::isTextInputFocused()) {
+                (this->*slot)();
+            }
+        });
+        return a;
+    };
+    m_zoomInAction = makeAction(tr("Zoom In"), {QKeySequence(Qt::CTRL | Qt::Key_Plus), QKeySequence(Qt::CTRL | Qt::Key_Equal),
+                                                QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Equal)}, &FlowDialog::zoomIn);
+    m_zoomOutAction = makeAction(tr("Zoom Out"), {QKeySequence(Qt::CTRL | Qt::Key_Minus)}, &FlowDialog::zoomOut);
+    m_zoomResetAction = makeAction(tr("Reset Zoom"), {QKeySequence(Qt::CTRL | Qt::Key_0)}, &FlowDialog::resetZoom);
+    m_zoomInButton->setToolTip(tr("Zoom In (Ctrl++)"));
+    m_zoomOutButton->setToolTip(tr("Zoom Out (Ctrl+-)"));
+    m_zoomLabel->setToolTip(tr("Current zoom. Reset Zoom: Ctrl+0"));
+    connect(m_zoomInButton, &QPushButton::clicked, this, &FlowDialog::zoomIn);
+    connect(m_zoomOutButton, &QPushButton::clicked, this, &FlowDialog::zoomOut);
+    connect(m_view, &FlowView::zoomChanged, this, &FlowDialog::updateZoomUi);
+    connect(m_columnsCombo, &QComboBox::activated, this, [this](int index) {
+        setColumns(m_columnsCombo->itemData(index).toInt(), /*persist=*/true);
+    });
+    connect(m_gridResetButton, &QPushButton::clicked, this, [this] { setColumns(kDefaultColumns, /*persist=*/true); });
+    updateGridUi();
+    updateZoomUi();
     connect(m_scene, &QGraphicsScene::selectionChanged, this, &FlowDialog::updateButtons);
     connect(m_view, &QWidget::customContextMenuRequested, this, &FlowDialog::showNodeMenu);
     connect(m_view, &FlowView::nodesMoved, this, [this](const QHash<qint64, QPointF>& moved) {
@@ -715,10 +822,10 @@ QVector<qint64> FlowDialog::scopeOrder() const {
 }
 
 QPointF FlowDialog::defaultSlot(int rank) const {
-    const int row = rank / kColumns;
-    int col = rank % kColumns;
+    const int row = rank / m_columns;
+    int col = rank % m_columns;
     if (row % 2 == 1) {
-        col = kColumns - 1 - col; // snake, so the arrow at a row end stays short
+        col = m_columns - 1 - col; // snake, so the arrow at a row end stays short
     }
     return QPointF(col * (kNodeW + kGapX), row * (kNodeH + kGapY));
 }
@@ -781,6 +888,7 @@ void FlowDialog::rebuild() {
         m_scene->addItem(edge);
     }
     m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-400, -300, 400, 300));
+    updateGridUi();
 
     const bool whole = n == m_playlist->count();
     // Say when this diagram IS what the wallpaper is currently rotating.
@@ -1042,11 +1150,78 @@ void FlowDialog::organizeLayout() {
     m_library->saveFlowPositions(m_playlist->id(), positions);
 }
 
+void FlowDialog::zoomIn() {
+    m_view->zoomBy(kZoomStep);
+}
+
+void FlowDialog::zoomOut() {
+    m_view->zoomBy(1.0 / kZoomStep);
+}
+
+void FlowDialog::resetZoom() {
+    m_view->resetZoom();
+}
+
+void FlowDialog::fitAll() {
+    m_view->fitInView(m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 40), Qt::KeepAspectRatio);
+    updateZoomUi();
+}
+
+void FlowDialog::updateZoomUi() {
+    if (!m_zoomLabel || !m_zoomInAction) {
+        return;
+    }
+    m_zoomLabel->setText(QStringLiteral("%1%").arg(qRound(m_view->zoomFactor() * 100)));
+    m_zoomInButton->setEnabled(m_view->canZoomIn());
+    m_zoomOutButton->setEnabled(m_view->canZoomOut());
+    m_zoomInAction->setEnabled(m_view->canZoomIn());
+    m_zoomOutAction->setEnabled(m_view->canZoomOut());
+}
+
+void FlowDialog::updateGridUi() {
+    if (!m_columnsCombo || !m_gridResetButton) {
+        return;
+    }
+    const int index = m_columnsCombo->findData(m_columns);
+    m_columnsCombo->blockSignals(true);
+    m_columnsCombo->setCurrentIndex(qMax(0, index));
+    m_columnsCombo->blockSignals(false);
+    const int items = m_nodes.size();
+    const int rows = items == 0 ? 0 : (items + m_columns - 1) / m_columns;
+    m_rowsLabel->setText(items == 0 ? tr("Rows: Auto") : tr("Rows: Auto (%1)").arg(rows));
+    m_gridResetButton->setEnabled(m_columns != kDefaultColumns);
+}
+
+void FlowDialog::setColumns(int columns, bool persist) {
+    columns = qBound(kMinColumns, columns, kMaxColumns);
+    if (columns == m_columns) {
+        return;
+    }
+    m_columns = columns;
+    if (persist) {
+        // Only the column preference is stored; rows are automatic. The
+        // default is stored as "no preference".
+        QSettings settings;
+        if (columns == kDefaultColumns) {
+            settings.remove(QLatin1String(kColumnsKey));
+        } else {
+            settings.setValue(QLatin1String(kColumnsKey), columns);
+        }
+    }
+    // Re-grid like Tidy Layout (node positions only - never the sequence),
+    // but keep the user's zoom: only re-centre on the new layout.
+    m_library->clearFlowPositions(m_playlist->id());
+    m_positions.clear();
+    rebuild();
+    m_view->centerOn(m_scene->itemsBoundingRect().center());
+    m_status->setText(tr("Layout set to %1 column(s). The sequence was not changed.").arg(m_columns));
+}
+
 void FlowDialog::tidyLayout() {
     m_library->clearFlowPositions(m_playlist->id());
     m_positions.clear();
     rebuild();
-    m_view->fitInView(m_scene->itemsBoundingRect().adjusted(-40, -40, 40, 40), Qt::KeepAspectRatio);
+    fitAll();
     m_status->setText(tr("Layout tidied. The sequence was not changed."));
 }
 
@@ -1075,6 +1250,10 @@ void FlowDialog::showNodeMenu(const QPoint& viewPos) {
     after->setEnabled(count == 1);
     menu.addSeparator();
     QAction* remove = menu.addAction(tr("Remove from Playlist"));
+    menu.addSeparator();
+    menu.addAction(m_zoomInAction);
+    menu.addAction(m_zoomOutAction);
+    menu.addAction(m_zoomResetAction);
     QAction* chosen = menu.exec(m_view->viewport()->mapToGlobal(viewPos));
     if (!chosen) {
         return;
