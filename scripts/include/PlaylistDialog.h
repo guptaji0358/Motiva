@@ -139,6 +139,9 @@ private:
     void openFlow();
     // "Find File" for a missing item (see MediaRecoveryDialog).
     void onFindFile(int row);
+    // "Find All at Once": every missing file of the open playlist in ONE
+    // coordinated search (see BulkMediaRecoveryDialog).
+    void onFindAll();
     void offerRemovalAfterFailedSearch(qint64 itemId, const QString& path);
     void updateMissingBanner(int selectedRow);
     void onImport();
@@ -217,6 +220,7 @@ private:
     QLabel* m_missingTitle = nullptr;
     QLabel* m_missingText = nullptr;
     QPushButton* m_findFileButton = nullptr;
+    QPushButton* m_findAllButton = nullptr;
     QPushButton* m_missingRemoveButton = nullptr;
     bool m_recoveryRunning = false;
     BackupManager* m_backup = nullptr;

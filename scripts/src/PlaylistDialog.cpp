@@ -994,6 +994,13 @@ QWidget* PlaylistDialog::buildEditor() {
         onFindFile(row);
     });
     bannerRow->addWidget(m_findFileButton, 0, Qt::AlignVCenter);
+    // Several files missing: look for all of them in one pass instead of
+    // walking the drives once per file.
+    m_findAllButton = new QPushButton(tr("Find All at Once"), m_missingBanner);
+    m_findAllButton->setToolTip(tr("Search for every missing file of this playlist in a single pass over your drives"));
+    connect(m_findAllButton, &QPushButton::clicked, this, &PlaylistDialog::onFindAll);
+    m_findAllButton->setVisible(false);
+    bannerRow->addWidget(m_findAllButton, 0, Qt::AlignVCenter);
     // Only shown when a valid backup copy of the selected missing file exists.
     m_restoreBackupButton = new QPushButton(tr("Restore from Backup"), m_missingBanner);
     m_restoreBackupButton->setToolTip(tr("Copy this file back from Motiva's backup. An existing file is never overwritten."));
@@ -1463,6 +1470,60 @@ void PlaylistDialog::onFindFile(int row) {
     dialog->open(); // window-modal, asynchronous: the search runs on a worker thread
 }
 
+void PlaylistDialog::onFindAll() {
+    PlaylistModel* m = current();
+    if (!m || m_recoveryRunning) {
+        return; // one search at a time
+    }
+    m->refreshAvailability();
+    // One entry per media record (a file listed twice is searched once).
+    QVector<BulkMediaRecoveryDialog::Entry> entries;
+    QSet<qint64> seen;
+    for (int r = 0; r < m->count(); ++r) {
+        if (m->isAvailable(r) || seen.contains(m->mediaIdAt(r))) {
+            continue;
+        }
+        seen.insert(m->mediaIdAt(r));
+        entries.push_back({m->mediaIdAt(r), m->pathAt(r), m->factsAt(r)});
+    }
+    if (entries.isEmpty()) {
+        showNotice(tr("Nothing is missing - every file in this playlist is available."));
+        updateUi();
+        return;
+    }
+    m_recoveryRunning = true;
+    updateUi();
+    const qint64 playlistId = m->id();
+    auto* dialog = new BulkMediaRecoveryDialog(entries, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QDialog::finished, this, [this, dialog, playlistId, total = int(entries.size())](int result) {
+        m_recoveryRunning = false;
+        if (result == QDialog::Accepted) {
+            // Resolved by media id: each repair reloads the affected models,
+            // so rows move - ids stay valid.
+            int repaired = 0;
+            const auto resolutions = dialog->resolutions();
+            for (const auto& res : resolutions) {
+                if (m_library->relocateMedia(res.mediaId, res.newPath)) {
+                    ++repaired;
+                }
+            }
+            const int stillMissing = [&] {
+                PlaylistModel* pm = m_library->playlist(playlistId);
+                if (!pm) {
+                    return 0;
+                }
+                pm->refreshAvailability();
+                return pm->count() - pm->availableCount();
+            }();
+            showNotice(tr("Repaired %1 of %2 missing files.").arg(repaired).arg(total) +
+                       (stillMissing > 0 ? tr(" %1 still missing.").arg(stillMissing) : QString()));
+        }
+        updateUi();
+    });
+    dialog->open(); // window-modal, asynchronous: the search runs on a worker thread
+}
+
 void PlaylistDialog::offerRemovalAfterFailedSearch(qint64 itemId, const QString& path) {
     QMessageBox box(this);
     box.setIcon(QMessageBox::Warning);
@@ -1518,6 +1579,8 @@ void PlaylistDialog::updateMissingBanner(int row) {
         m_missingRemoveButton->setVisible(false);
     }
     m_findFileButton->setEnabled(!m_recoveryRunning);
+    m_findAllButton->setVisible(missing > 1);
+    m_findAllButton->setEnabled(!m_recoveryRunning);
     m_restoreBackupButton->setVisible(selectedMissing && m_backup && m_backup->hasUsableBackup(m->mediaIdAt(row)));
     m_restoreBackupButton->setEnabled(!m_backup || !m_backup->isRestoring());
     m_missingBanner->setVisible(true);

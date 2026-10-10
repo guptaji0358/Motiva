@@ -2,6 +2,26 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-10, Find All at Once - single-pass media recovery)
+
+**Root cause fixed**: "Find File" ran one `MediaRecoveryDialog` -> one
+`MediaRecovery::search()` per missing item, each a full phased walk (nearest
+folder -> media folders -> every drive) with its own visited set, so N
+missing files = N traversals of the same disks. `MediaRecovery::searchMany()`
+(`MediaRecovery.{h,cpp}`) now matches ALL requests against every directory
+entry in ONE walk (`MultiSearcher`: case-folded name hash + suffix hash for
+renamed copies; one visited set; phase roots are the de-duplicated union).
+`search()` is a one-request wrapper, so single Find File uses the same code.
+A path-only, disk-revalidated cache (`g_foundCache`) lets a repeat request
+skip the walk. Unreadable folders (access denied / drive gone) are counted
+via a probe that only runs on empty listings. UI: `BulkMediaRecoveryDialog`,
+opened by "Find All at Once" in the missing-media banner (shown when 2+ files
+are missing); results per file: Found / Choose a match / Not found / Couldn't
+be searched. Cancel keeps partial matches. Library is only touched by
+`PlaylistDialog::onFindAll()` via `relocateMedia` (no schema change).
+Measured on a 12k-file/312-folder tree, 20 files: 6240 -> 312 directory
+listings, ~0.75 s -> ~0.07 s CPU.
+
 ## Current status (2026-10-08, startup robustness + SVG status icons + Motiva tooltip)
 
 **Startup**: `MainWindow`'s constructor now builds only UI/tray/IPC/power
