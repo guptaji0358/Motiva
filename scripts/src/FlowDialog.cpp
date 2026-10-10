@@ -38,6 +38,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <functional>
 
 namespace {
 
@@ -611,11 +612,11 @@ void FlowDialog::buildUi() {
     bar->addWidget(m_autoOrganize);
 
     m_earlierButton = new IconButton(QIcon(), tr("Earlier"), this);
-    m_earlierButton->setToolTip(tr("Move the selected item one step earlier in the sequence (Ctrl+Left)"));
+    m_earlierButton->setToolTip(tr("Move the selected item one step earlier in the sequence (L or Ctrl+Left)"));
     connect(m_earlierButton, &QPushButton::clicked, this, [this] { moveSelected(-1); });
     bar->addWidget(m_earlierButton);
     m_laterButton = new IconButton(QIcon(), tr("Later"), this);
-    m_laterButton->setToolTip(tr("Move the selected item one step later in the sequence (Ctrl+Right)"));
+    m_laterButton->setToolTip(tr("Move the selected item one step later in the sequence (R or Ctrl+Right)"));
     connect(m_laterButton, &QPushButton::clicked, this, [this] { moveSelected(+1); });
     bar->addWidget(m_laterButton);
     m_zoomOutButton = new IconButton(QIcon(), QString(), this);
@@ -768,9 +769,43 @@ void FlowDialog::buildUi() {
     shortcut(QKeySequence(Qt::CTRL | Qt::Key_Z), [this] { undo(); });
     shortcut(QKeySequence(Qt::CTRL | Qt::Key_Y), [this] { redo(); });
     shortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z), [this] { redo(); });
-    shortcut(QKeySequence(Qt::CTRL | Qt::Key_Left), [this] { moveSelected(-1); });
-    shortcut(QKeySequence(Qt::CTRL | Qt::Key_Right), [this] { moveSelected(+1); });
-    shortcut(QKeySequence(Qt::Key_Delete), [this] { removeSelected(); });
+    // Item shortcuts. They act on the selected node(s) through the same
+    // slots as the buttons and the context menu, and stay silent while a
+    // text field / spin box is being edited. Each letter is also bound with
+    // Shift so Shift+key behaves like the plain key (Caps Lock needs no
+    // special handling: Qt reports the same key either way).
+    auto itemShortcut = [this, shortcut](const QList<QKeySequence>& keys, std::function<void()> action) {
+        for (const QKeySequence& k : keys) {
+            shortcut(k, [action] {
+                if (!PlaylistDialog::isTextInputFocused()) {
+                    action();
+                }
+            });
+        }
+    };
+    auto letter = [](int key) {
+        return QList<QKeySequence>{QKeySequence(key), QKeySequence(Qt::SHIFT | key)};
+    };
+    itemShortcut(letter(Qt::Key_L), [this] { moveSelected(-1); });
+    itemShortcut(letter(Qt::Key_R), [this] { moveSelected(+1); });
+    itemShortcut(letter(Qt::Key_S), [this] { moveSelectedToEdge(true); });
+    itemShortcut(letter(Qt::Key_E), [this] { moveSelectedToEdge(false); });
+    itemShortcut(letter(Qt::Key_N), [this] { showSelectedNow(); });
+    itemShortcut({QKeySequence(Qt::CTRL | Qt::Key_Left)}, [this] { moveSelected(-1); });
+    itemShortcut({QKeySequence(Qt::CTRL | Qt::Key_Right)}, [this] { moveSelected(+1); });
+    itemShortcut({QKeySequence(Qt::Key_Delete)}, [this] { removeSelected(); });
+}
+
+void FlowDialog::showSelectedNow() {
+    const QVector<qint64> selected = selectedIds();
+    if (selected.size() != 1) {
+        if (selected.size() > 1) {
+            m_status->setText(tr("Select a single item to show it now."));
+        }
+        return;
+    }
+    // Same path as double-clicking a node and the "Show Now" menu entry.
+    emit m_view->nodeActivated(selected.first());
 }
 
 QString FlowDialog::timingSummary() const {
@@ -1237,19 +1272,25 @@ void FlowDialog::showNodeMenu(const QPoint& viewPos) {
         return;
     }
     QMenu menu(this);
-    QAction* showNow = menu.addAction(tr("Show Now"));
+    // Shortcuts are shown for reference; the dialog's own shortcuts do the work.
+    auto menuAction = [&menu](const QString& text, const QKeySequence& key) {
+        QAction* a = menu.addAction(text);
+        a->setShortcut(key);
+        return a;
+    };
+    QAction* showNow = menuAction(tr("Show Now"), QKeySequence(Qt::Key_N));
     showNow->setEnabled(count == 1);
     menu.addSeparator();
-    QAction* earlier = menu.addAction(tr("Move Earlier"));
-    QAction* later = menu.addAction(tr("Move Later"));
-    QAction* start = menu.addAction(tr("Move to Start"));
-    QAction* end = menu.addAction(tr("Move to End"));
+    QAction* earlier = menuAction(tr("Move Earlier"), QKeySequence(Qt::Key_L));
+    QAction* later = menuAction(tr("Move Later"), QKeySequence(Qt::Key_R));
+    QAction* start = menuAction(tr("Move to Start"), QKeySequence(Qt::Key_S));
+    QAction* end = menuAction(tr("Move to End"), QKeySequence(Qt::Key_E));
     QAction* before = menu.addAction(tr("Move Before…"));
     QAction* after = menu.addAction(tr("Move After…"));
     before->setEnabled(count == 1);
     after->setEnabled(count == 1);
     menu.addSeparator();
-    QAction* remove = menu.addAction(tr("Remove from Playlist"));
+    QAction* remove = menuAction(tr("Remove from Playlist"), QKeySequence(Qt::Key_Delete));
     menu.addSeparator();
     menu.addAction(m_zoomInAction);
     menu.addAction(m_zoomOutAction);
@@ -1259,7 +1300,7 @@ void FlowDialog::showNodeMenu(const QPoint& viewPos) {
         return;
     }
     if (chosen == showNow) {
-        emit m_view->nodeActivated(selectedIds().first());
+        showSelectedNow();
     } else if (chosen == earlier) {
         moveSelected(-1);
     } else if (chosen == later) {

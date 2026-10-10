@@ -118,6 +118,7 @@ private:
     // already occupy). `recordUndo` false when called from undo/redo.
     bool applyScopeOrder(const QVector<qint64>& newScope, bool recordUndo = true);
     void moveSelected(int direction); // -1 earlier, +1 later
+    void showSelectedNow(); // N / "Show Now": the selected item becomes the current wallpaper
     void moveSelectedToEdge(bool toStart);
     void moveSelectedRelativeToOther(bool before);
     void dropOnArrow(qint64 itemId, qint64 afterItemId);
