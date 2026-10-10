@@ -28,6 +28,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
+#include <exception>
 
 #include <windows.h>
 
@@ -833,7 +834,21 @@ void BulkMediaRecoveryDialog::updateProgressText() {
 
 void BulkMediaRecoveryDialog::onSearchFinished() {
     m_progressTimer->stop();
-    const MediaBatchResult result = m_watcher.result();
+    MediaBatchResult result;
+    try {
+        result = m_watcher.result();
+    } catch (const std::exception& e) {
+        // The worker threw (e.g. out of memory): report it, never crash.
+        qWarning() << "[Recovery] Find All failed:" << e.what();
+        m_failed = true;
+        QDialog::reject();
+        return;
+    } catch (...) {
+        qWarning() << "[Recovery] Find All failed (unknown error).";
+        m_failed = true;
+        QDialog::reject();
+        return;
+    }
     int convincing = 0;
     for (const QVector<MediaCandidate>& list : result.candidates) {
         for (const MediaCandidate& c : list) {
@@ -847,6 +862,8 @@ void BulkMediaRecoveryDialog::onSearchFinished() {
             << m_progress->filesExamined.load() << "files examined," << convincing << "of" << m_entries.size()
             << "located," << m_progress->inaccessibleFolders.load() << "unreadable folder(s)"
             << (result.cancelled ? "(cancelled)" : "");
+    m_cancelled = result.cancelled;
+    m_unreadable = m_progress->inaccessibleFolders.load();
     if (result.cancelled && convincing == 0) {
         QDialog::reject(); // nothing to show
         return;
@@ -921,6 +938,7 @@ void BulkMediaRecoveryDialog::showResults(const MediaBatchResult& result) {
         }
     }
     m_updatingChecks = false;
+    m_located = found;
 
     QString summary = tr("%1 of %2 files found").arg(found).arg(m_entries.size());
     if (result.cancelled) {

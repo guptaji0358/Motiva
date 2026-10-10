@@ -160,6 +160,13 @@ private:
     int selectedRow() const;
     void selectRow(int row);
     void showNotice(const QString& text);
+    // Reports an event through the unified NotificationManager. When no
+    // in-app toast is shown (no window to host it, or a repeat) `inlineText`
+    // goes to this window's own notice line instead, so the existing
+    // feedback is never lost and never doubled. If the user switched the
+    // notification off, nothing more is shown.
+    void announce(int kind, const QString& title, const QString& message, const QString& key,
+                  const QString& inlineText, bool desktop = false, bool background = false);
     PlaylistModel* current() const;
     qint64 selectedCategoryId() const; // 0 = All
     // True when the open playlist is active AND limited to the category selected here.

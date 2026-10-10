@@ -114,6 +114,8 @@ private:
     QSlider* m_volumeSlider = nullptr;
     QCheckBox* m_muteCheck = nullptr;
     QCheckBox* m_loopCheck = nullptr;
+    // Notifications: in-app, desktop, success, error, warning, background, playback.
+    QCheckBox* m_notifyChecks[7] = {};
     QCheckBox* m_startWithWindowsCheck = nullptr;
     QCheckBox* m_showVideoOnBatteryCheck = nullptr;
     QCheckBox* m_showInWindowsSearchCheck = nullptr;

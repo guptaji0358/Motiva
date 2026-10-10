@@ -2,6 +2,28 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-10b, unified notifications)
+
+`NotificationManager` (singleton, `NotificationManager.{h,cpp}`) is the ONE
+place feedback is routed: callers fill a `Notification` (kind, category,
+title, message, key, `desktop`, `rateLimit`) and call `notify()`; it applies
+the `notifications/*` settings live (SettingsManager `notify*`, all default
+on), de-duplicates (same key+text inside a 30 s / 1.5 s cooldown, `rateLimit`
+for "any repeat"), flood-guards routine messages (8 per 10 s), then shows an
+in-app toast (`ToastHost` per window: MainWindow + PlaylistDialog,
+top-right under the header, max 3 visible, click to dismiss, hover pauses,
+hand-painted from the active Theme) and/or a Windows notification via
+`QSystemTrayIcon::showMessage` - desktop only for `desktop`-flagged events
+and only while Motiva isn't the foreground app. notify() is thread-safe
+(queued to the GUI thread). `notify()` returns whether a toast was shown;
+`PlaylistDialog::announce()` falls back to its inline notice line only when
+not. Sources: wallpaper added/created/deleted/missing/library write errors
+(PlaylistDialog), playback active/changed/failed/missing (MainWindow), Find
+File / Find All outcomes. Wallpaper-error and library-error QMessageBoxes
+were replaced by toasts; all confirmation dialogs are unchanged. No test
+framework exists in the repo - verified with an out-of-tree offscreen QTest-
+style harness. Native toast display itself cannot be verified headless.
+
 ## Current status (2026-10-10, Find All at Once - single-pass media recovery)
 
 **Root cause fixed**: "Find File" ran one `MediaRecoveryDialog` -> one

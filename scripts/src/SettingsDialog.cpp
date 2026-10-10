@@ -144,6 +144,45 @@ void SettingsDialog::buildUi() {
     connect(m_loopCheck, &QCheckBox::toggled, this, &SettingsDialog::onLoopToggled);
     leftCol->addWidget(m_loopCheck);
 
+    // Notifications (see NotificationManager). Each switch is saved the
+    // moment it is toggled and read live by the notifier - no restart.
+    auto* notifySection = new QLabel(tr("Notifications"));
+    notifySection->setObjectName(QStringLiteral("sectionLabel"));
+    notifySection->setFont(sectionFont);
+    leftCol->addWidget(notifySection);
+    struct NotifyRow {
+        const char* text;
+        const char* tip;
+        void (SettingsManager::*setter)(bool);
+    };
+    const NotifyRow rows[7] = {
+        {"Show in-app notifications", "Short messages that appear inside Motiva's windows.",
+         &SettingsManager::setNotifyInApp},
+        {"Show Windows notifications",
+         "Native Windows notifications for errors, warnings and finished tasks while Motiva isn't in front. "
+         "Windows' own notification settings and Focus Assist still apply.",
+         &SettingsManager::setNotifyDesktop},
+        {"Successes", "Confirmations that something finished, such as a wallpaper added to a playlist.",
+         &SettingsManager::setNotifySuccess},
+        {"Errors", "Explanations when something failed.", &SettingsManager::setNotifyError},
+        {"Warnings", "Recoverable problems such as a missing file or an unreadable folder.",
+         &SettingsManager::setNotifyWarning},
+        {"Background tasks", "Results of searches and other long-running work.",
+         &SettingsManager::setNotifyBackground},
+        {"Wallpaper playback", "When the wallpaper changes or playback fails.",
+         &SettingsManager::setNotifyPlayback},
+    };
+    for (int i = 0; i < 7; ++i) {
+        m_notifyChecks[i] = new QCheckBox(tr(rows[i].text), this);
+        m_notifyChecks[i]->setToolTip(tr(rows[i].tip));
+        if (i >= 2) {
+            m_notifyChecks[i]->setStyleSheet(QStringLiteral("margin-left: 18px;")); // sub-switches of the two channels
+        }
+        const auto setter = rows[i].setter;
+        connect(m_notifyChecks[i], &QCheckBox::toggled, this, [this, setter](bool on) { (m_settings->*setter)(on); });
+        leftCol->addWidget(m_notifyChecks[i]);
+    }
+
     leftCol->addStretch();
 
     auto* rightPanel = new QWidget(this);
@@ -288,6 +327,15 @@ void SettingsDialog::restoreFromSettings() {
     m_manager->setShowVideoOnBattery(m_settings->showVideoOnBattery());
     m_showInWindowsSearchCheck->setChecked(m_settings->showInWindowsSearch());
     m_explorerIntegrationCheck->setChecked(m_settings->explorerIntegrationEnabled());
+    const bool notifyValues[7] = {m_settings->notifyInApp(),      m_settings->notifyDesktop(),
+                                  m_settings->notifySuccess(),    m_settings->notifyError(),
+                                  m_settings->notifyWarning(),    m_settings->notifyBackground(),
+                                  m_settings->notifyPlayback()};
+    for (int i = 0; i < 7; ++i) {
+        m_notifyChecks[i]->blockSignals(true);
+        m_notifyChecks[i]->setChecked(notifyValues[i]);
+        m_notifyChecks[i]->blockSignals(false);
+    }
 
     // Blocked, unlike a normal user pick: this only seeds the combo from
     // the persisted value at startup and must NOT fire onThemeChanged -

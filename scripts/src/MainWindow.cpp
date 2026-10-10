@@ -9,6 +9,7 @@
 #include "PlaylistModel.h"
 #include "PlaylistRotation.h"
 #include "PlaylistDialog.h"
+#include "NotificationManager.h"
 #include "CleanupManager.h"
 #include "BackupManager.h"
 
@@ -281,6 +282,16 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     buildUi();
     buildTray();
 
+    // Unified notifications: toasts inside this window, Windows
+    // notifications through the tray icon. Preferences are read live from
+    // m_settings. (The Playlists window attaches its own host.)
+    {
+        NotificationManager* notifier = NotificationManager::instance();
+        notifier->setSettings(&m_settings);
+        notifier->setTrayIcon(m_tray);
+        notifier->attachHost(this, /*topInset=*/56); // clear of the header buttons
+    }
+
     // Third video input method, alongside drag & drop and the Open Video
     // button: Ctrl+V anywhere in this window loads a recognized video URL
     // (or local file path) straight from the clipboard - see
@@ -333,14 +344,34 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     connect(m_library, &PlaylistLibrary::activeCurrentChanged, this, [this] {
         applyPlaylistItem();
         syncPlaylistDialogState();
+        // Feedback only - never touches playback. Rate limited so a
+        // one-minute rotation can't turn into a stream of toasts.
+        const PlaylistModel* active = m_library->activePlaylist();
+        if (m_manager->isActive() && active && !active->currentPath().isEmpty() &&
+            QFileInfo(active->currentPath()).isFile()) {
+            Notification n;
+            n.kind = Notification::Kind::Info;
+            n.category = Notification::Category::Playback;
+            n.title = tr("Wallpaper Changed");
+            n.message = tr("Now showing \"%1\" from \"%2\".")
+                            .arg(QFileInfo(active->currentPath()).fileName(), active->name());
+            n.key = QStringLiteral("playback-changed");
+            n.rateLimit = true;
+            n.cooldownMs = 20000;
+            NotificationManager::instance()->notify(n);
+        }
     });
     connect(m_library, &PlaylistLibrary::sourceNotice, this, [this](const QString& message) {
         if (m_playlistDialog && m_playlistDialog->isVisible()) {
             return; // PlaylistDialog shows it in its own notice line
         }
-        if (m_tray) {
-            m_tray->showMessage(tr("Motiva playlists"), message, QSystemTrayIcon::Information, 8000);
-        }
+        Notification n;
+        n.kind = Notification::Kind::Info;
+        n.title = tr("Motiva playlists");
+        n.message = message;
+        n.key = QStringLiteral("playlist-source-notice");
+        n.desktop = true;
+        NotificationManager::instance()->notify(n);
     });
     connect(m_library, &PlaylistLibrary::activeScopeChanged, this, [this] {
         applyVideoInfoUi(); // "item x of y" follows the category's membership
@@ -593,7 +624,9 @@ void MainWindow::completeStartup() {
     }
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    NotificationManager::instance()->shutdown(); // no host/tray/settings pointers outlive this window
+}
 
 void MainWindow::buildUi() {
     auto* central = new QWidget(this);
@@ -1542,18 +1575,33 @@ void MainWindow::onWallpaperError(const QString& message) {
     m_lastErrorMessage = message;
     setUiState(WallpaperUiState::Error);
 
-    const QString logPath = QDir::toNativeSeparators(
-        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/Motiva.log");
-    const QString detailed = message + tr("\n\nDetails were written to:\n%1").arg(logPath);
-    if (isVisible()) {
-        QMessageBox::warning(this, tr("Motiva"), detailed);
-    } else if (m_tray) {
-        m_tray->showMessage(tr("Motiva"), message, QSystemTrayIcon::Warning, 5000);
-    }
+    // Technical details are already in Motiva.log (written where the error
+    // is raised); the user gets the short reason. Repeats of the same
+    // failure are collapsed by the notifier (cooldown), so a continuously
+    // failing source can't flood the UI.
+    Notification n;
+    n.kind = Notification::Kind::Error;
+    n.category = Notification::Category::Playback;
+    n.title = tr("Wallpaper playback failed");
+    n.message = message;
+    n.key = QStringLiteral("playback-error");
+    n.desktop = true;
+    NotificationManager::instance()->notify(n);
 }
 
 void MainWindow::onWallpaperVerified() {
     setUiState(WallpaperUiState::Active);
+    Notification n;
+    n.kind = Notification::Kind::Success;
+    n.category = Notification::Category::Playback;
+    n.title = tr("Wallpaper Active");
+    n.message = m_selectedVideoPath.isEmpty()
+        ? tr("Your wallpaper is now showing on the desktop.")
+        : tr("\"%1\" is now showing on the desktop.").arg(QFileInfo(m_selectedVideoPath).fileName());
+    n.key = QStringLiteral("playback-active");
+    n.rateLimit = true;
+    n.cooldownMs = 5000;
+    NotificationManager::instance()->notify(n);
 }
 
 void MainWindow::onPreviewFrameReady() {
@@ -1835,6 +1883,16 @@ void MainWindow::applyPlaylistItem() {
         // currentChanged, which re-enters here). If none is available, keep
         // whatever is showing - never blank the wallpaper over it.
         qInfo() << "[Playlist] Current item is missing:" << path;
+        {
+            Notification n;
+            n.kind = Notification::Kind::Warning;
+            n.category = Notification::Category::Playback;
+            n.title = tr("Wallpaper File Not Found");
+            n.message = tr("\"%1\" is missing, so Motiva skipped it.").arg(QFileInfo(path).fileName());
+            n.key = QStringLiteral("playlist-missing:") + path;
+            n.desktop = true;
+            NotificationManager::instance()->notify(n);
+        }
         active->refreshAvailability();
         if (!active->advance(true)) {
             qWarning() << "[Playlist] No available item in" << active->name() << "- keeping the current media.";

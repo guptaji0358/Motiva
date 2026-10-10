@@ -1,4 +1,5 @@
 #include "PlaylistDialog.h"
+#include "NotificationManager.h"
 #include "BackupManager.h"
 #include "MediaRecovery.h"
 #include "PlaylistLibrary.h"
@@ -645,11 +646,14 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     connect(m_library, &PlaylistLibrary::activeCurrentChanged, this, &PlaylistDialog::updateUi);
     connect(m_library, &PlaylistLibrary::sourceNotice, this, [this](const QString& message) { showNotice(message); });
     connect(m_library, &PlaylistLibrary::activeScopeChanged, this, &PlaylistDialog::updateUi);
+    // The Playlists window shows toasts too; its header row is kept clear.
+    NotificationManager::instance()->attachHost(this, /*topInset=*/64);
     connect(m_library, &PlaylistLibrary::errorOccurred, this, [this](const QString& message) {
-        if (isVisible()) {
-            QMessageBox::warning(this, tr("Playlist library"),
-                                 tr("The change could not be saved to the playlist library.\n\n%1").arg(message));
-        }
+        // Detail goes to the log; the user gets the reason in one line.
+        qWarning() << "[Playlist] Library write failed:" << message;
+        announce(int(Notification::Kind::Error), tr("Unable to save playlist changes"), message,
+                 QStringLiteral("library-error"),
+                 tr("The change could not be saved to the playlist library. %1").arg(message), /*desktop=*/true);
     });
     selectPlaylist(m_library->selectedId());
     DialogSizing::applyComfortableSize(this, QSize(1080, 720));
@@ -1299,6 +1303,25 @@ void PlaylistDialog::showNotice(const QString& text) {
     m_noticeLabel->setVisible(!text.isEmpty());
 }
 
+void PlaylistDialog::announce(int kind, const QString& title, const QString& message, const QString& key,
+                              const QString& inlineText, bool desktop, bool background) {
+    Notification n;
+    n.kind = static_cast<Notification::Kind>(kind);
+    n.category = background ? Notification::Category::Background : Notification::Category::General;
+    n.title = title;
+    n.message = message;
+    n.key = key;
+    n.desktop = desktop;
+    NotificationManager* notifier = NotificationManager::instance();
+    const bool shown = notifier->notify(n);
+    // Switched off by the user: their choice, say nothing more. Otherwise a
+    // missing toast (no visible window, a suppressed repeat) falls back to
+    // this window's own notice line.
+    if (!shown && !inlineText.isEmpty() && notifier->inAppEnabledFor(n)) {
+        showNotice(inlineText);
+    }
+}
+
 void PlaylistDialog::onCreatePlaylist(int type) {
     const PlaylistType t = static_cast<PlaylistType>(type);
     bool ok = false;
@@ -1311,8 +1334,14 @@ void PlaylistDialog::onCreatePlaylist(int type) {
     const qint64 id = m_library->createPlaylist(name, t);
     if (id > 0) {
         selectPlaylist(id);
-        showNotice(t == PlaylistType::Video ? tr("Video playlist created - add some videos.")
-                                            : tr("Image playlist created - add some images."));
+        const PlaylistModel* created = m_library->playlist(id);
+        const QString createdName = created ? created->name() : name;
+        announce(int(Notification::Kind::Success), tr("Playlist Created"),
+                 t == PlaylistType::Video ? tr("\"%1\" was created. Add some videos to it.").arg(createdName)
+                                          : tr("\"%1\" was created. Add some images to it.").arg(createdName),
+                 QStringLiteral("playlist-created:%1").arg(id),
+                 t == PlaylistType::Video ? tr("Video playlist created - add some videos.")
+                                          : tr("Image playlist created - add some images."));
     }
 }
 
@@ -1448,11 +1477,21 @@ void PlaylistDialog::onFindFile(int row) {
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     connect(dialog, &QDialog::finished, this, [this, dialog, playlistId, itemId, mediaId, path](int result) {
         m_recoveryRunning = false;
+        if (result == QDialog::Rejected) {
+            announce(int(Notification::Kind::Info), tr("Search Cancelled"),
+                     tr("Motiva stopped looking for \"%1\".").arg(QFileInfo(path).fileName()),
+                     QStringLiteral("find-file-cancelled"), QString(), false, /*background=*/true);
+        }
         if (result == MediaRecoveryDialog::Found) {
             const QString found = dialog->chosenPath();
             if (m_library->relocateMedia(mediaId, found)) {
-                showNotice(tr("Found \"%1\" at %2. Its location was updated.")
-                               .arg(QFileInfo(found).fileName(), QDir::toNativeSeparators(QFileInfo(found).absolutePath())));
+                announce(int(Notification::Kind::Success), tr("File Found"),
+                         tr("\"%1\" was found at %2. Its location was updated.")
+                             .arg(QFileInfo(found).fileName(), QDir::toNativeSeparators(QFileInfo(found).absolutePath())),
+                         QStringLiteral("find-file-done"),
+                         tr("Found \"%1\" at %2. Its location was updated.")
+                             .arg(QFileInfo(found).fileName(), QDir::toNativeSeparators(QFileInfo(found).absolutePath())),
+                         /*desktop=*/true, /*background=*/true);
                 if (PlaylistModel* pm = m_library->playlist(playlistId)) {
                     for (int r = 0; r < pm->count(); ++r) {
                         if (pm->mediaIdAt(r) == mediaId || QFileInfo(pm->pathAt(r)) == QFileInfo(found)) {
@@ -1498,6 +1537,26 @@ void PlaylistDialog::onFindAll() {
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     connect(dialog, &QDialog::finished, this, [this, dialog, playlistId, total = int(entries.size())](int result) {
         m_recoveryRunning = false;
+        const int located = dialog->locatedCount();
+        const int unreadable = dialog->unreadableFolders();
+        const QString unreadableNote = unreadable > 0
+            ? tr(" %1 folder(s) couldn't be read, so files inside them weren't checked.").arg(unreadable)
+            : QString();
+        if (dialog->failed()) {
+            announce(int(Notification::Kind::Error), tr("Search failed"),
+                     tr("Motiva couldn't finish looking for the missing files. Details are in the log."),
+                     QStringLiteral("find-all-failed"), QString(), /*desktop=*/true, /*background=*/true);
+        } else if (result != QDialog::Accepted && located == 0) {
+            if (dialog->wasCancelled()) {
+                announce(int(Notification::Kind::Info), tr("Search Cancelled"),
+                         tr("Motiva stopped looking for the missing files."), QStringLiteral("find-all-done"), QString(),
+                         false, /*background=*/true);
+            } else {
+                announce(int(Notification::Kind::Warning), tr("No Matching Files Found"),
+                         tr("None of the %1 missing files were found.").arg(total) + unreadableNote,
+                         QStringLiteral("find-all-done"), QString(), /*desktop=*/true, /*background=*/true);
+            }
+        }
         if (result == QDialog::Accepted) {
             // Resolved by media id: each repair reloads the affected models,
             // so rows move - ids stay valid.
@@ -1516,8 +1575,11 @@ void PlaylistDialog::onFindAll() {
                 pm->refreshAvailability();
                 return pm->count() - pm->availableCount();
             }();
-            showNotice(tr("Repaired %1 of %2 missing files.").arg(repaired).arg(total) +
-                       (stillMissing > 0 ? tr(" %1 still missing.").arg(stillMissing) : QString()));
+            const QString summary = tr("Repaired %1 of %2 missing files.").arg(repaired).arg(total) +
+                                    (stillMissing > 0 ? tr(" %1 still missing.").arg(stillMissing) : QString());
+            announce(int(repaired == 0 || stillMissing > 0 ? Notification::Kind::Warning : Notification::Kind::Success),
+                     repaired == 0 ? tr("No Files Repaired") : tr("Missing Files Repaired"), summary + unreadableNote,
+                     QStringLiteral("find-all-done"), summary, /*desktop=*/true, /*background=*/true);
         }
         updateUi();
     });
@@ -1604,7 +1666,10 @@ void PlaylistDialog::onDeletePlaylist() {
     const int row = m_library->listModel()->rowOf(id);
     m_view->setPlaylist(nullptr); // the model is destroyed by deletePlaylist
     if (m_library->deletePlaylist(id)) {
-        showNotice(tr("Deleted playlist \"%1\". No files were deleted.").arg(name));
+        announce(int(Notification::Kind::Success), tr("Playlist Deleted"),
+                 tr("\"%1\" was deleted. No files were deleted.").arg(name),
+                 QStringLiteral("playlist-deleted:%1").arg(id),
+                 tr("Deleted playlist \"%1\". No files were deleted.").arg(name));
         selectPlaylist(m_library->listModel()->idAt(qMin(row, m_library->playlistCount() - 1)));
     } else {
         bindSelectedPlaylist();
@@ -1652,7 +1717,14 @@ void PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int
     }
     const PlaylistModel::AddResult result = m->addFiles(paths, insertRow);
     if (result.failed) {
-        return; // errorOccurred already explained it
+        // errorOccurred already explained the cause; this replaces that
+        // toast in place (same key) with what the user was trying to do.
+        announce(int(Notification::Kind::Error),
+                 paths.size() == 1 ? tr("Unable to add wallpaper to the playlist")
+                                   : tr("Unable to add wallpapers to the playlist"),
+                 tr("Nothing was added to \"%1\".").arg(m->name()), QStringLiteral("library-error"), QString(),
+                 /*desktop=*/true);
+        return;
     }
     const bool video = m->isVideo();
     QStringList parts;
@@ -1669,10 +1741,24 @@ void PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int
                            video ? tr("%1 file skipped - not a supported video.") : tr("%1 file skipped - not a supported image."),
                            video ? tr("%1 files skipped - not supported videos.") : tr("%1 files skipped - not supported images."));
     }
-    showNotice(parts.join(QLatin1Char(' ')));
+    const QString summary = parts.join(QLatin1Char(' '));
     if (result.added > 0) {
         const int first = (insertRow < 0 || insertRow > m->count() - result.added) ? m->count() - result.added : insertRow;
+        // Reported only now, after the model confirmed the write - one
+        // toast for the whole batch.
+        QString text = result.added == 1
+            ? tr("\"%1\" was added to \"%2\".").arg(QFileInfo(m->pathAt(first)).fileName(), m->name())
+            : tr("%1 wallpapers were added to \"%2\".").arg(result.added).arg(m->name());
+        if (parts.size() > 1) {
+            text += QLatin1Char(' ') + parts.mid(1).join(QLatin1Char(' ')); // duplicates / skipped files
+        }
+        announce(int(Notification::Kind::Success), result.added == 1 ? tr("Wallpaper Added") : tr("Wallpapers Added"),
+                 text, QStringLiteral("playlist-added:%1").arg(playlistId), summary);
         selectRow(first);
+    } else if (!summary.isEmpty()) {
+        // Nothing was added (all duplicates / unsupported): a warning, not a success.
+        announce(int(Notification::Kind::Warning), tr("Nothing Added"), summary,
+                 QStringLiteral("playlist-add-none:%1").arg(playlistId), summary);
     }
     updateUi();
 }
@@ -1776,7 +1862,11 @@ void PlaylistDialog::onShowNow() {
     }
     // setCurrentIndex re-checks the file and refuses a missing one.
     if (!m->setCurrentIndex(row)) {
-        showNotice(tr("That file can't be found on disk. Reconnect its drive or remove it from the playlist."));
+        announce(int(Notification::Kind::Warning), tr("File Not Found"),
+                 tr("\"%1\" can't be found on disk. Reconnect its drive or remove it from the playlist.")
+                     .arg(QFileInfo(m->pathAt(row)).fileName()),
+                 QStringLiteral("show-missing"),
+                 tr("That file can't be found on disk. Reconnect its drive or remove it from the playlist."));
         return;
     }
     // Choosing an item to show is using this playlist - make it the active

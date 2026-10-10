@@ -63,6 +63,27 @@ public:
     bool backupEnabled() const;
     void setBackupEnabled(bool enabled);
 
+    // --- Notifications (see NotificationManager) ---
+    // In-app toasts and Windows desktop notifications are independent
+    // channels; the five category switches below apply to both. Defaults:
+    // everything on - desktop delivery is still limited to errors,
+    // warnings, background-task completion and playback failures, and only
+    // while Motiva is not the foreground app.
+    bool notifyInApp() const;
+    void setNotifyInApp(bool enabled);
+    bool notifyDesktop() const;
+    void setNotifyDesktop(bool enabled);
+    bool notifySuccess() const;
+    void setNotifySuccess(bool enabled);
+    bool notifyError() const;
+    void setNotifyError(bool enabled);
+    bool notifyWarning() const;
+    void setNotifyWarning(bool enabled);
+    bool notifyBackground() const;
+    void setNotifyBackground(bool enabled);
+    bool notifyPlayback() const;
+    void setNotifyPlayback(bool enabled);
+
     bool wasWallpaperActive() const;
     void setWasWallpaperActive(bool active);
 

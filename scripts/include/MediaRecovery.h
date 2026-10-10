@@ -151,6 +151,11 @@ public:
 
     QVector<Resolution> resolutions() const;
     int entryCount() const { return int(m_entries.size()); }
+    // Outcome of the search itself (valid once the dialog has finished):
+    int locatedCount() const { return m_located; }       // files with a single convincing match
+    int unreadableFolders() const { return m_unreadable; } // folders that couldn't be listed
+    bool wasCancelled() const { return m_cancelled; }
+    bool failed() const { return m_failed; }
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -166,6 +171,10 @@ private:
     QVector<Entry> m_entries;
     bool m_started = false;
     bool m_stopping = false;
+    bool m_cancelled = false;
+    bool m_failed = false;
+    int m_located = 0;
+    int m_unreadable = 0;
     std::shared_ptr<MediaSearchProgress> m_progress;
     QFutureWatcher<MediaBatchResult> m_watcher;
 

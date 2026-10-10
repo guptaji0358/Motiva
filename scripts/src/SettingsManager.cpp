@@ -162,6 +162,55 @@ void SettingsManager::setShowVideoOnBattery(bool enabled) {
     m_settings.setValue("app/showVideoOnBattery", enabled);
 }
 
+bool SettingsManager::notifyInApp() const {
+    return m_settings.value("notifications/inApp", true).toBool();
+}
+void SettingsManager::setNotifyInApp(bool enabled) {
+    m_settings.setValue("notifications/inApp", enabled);
+}
+
+bool SettingsManager::notifyDesktop() const {
+    return m_settings.value("notifications/desktop", true).toBool();
+}
+void SettingsManager::setNotifyDesktop(bool enabled) {
+    m_settings.setValue("notifications/desktop", enabled);
+}
+
+bool SettingsManager::notifySuccess() const {
+    return m_settings.value("notifications/success", true).toBool();
+}
+void SettingsManager::setNotifySuccess(bool enabled) {
+    m_settings.setValue("notifications/success", enabled);
+}
+
+bool SettingsManager::notifyError() const {
+    return m_settings.value("notifications/error", true).toBool();
+}
+void SettingsManager::setNotifyError(bool enabled) {
+    m_settings.setValue("notifications/error", enabled);
+}
+
+bool SettingsManager::notifyWarning() const {
+    return m_settings.value("notifications/warning", true).toBool();
+}
+void SettingsManager::setNotifyWarning(bool enabled) {
+    m_settings.setValue("notifications/warning", enabled);
+}
+
+bool SettingsManager::notifyBackground() const {
+    return m_settings.value("notifications/background", true).toBool();
+}
+void SettingsManager::setNotifyBackground(bool enabled) {
+    m_settings.setValue("notifications/background", enabled);
+}
+
+bool SettingsManager::notifyPlayback() const {
+    return m_settings.value("notifications/playback", true).toBool();
+}
+void SettingsManager::setNotifyPlayback(bool enabled) {
+    m_settings.setValue("notifications/playback", enabled);
+}
+
 bool SettingsManager::showInWindowsSearch() const {
     return m_settings.value("app/showInWindowsSearch", false).toBool();
 }
@@ -286,7 +335,9 @@ void SettingsManager::resetPreferences() {
     for (const char* key : {"video/volume", "video/muted", "video/loop", "video/scalingMode",
                             "display/monitorSelection", "display/specificMonitorIndex", "app/startWithWindows",
                             "app/showVideoOnBattery", "app/showInWindowsSearch", "app/explorerIntegrationEnabled",
-                            "app/theme", "app/uiStyle", "app/appearance"}) {
+                            "app/theme", "app/uiStyle", "app/appearance", "notifications/inApp",
+                            "notifications/desktop", "notifications/success", "notifications/error",
+                            "notifications/warning", "notifications/background", "notifications/playback"}) {
         m_settings.remove(QLatin1String(key));
     }
     m_settings.sync();

@@ -51,6 +51,8 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/WallpaperManager.h
     scripts/src/WindowsDesktopWallpaper.cpp
     scripts/include/WindowsDesktopWallpaper.h
+    scripts/src/NotificationManager.cpp
+    scripts/include/NotificationManager.h
     scripts/src/SettingsManager.cpp
     scripts/include/SettingsManager.h
     scripts/src/RecoveryState.cpp
