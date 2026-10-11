@@ -536,8 +536,15 @@ void PlaylistDialog::applyThemedIcons() {
     if (m_searchAction) {
         m_searchAction->setIcon(icon("search"));
     }
-    // The "+" / "..." marks these buttons used to carry as text.
-    for (IconButton* b : {m_newImageButton, m_newVideoButton, m_buildCategoryButton}) {
+    // The two New Playlist buttons use the shared (theme-independent)
+    // playlist-add badge; Build Category keeps the plain themed "+".
+    const QIcon createIcon(QStringLiteral(":/playlist/playlist-add.svg"));
+    for (IconButton* b : {m_newImageButton, m_newVideoButton}) {
+        if (b) {
+            b->setStateIcon(createIcon);
+        }
+    }
+    for (IconButton* b : {m_buildCategoryButton}) {
         if (b) {
             b->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
         }

@@ -329,6 +329,59 @@ QSlider::handle:horizontal:disabled {
     background: %8;
 }
 
+/* --- Settings navigation: tabs, sidebar list, scroll pages --- */
+QTabWidget::pane {
+    border: 1px solid %3;
+    border-radius: %9px;
+    background: transparent;
+    top: -1px;
+}
+QTabBar::tab {
+    background: %5;
+    color: %4;
+    border: 1px solid %3;
+    border-bottom: none;
+    padding: 6px 10px;
+    margin-right: 2px;
+    border-top-left-radius: %9px;
+    border-top-right-radius: %9px;
+}
+QTabBar::tab:hover {
+    background: %6;
+    color: %2;
+}
+QTabBar::tab:selected {
+    background: %14;
+    color: %2;
+    border-color: %3;
+    border-top: 2px solid %11;
+}
+QTabBar::tab:focus {
+    border-color: %11;
+}
+QScrollArea#settingsPage, QScrollArea#settingsPage > QWidget > QWidget {
+    background: transparent;
+}
+QListWidget#settingsNav {
+    background: %14;
+    color: %2;
+    border: 1px solid %3;
+    border-radius: %9px;
+    outline: none;
+    padding: 4px;
+}
+QListWidget#settingsNav::item {
+    padding: 8px 10px;
+    border-radius: %9px;
+}
+QListWidget#settingsNav::item:hover {
+    background: %6;
+}
+QListWidget#settingsNav::item:selected {
+    background: %15;
+    color: %2;
+}
+
 QDialogButtonBox QPushButton {
     min-width: 76px;
 }
@@ -537,6 +590,59 @@ QSlider::handle:horizontal:hover {
 }
 QSlider::handle:horizontal:disabled {
     background: %8;
+}
+
+/* --- Settings navigation: tabs, sidebar list, scroll pages --- */
+QTabWidget::pane {
+    border: 1px solid %3;
+    border-radius: %9px;
+    background: transparent;
+    top: -1px;
+}
+QTabBar::tab {
+    background: %5;
+    color: %4;
+    border: 1px solid %3;
+    border-bottom: none;
+    padding: 6px 10px;
+    margin-right: 2px;
+    border-top-left-radius: %9px;
+    border-top-right-radius: %9px;
+}
+QTabBar::tab:hover {
+    background: %15;
+    color: %2;
+}
+QTabBar::tab:selected {
+    background: %14;
+    color: %2;
+    border-color: %3;
+    border-top: 2px solid %11;
+}
+QTabBar::tab:focus {
+    border-color: %11;
+}
+QScrollArea#settingsPage, QScrollArea#settingsPage > QWidget > QWidget {
+    background: transparent;
+}
+QListWidget#settingsNav {
+    background: %14;
+    color: %2;
+    border: 1px solid %3;
+    border-radius: %9px;
+    outline: none;
+    padding: 4px;
+}
+QListWidget#settingsNav::item {
+    padding: 8px 10px;
+    border-radius: %9px;
+}
+QListWidget#settingsNav::item:hover {
+    background: %15;
+}
+QListWidget#settingsNav::item:selected {
+    background: %15;
+    color: %2;
 }
 
 QDialogButtonBox QPushButton {

@@ -69,6 +69,7 @@
         <file alias="status/pending.svg">../Assets/status/pending.svg</file>
         <file alias="status/warning.svg">../Assets/status/warning.svg</file>
         <file alias="status/info.svg">../Assets/status/info.svg</file>
+        <file alias="playlist/playlist-add.svg">../Assets/playlist/playlist-add.svg</file>
         <file alias="playlist/video-badge.svg">../Assets/playlist/video-badge.svg</file>
         <file alias="playlist/dark/add.svg">../Assets/playlist/dark/add.svg</file>
         <file alias="playlist/dark/add-disabled.svg">../Assets/playlist/dark/add-disabled.svg</file>

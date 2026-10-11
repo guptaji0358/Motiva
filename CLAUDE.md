@@ -2,6 +2,21 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-11, tabbed Settings + playlist-add icon)
+
+`SettingsDialog` groups its (unchanged) controls into pages - General,
+Appearance, Display and Playback, Notifications, Integration - created once
+and only re-parented by `applyNavigationLayout()` (0 Tabs, 1 Sidebar, 2
+Grouped page; new styles = new case + combo entry). The "Settings layout"
+combo applies live and persists as `app/settingsLayout`
+(`SettingsManager::settingsLayout()`, cleared by resetPreferences). Tab /
+`QListWidget#settingsNav` / `QScrollArea#settingsPage` rules live in both
+Theme.cpp stylesheets (Onyx has no %6/%7 args - use %15 for hover there).
+The two New Playlist buttons use `Assets/playlist/playlist-add.svg`
+(`:/playlist/playlist-add.svg`, theme-independent blue badge, derived from
+the former `Assets/create_button.svg`). Verified with an out-of-tree
+offscreen-style harness (grab() of all 4 themes x 3 layouts).
+
 ## Current status (2026-10-10b, unified notifications)
 
 `NotificationManager` (singleton, `NotificationManager.{h,cpp}`) is the ONE

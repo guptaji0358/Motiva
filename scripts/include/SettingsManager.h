@@ -84,6 +84,11 @@ public:
     bool notifyPlayback() const;
     void setNotifyPlayback(bool enabled);
 
+    // How the Settings window presents its groups: 0 = Tabs (default),
+    // 1 = Sidebar, 2 = Grouped page. Presentation only.
+    int settingsLayout() const;
+    void setSettingsLayout(int layout);
+
     bool wasWallpaperActive() const;
     void setWasWallpaperActive(bool active);
 

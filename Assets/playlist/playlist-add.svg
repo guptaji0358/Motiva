@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="addGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22b9f2"/>
+      <stop offset="55%" stop-color="#0788fb"/>
+      <stop offset="100%" stop-color="#0758f5"/>
+    </linearGradient>
+  </defs>
+  <!-- Theme-independent: a blue badge with a white plus reads on all four themes. -->
+  <circle cx="12" cy="12" r="10.5" fill="url(#addGradient)"/>
+  <g stroke="#ffffff" stroke-width="2.2" stroke-linecap="round">
+    <path d="M12 7V17"/>
+    <path d="M7 12H17"/>
+  </g>
+</svg>

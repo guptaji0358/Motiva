@@ -2,6 +2,8 @@
 
 #include <QDialog>
 #include <functional>
+#include <vector>
+#include <QString>
 
 class QComboBox;
 class QSlider;
@@ -64,6 +66,8 @@ signals:
 
 private:
     void buildUi();
+    // 0 = Tabs, 1 = Sidebar, 2 = Grouped page; re-parents the same pages.
+    void applyNavigationLayout(int layout);
     void onScalingChanged(int index);
     void onMonitorSelectionChanged(int index);
     void onVolumeChanged(int value);
@@ -108,6 +112,16 @@ private:
     ThemeTransitionOverlay* m_transitionOverlay = nullptr;
     bool m_themeTransitionActive = false;
     std::function<void()> m_pendingApply;
+
+    struct SettingsPage {
+        int order;
+        QString title;
+        QWidget* widget;
+    };
+    std::vector<SettingsPage> m_pages;
+    QWidget* m_navHost = nullptr;
+    QWidget* m_navWidget = nullptr;
+    QComboBox* m_layoutCombo = nullptr;
 
     QComboBox* m_scalingCombo = nullptr;
     QComboBox* m_monitorCombo = nullptr;

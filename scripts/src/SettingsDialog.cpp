@@ -23,6 +23,11 @@
 #include <QSizePolicy>
 #include <QTimer>
 #include <QPushButton>
+#include <QTabWidget>
+#include <QListWidget>
+#include <QStackedWidget>
+#include <QScrollArea>
+#include <algorithm>
 
 SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* settings, CleanupManager* cleanup,
                                BackupManager* backup, QWidget* parent)
@@ -72,27 +77,21 @@ void SettingsDialog::buildUi() {
     root->setContentsMargins(20, 20, 20, 20);
     root->setSpacing(14);
 
-    // Two side-by-side columns instead of one long vertical stack - the
-    // sections (Display/Playback on the left, General on the right) read
-    // fine split this way, and it's what makes the dialog's own content
-    // landscape (wider than tall) rather than needing an arbitrary width
-    // override. See the "Popup proportions" task / constructor comment.
-    auto* columns = new QHBoxLayout();
-    columns->setSpacing(28);
+    // Settings are grouped into pages (see SettingsPage). Every control is
+    // created exactly once and only re-parented when the navigation layout
+    // changes (applyNavigationLayout), so values are never duplicated or reset.
+    QVBoxLayout* leftCol = nullptr;
+    QVBoxLayout* rightCol = nullptr;
+    const auto makePage = [this](int order, const QString& title) {
+        auto* page = new QWidget(this);
+        auto* col = new QVBoxLayout(page);
+        col->setContentsMargins(4, 8, 4, 4);
+        col->setSpacing(14);
+        m_pages.push_back({order, title, page});
+        return col;
+    };
 
-    // Each column is a real QWidget with an Expanding horizontal size
-    // policy - not just a bare QVBoxLayout - so the QHBoxLayout's stretch
-    // factors below have an actual widget to distribute extra width into.
-    // A layout added directly to another layout has no size policy of its
-    // own to expand; Qt was free to shrink it to its children's sizeHint
-    // regardless of the stretch factor, which is what kept this dialog
-    // narrow despite the "landscape" two-column structure.
-    auto* leftPanel = new QWidget(this);
-    leftPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto* leftCol = new QVBoxLayout(leftPanel);
-    leftCol->setContentsMargins(0, 0, 0, 0);
-    leftCol->setSpacing(14);
-
+    leftCol = makePage(2, tr("Display and Playback"));
     auto* displaySection = new QLabel(tr("Display"));
     displaySection->setObjectName(QStringLiteral("sectionLabel"));
     QFont sectionFont = displaySection->font();
@@ -146,6 +145,7 @@ void SettingsDialog::buildUi() {
 
     // Notifications (see NotificationManager). Each switch is saved the
     // moment it is toggled and read live by the notifier - no restart.
+    leftCol = makePage(3, tr("Notifications"));
     auto* notifySection = new QLabel(tr("Notifications"));
     notifySection->setObjectName(QStringLiteral("sectionLabel"));
     notifySection->setFont(sectionFont);
@@ -183,14 +183,7 @@ void SettingsDialog::buildUi() {
         leftCol->addWidget(m_notifyChecks[i]);
     }
 
-    leftCol->addStretch();
-
-    auto* rightPanel = new QWidget(this);
-    rightPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto* rightCol = new QVBoxLayout(rightPanel);
-    rightCol->setContentsMargins(0, 0, 0, 0);
-    rightCol->setSpacing(14);
-
+    rightCol = makePage(0, tr("General"));
     auto* generalSection = new QLabel(tr("General"));
     generalSection->setObjectName(QStringLiteral("sectionLabel"));
     generalSection->setFont(sectionFont);
@@ -207,6 +200,7 @@ void SettingsDialog::buildUi() {
     connect(m_showVideoOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onShowVideoOnBatteryToggled);
     rightCol->addWidget(m_showVideoOnBatteryCheck);
 
+    rightCol = makePage(1, tr("Appearance"));
     auto* themeForm = new QFormLayout();
     themeForm->setSpacing(10);
     themeForm->setContentsMargins(0, 4, 0, 0);
@@ -228,6 +222,7 @@ void SettingsDialog::buildUi() {
     themeForm->addRow(tr("Theme:"), m_themeCombo);
     rightCol->addLayout(themeForm);
 
+    rightCol = makePage(4, tr("Integration"));
     auto* integrationSection = new QLabel(tr("Windows Integration"));
     integrationSection->setObjectName(QStringLiteral("sectionLabel"));
     integrationSection->setFont(sectionFont);
@@ -299,16 +294,128 @@ void SettingsDialog::buildUi() {
     cleanupRow->addWidget(openCleanupButton);
     rightCol->addLayout(cleanupRow);
 
-    rightCol->addStretch();
+    std::stable_sort(m_pages.begin(), m_pages.end(),
+                     [](const SettingsPage& l, const SettingsPage& r) { return l.order < r.order; });
+    for (const SettingsPage& page : m_pages) {
+        static_cast<QVBoxLayout*>(page.widget->layout())->addStretch();
+    }
 
-    columns->addWidget(leftPanel, 1);
-    columns->addWidget(rightPanel, 1);
-    root->addLayout(columns);
+    m_navHost = new QWidget(this);
+    auto* navLayout = new QVBoxLayout(m_navHost);
+    navLayout->setContentsMargins(0, 0, 0, 0);
+    root->addWidget(m_navHost, 1);
 
+    // Presentation-only preference: how the groups above are navigated.
+    auto* footer = new QHBoxLayout();
+    footer->setSpacing(10);
+    auto* layoutLabel = new QLabel(tr("Settings layout:"), this);
+    m_layoutCombo = new QComboBox(this);
+    m_layoutCombo->addItems({tr("Tabs"), tr("Sidebar"), tr("Grouped page")});
+    m_layoutCombo->setToolTip(tr("Choose how settings groups are shown. Only the navigation changes, "
+                                 "not the settings themselves."));
+    layoutLabel->setBuddy(m_layoutCombo);
+    footer->addWidget(layoutLabel);
+    footer->addWidget(m_layoutCombo);
+    footer->addStretch();
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::close);
-    root->addWidget(buttons);
+    footer->addWidget(buttons);
+    root->addLayout(footer);
+
+    m_layoutCombo->setCurrentIndex(m_settings->settingsLayout());
+    connect(m_layoutCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        m_settings->setSettingsLayout(index);
+        applyNavigationLayout(index);
+    });
+    applyNavigationLayout(m_layoutCombo->currentIndex());
+}
+
+void SettingsDialog::applyNavigationLayout(int layout) {
+    // Extension point: add a case here (and an entry in m_layoutCombo) for a
+    // new navigation style. Pages are never destroyed, only re-parented.
+    auto* host = m_navHost->layout();
+    int currentPage = 0;
+    if (m_navWidget) {
+        if (auto* tabs = qobject_cast<QTabWidget*>(m_navWidget)) {
+            currentPage = tabs->currentIndex();
+        } else if (auto* list = m_navWidget->findChild<QListWidget*>()) {
+            currentPage = list->currentRow();
+        }
+        for (const SettingsPage& page : m_pages) {
+            page.widget->hide();
+            page.widget->setParent(this); // rescue from the container being deleted
+        }
+        delete m_navWidget;
+        m_navWidget = nullptr;
+    }
+    currentPage = qBound(0, currentPage, int(m_pages.size()) - 1);
+
+    // Pages taller than the window scroll instead of clipping.
+    const auto scrollable = [](QWidget* page, QWidget* parent) {
+        auto* area = new QScrollArea(parent);
+        area->setObjectName(QStringLiteral("settingsPage"));
+        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        area->setWidgetResizable(true);
+        area->setFrameShape(QFrame::NoFrame);
+        area->setWidget(page);
+        return area;
+    };
+
+    if (layout == 1) { // Sidebar
+        auto* container = new QWidget(m_navHost);
+        auto* row = new QHBoxLayout(container);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(14);
+        auto* list = new QListWidget(container);
+        list->setObjectName(QStringLiteral("settingsNav"));
+        list->setFixedWidth(190);
+        list->setAccessibleName(tr("Settings groups"));
+        auto* stack = new QStackedWidget(container);
+        for (const SettingsPage& page : m_pages) {
+            list->addItem(page.title);
+            stack->addWidget(scrollable(page.widget, stack));
+        }
+        connect(list, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
+        list->setCurrentRow(currentPage);
+        row->addWidget(list);
+        row->addWidget(stack, 1);
+        m_navWidget = container;
+    } else if (layout == 2) { // Grouped page
+        auto* content = new QWidget();
+        auto* col = new QVBoxLayout(content);
+        col->setContentsMargins(0, 0, 8, 0);
+        col->setSpacing(10);
+        for (const SettingsPage& page : m_pages) {
+            auto* heading = new QLabel(page.title, content);
+            heading->setObjectName(QStringLiteral("sectionLabel"));
+            QFont f = heading->font();
+            f.setBold(true);
+            f.setPointSize(f.pointSize() + 2);
+            heading->setFont(f);
+            col->addWidget(heading);
+            col->addWidget(page.widget);
+        }
+        col->addStretch();
+        auto* area = new QScrollArea(m_navHost);
+        area->setObjectName(QStringLiteral("settingsPage"));
+        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        area->setWidgetResizable(true);
+        area->setFrameShape(QFrame::NoFrame);
+        area->setWidget(content);
+        m_navWidget = area;
+    } else { // Tabs
+        auto* tabs = new QTabWidget(m_navHost);
+        for (const SettingsPage& page : m_pages) {
+            tabs->addTab(scrollable(page.widget, tabs), page.title);
+        }
+        tabs->setCurrentIndex(currentPage);
+        m_navWidget = tabs;
+    }
+    host->addWidget(m_navWidget);
+    for (const SettingsPage& page : m_pages) {
+        page.widget->show();
+    }
 }
 
 void SettingsDialog::restoreFromSettings() {

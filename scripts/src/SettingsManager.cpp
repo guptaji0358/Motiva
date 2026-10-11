@@ -211,6 +211,14 @@ void SettingsManager::setNotifyPlayback(bool enabled) {
     m_settings.setValue("notifications/playback", enabled);
 }
 
+int SettingsManager::settingsLayout() const {
+    const int v = m_settings.value("app/settingsLayout", 0).toInt();
+    return (v >= 0 && v <= 2) ? v : 0;
+}
+void SettingsManager::setSettingsLayout(int layout) {
+    m_settings.setValue("app/settingsLayout", layout);
+}
+
 bool SettingsManager::showInWindowsSearch() const {
     return m_settings.value("app/showInWindowsSearch", false).toBool();
 }
@@ -337,7 +345,8 @@ void SettingsManager::resetPreferences() {
                             "app/showVideoOnBattery", "app/showInWindowsSearch", "app/explorerIntegrationEnabled",
                             "app/theme", "app/uiStyle", "app/appearance", "notifications/inApp",
                             "notifications/desktop", "notifications/success", "notifications/error",
-                            "notifications/warning", "notifications/background", "notifications/playback"}) {
+                            "notifications/warning", "notifications/background", "notifications/playback",
+                            "app/settingsLayout"}) {
         m_settings.remove(QLatin1String(key));
     }
     m_settings.sync();
