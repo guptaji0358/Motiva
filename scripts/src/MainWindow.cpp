@@ -532,7 +532,7 @@ void MainWindow::completeStartup() {
         // playlist's own setting. Video playlists never advance on startup.
         if (newWindowsSession && m_rotation->fire(PlaylistRotation::Trigger::WindowsStart)) {
             autoApplyPlaylistWallpaper = m_settings.wasWallpaperActive();
-        } else if (newWindowsSession && !active->isVideo() && active->rotation().onWindowsStart) {
+        } else if (newWindowsSession && !active->currentIsVideo() && active->rotation().onWindowsStart) {
             autoApplyPlaylistWallpaper = m_settings.wasWallpaperActive(); // single-image playlist
         }
         applyPlaylistItem(); // the active playlist decides the current media
@@ -1766,7 +1766,7 @@ void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& path)
         showExplorerPlaylistError(tr("That playlist no longer exists. \"%1\" was not added.").arg(file.fileName()));
         return;
     }
-    if (target->isVideo() != video) {
+    if (!target->isMixed() && target->isVideo() != video) {
         showExplorerPlaylistError(tr("\"%1\" is a %2 playlist, so \"%3\" can't be added to it.")
                                       .arg(target->name(), target->isVideo() ? tr("video") : tr("image"),
                                            file.fileName()));
@@ -1826,9 +1826,15 @@ void MainWindow::syncExplorerPlaylistMenu(bool force) {
         const QModelIndex index = list->index(row);
         const qint64 id = index.data(PlaylistListModel::IdRole).toLongLong();
         const QString name = index.data(Qt::DisplayRole).toString();
-        const bool video = index.data(PlaylistListModel::TypeRole).toInt() == static_cast<int>(PlaylistType::Video);
-        (video ? videos : images).append({id, name});
-        signature += QStringLiteral("%1|%2|%3\n").arg(id).arg(video ? 'v' : 'i').arg(name);
+        const auto type = static_cast<PlaylistType>(index.data(PlaylistListModel::TypeRole).toInt());
+        const bool video = type == PlaylistType::Video;
+        if (type == PlaylistType::Mixed) {
+            images.append({id, name}); // a mixed playlist takes both kinds
+            videos.append({id, name});
+        } else {
+            (video ? videos : images).append({id, name});
+        }
+        signature += QStringLiteral("%1|%2|%3\n").arg(id).arg(type == PlaylistType::Mixed ? 'm' : (video ? 'v' : 'i')).arg(name);
     }
     if (!force && signature == m_explorerMenuSignature) {
         return;
@@ -1858,7 +1864,9 @@ bool MainWindow::isPlaylistDrivingMedia() const {
 
 void MainWindow::updatePlayerSequencing() {
     const PlaylistModel* active = m_library ? m_library->activePlaylist() : nullptr;
-    m_manager->player()->setSequencedPlayback(active && active->isVideo() && isPlaylistDrivingMedia());
+    // A video of a video OR mixed playlist plays once and hands over to the
+    // next item; an image of a mixed playlist is not sequenced.
+    m_manager->player()->setSequencedPlayback(active && active->currentIsVideo() && isPlaylistDrivingMedia());
 }
 
 void MainWindow::syncPlaylistDialogState() {
@@ -1901,7 +1909,7 @@ void MainWindow::applyPlaylistItem() {
     }
     const VideoPlayer::MediaKind kind = m_manager->player()->mediaKind();
     const bool alreadyLoaded = isPlaylistDrivingMedia() &&
-        (active->isVideo() ? kind == VideoPlayer::MediaKind::Video : kind == VideoPlayer::MediaKind::StaticImage);
+        (active->currentIsVideo() ? kind == VideoPlayer::MediaKind::Video : kind == VideoPlayer::MediaKind::StaticImage);
     if (alreadyLoaded) {
         updatePlayerSequencing(); // e.g. the same video was open as standalone media
         return;
@@ -1914,8 +1922,8 @@ void MainWindow::applyPlaylistItem() {
 
 void MainWindow::onPlayerEndOfMedia() {
     PlaylistModel* active = m_library->activePlaylist();
-    if (!active || !active->isVideo() || !isPlaylistDrivingMedia()) {
-        return; // standalone media keeps its existing behavior
+    if (!active || !active->currentIsVideo() || !isPlaylistDrivingMedia()) {
+        return; // standalone media / an image keeps its existing behavior
     }
     // The existing "Loop video" preference decides what happens after the
     // last video: on -> start the playlist again from the first, off ->

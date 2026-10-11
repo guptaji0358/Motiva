@@ -1,5 +1,8 @@
 #pragma once
 
+#include <functional>
+#include <QHash>
+
 #include <QDialog>
 #include <QListView>
 #include <QStringList>
@@ -7,6 +10,9 @@
 
 class BackupManager;
 class IconButton;
+class QAction;
+class CategoryTreePicker;
+class QMenu;
 class QAction;
 class PlaylistLibrary;
 class PlaylistModel;
@@ -106,6 +112,8 @@ public:
     // (Ctrl+Shift+N): the normal name-then-create flow, no type menu first.
     // Also used by MainWindow's copies of the same shortcuts.
     void createPlaylist(bool video);
+    // "New Mixed Playlist" (Ctrl+Alt+M): images and videos in one order.
+    void createMixedPlaylist();
     // True while a text field has keyboard focus - shortcuts then leave the
     // keys to normal text editing.
     static bool isTextInputFocused();
@@ -185,7 +193,18 @@ private:
     // "All"), optionally narrowed by `search`.
     QSet<qint64> categoryItemIds(const QString& search) const;
     void showCategoryMenu(const QPoint& globalPos);
-    void onBuildCategory();
+    // parentId > 0 builds the new category as a subcategory of that one.
+    void onBuildCategory(qint64 parentId = 0);
+    void onMoveCategory(qint64 categoryId, qint64 newParentId);
+    // "Add to Category": adds items of the open playlist to a hand-picked category.
+    void assignItemsToCategory(qint64 categoryId, const QSet<qint64>& itemIds);
+    void onNewCategoryFromItems(const QSet<qint64>& itemIds);
+    // Adds the categories below `parentId` to `menu` as a hierarchy (a category
+    // with subcategories becomes a submenu whose first entry is the category
+    // itself). `actions` maps every added action to its category id.
+    void addCategoryTree(QMenu* menu, qint64 parentId, const QSet<qint64>& excluded,
+                         QHash<QAction*, qint64>& actions,
+                         const std::function<void(const PlaylistFilterInfo&, QAction*)>& decorate);
     void onEditCategory();
     void onRenameCategory();
     void onDeleteCategory();
@@ -197,7 +216,10 @@ private:
     QListView* m_playlistList = nullptr;
 
     QLabel* m_categoryLabel = nullptr;
-    QComboBox* m_categoryCombo = nullptr;
+    CategoryTreePicker* m_categoryPicker = nullptr;
+    QCheckBox* m_includeSubCheck = nullptr;
+    QLabel* m_rotationLabel = nullptr;
+    IconButton* m_newMixedButton = nullptr;
     IconButton* m_categoryMenuButton = nullptr;
     IconButton* m_newImageButton = nullptr;
     IconButton* m_newVideoButton = nullptr;

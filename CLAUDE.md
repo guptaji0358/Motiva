@@ -2,6 +2,38 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-11b, mixed playlists + nested categories)
+
+**Mixed playlists**: `PlaylistType::Mixed` ('mixed' was already allowed by the
+schema CHECK - no migration). ONE ordered `playlist_items` sequence; each
+item's kind comes from its file extension (`PlaylistModel::isVideoAt`,
+`currentIsVideo`), `media.type` is stored per file. Playback reuses the
+existing pipeline: a current VIDEO is sequenced (advances on end-of-media,
+honouring "Loop video"), a current IMAGE advances on the image triggers
+(unlock / Windows start / interval); `PlaylistRotation::fire` ignores
+triggers while a video is current. Explorer "Add to playlist" lists mixed
+playlists under both image and video. Creation: "Mixed Playlist" button,
+Ctrl+Alt+M. Move to Start/End: item menu + Ctrl+Home/End.
+
+**Nested categories (no schema change)**: parent links live in
+`library_metadata.category_parents` (JSON child->parent), read through
+`LibraryDatabase::loadCategoryParents` which drops entries for missing
+categories / other playlists / cycles; `setCategoryParent` rejects self,
+cross-playlist and cycles; deleting a category promotes its children;
+deleting a playlist prunes (ids can be reused). `PlaylistFilterInfo::parentId`.
+Names stay unique per playlist (DB unique index). "Include subcategories"
+(`include_subcategories` meta, default on) is resolved in ONE place,
+`PlaylistLibrary::categoryItemIds`, so the view and wallpaper scope agree.
+UI: `CategoryTreePicker` (tree popup with expand/collapse) replaces the
+category combo; the "Category:" text label is the folder icon
+`Assets/category/category-folder.svg`. Item context menu "Add to Category"
+(hierarchical; only hand-picked categories accept items - rule-based are
+shown disabled; "New Category..." at the bottom) via
+`PlaylistLibrary::addItemsToCategory`. The playlist card view is single
+selection, so assignment acts on the one selected item (API takes a set).
+Verified with out-of-tree QtTest-style harnesses (library + model + dialog
+grabs); a future `parent_id` column would be the clean upgrade path.
+
 ## Current status (2026-10-11, tabbed Settings + playlist-add icon)
 
 `SettingsDialog` groups its (unchanged) controls into pages - General,

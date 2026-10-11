@@ -97,11 +97,22 @@ QString LibraryDatabase::defaultLibraryPath() {
 }
 
 QString LibraryDatabase::typeToString(PlaylistType type) {
-    return type == PlaylistType::Video ? QStringLiteral("video") : QStringLiteral("image");
+    switch (type) {
+    case PlaylistType::Video:
+        return QStringLiteral("video");
+    case PlaylistType::Mixed:
+        return QStringLiteral("mixed");
+    case PlaylistType::Image:
+        break;
+    }
+    return QStringLiteral("image");
 }
 
 PlaylistType LibraryDatabase::typeFromString(const QString& text) {
-    return text == QLatin1String("video") ? PlaylistType::Video : PlaylistType::Image;
+    if (text == QLatin1String("video")) {
+        return PlaylistType::Video;
+    }
+    return text == QLatin1String("mixed") ? PlaylistType::Mixed : PlaylistType::Image;
 }
 
 QString LibraryDatabase::pathKey(const QString& path) {
@@ -515,7 +526,17 @@ bool LibraryDatabase::deletePlaylist(qint64 id) {
         return fail(QStringLiteral("Media cleanup failed: %1").arg(orphans.lastError().text()));
     }
     touch();
-    return tx.commit();
+    if (!tx.commit()) {
+        return false;
+    }
+    // The playlist's categories cascaded away; drop their hierarchy entries
+    // (ids can be reused, so stale entries must not linger).
+    bool changed = false;
+    const QHash<qint64, qint64> parents = loadCategoryParents(&changed);
+    if (changed) {
+        saveCategoryParents(parents);
+    }
+    return true;
 }
 
 bool LibraryDatabase::setRotation(qint64 id, const RotationSettings& r) {
@@ -557,7 +578,8 @@ QVector<PlaylistItemRecord> LibraryDatabase::items(qint64 playlistId) {
 }
 
 QVector<PlaylistItemRecord> LibraryDatabase::insertItems(qint64 playlistId, const QStringList& paths,
-                                                          const QString& mediaType, int position) {
+                                                          const QString& mediaType, int position,
+                                                          const QStringList& itemTypes) {
     QVector<PlaylistItemRecord> inserted;
     if (paths.isEmpty()) {
         return inserted;
@@ -594,7 +616,7 @@ QVector<PlaylistItemRecord> LibraryDatabase::insertItems(qint64 playlistId, cons
         const QString key = pathKey(native);
         upsertMedia.addBindValue(native);
         upsertMedia.addBindValue(key);
-        upsertMedia.addBindValue(mediaType);
+        upsertMedia.addBindValue(i < itemTypes.size() ? itemTypes[i] : mediaType);
         upsertMedia.addBindValue(QFileInfo(native).fileName());
         const MediaFacts facts = MediaFacts::ofFile(native);
         upsertMedia.addBindValue(factsJson(facts));
@@ -1432,7 +1454,106 @@ QVector<PlaylistFilterInfo> LibraryDatabase::playlistFilters(qint64 playlistId) 
             }
         }
     }
+    const QHash<qint64, qint64> parents = loadCategoryParents();
+    for (PlaylistFilterInfo& info : result) {
+        info.parentId = parents.value(info.id, 0);
+    }
     return result;
+}
+
+QHash<qint64, qint64> LibraryDatabase::loadCategoryParents(bool* changed) {
+    QHash<qint64, qint64> raw;
+    const QString text = meta(QStringLiteral("category_parents"));
+    int rawCount = 0;
+    if (!text.isEmpty()) {
+        const QJsonObject obj = QJsonDocument::fromJson(text.toUtf8()).object();
+        for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+            ++rawCount;
+            bool ok = false;
+            const qint64 child = it.key().toLongLong(&ok);
+            const qint64 parent = static_cast<qint64>(it.value().toDouble());
+            if (ok && child > 0 && parent > 0) {
+                raw.insert(child, parent);
+            }
+        }
+    }
+    QHash<qint64, qint64> playlistOf;
+    QSqlQuery q(db());
+    if (q.exec(QStringLiteral("SELECT id, playlist_id FROM playlist_categories"))) {
+        while (q.next()) {
+            playlistOf.insert(q.value(0).toLongLong(), q.value(1).toLongLong());
+        }
+    }
+    QHash<qint64, qint64> clean;
+    for (auto it = raw.constBegin(); it != raw.constEnd(); ++it) {
+        const qint64 child = it.key(), parent = it.value();
+        if (child != parent && playlistOf.contains(child) && playlistOf.contains(parent) &&
+            playlistOf.value(child) == playlistOf.value(parent)) {
+            clean.insert(child, parent);
+        }
+    }
+    // Break cycles: any chain that does not reach a root within N hops.
+    const int limit = clean.size() + 1;
+    for (auto it = clean.begin(); it != clean.end();) {
+        qint64 at = it.value();
+        int hops = 0;
+        while (clean.contains(at) && hops++ < limit) {
+            at = clean.value(at);
+        }
+        it = hops >= limit ? clean.erase(it) : std::next(it);
+    }
+    if (changed) {
+        *changed = rawCount != clean.size() || raw.size() != clean.size();
+    }
+    return clean;
+}
+
+bool LibraryDatabase::saveCategoryParents(const QHash<qint64, qint64>& parents) {
+    QJsonObject obj;
+    for (auto it = parents.constBegin(); it != parents.constEnd(); ++it) {
+        obj.insert(QString::number(it.key()), static_cast<double>(it.value()));
+    }
+    return setMeta(QStringLiteral("category_parents"),
+                   obj.isEmpty() ? QString() : QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+}
+
+bool LibraryDatabase::setCategoryParent(qint64 categoryId, qint64 parentId) {
+    QHash<qint64, qint64> parents = loadCategoryParents();
+    QSqlQuery q(db());
+    q.prepare(QStringLiteral("SELECT playlist_id FROM playlist_categories WHERE id = ?"));
+    q.addBindValue(categoryId);
+    if (!check(q, "setCategoryParent") || !q.next()) {
+        return fail(QStringLiteral("That category no longer exists."));
+    }
+    const qint64 playlistId = q.value(0).toLongLong();
+    q.finish();
+    if (parentId > 0) {
+        if (parentId == categoryId) {
+            return fail(QStringLiteral("A category cannot be its own parent."));
+        }
+        q.prepare(QStringLiteral("SELECT playlist_id FROM playlist_categories WHERE id = ?"));
+        q.addBindValue(parentId);
+        if (!check(q, "setCategoryParent (parent)") || !q.next() || q.value(0).toLongLong() != playlistId) {
+            return fail(QStringLiteral("The parent category must exist in the same playlist."));
+        }
+        q.finish();
+        // Walking up from the new parent must never meet the category itself.
+        qint64 at = parentId;
+        for (int hops = 0; at > 0 && hops <= parents.size(); ++hops) {
+            if (at == categoryId) {
+                return fail(QStringLiteral("A category cannot be moved into one of its own subcategories."));
+            }
+            at = parents.value(at, 0);
+        }
+        parents.insert(categoryId, parentId);
+    } else {
+        parents.remove(categoryId);
+    }
+    if (!saveCategoryParents(parents)) {
+        return fail(QStringLiteral("Saving the category hierarchy failed."));
+    }
+    touch();
+    return true;
 }
 
 qint64 LibraryDatabase::createPlaylistFilter(qint64 playlistId, const QString& name, const FilterDefinition& definition,
@@ -1508,12 +1629,30 @@ bool LibraryDatabase::setCategoryItems(qint64 categoryId, qint64 playlistId, con
 }
 
 bool LibraryDatabase::deletePlaylistFilter(qint64 filterId) {
+    QHash<qint64, qint64> parents = loadCategoryParents();
     QSqlQuery q(db());
     q.prepare(QStringLiteral("DELETE FROM playlist_categories WHERE id = ?"));
     q.addBindValue(filterId);
     if (!check(q, "deletePlaylistFilter")) {
         return false;
     }
+    // Subcategories move up one level; nothing below is deleted. The row is
+    // gone either way, so a failed hierarchy save only loses the nesting.
+    const qint64 grandParent = parents.value(filterId, 0);
+    parents.remove(filterId);
+    for (auto it = parents.begin(); it != parents.end(); ++it) {
+        if (it.value() == filterId) {
+            if (grandParent > 0) {
+                it.value() = grandParent;
+            }
+        }
+    }
+    if (grandParent <= 0) {
+        for (auto it = parents.begin(); it != parents.end();) {
+            it = (it.value() == filterId) ? parents.erase(it) : std::next(it);
+        }
+    }
+    saveCategoryParents(parents);
     touch();
     return true;
 }
@@ -1632,6 +1771,7 @@ int LibraryDatabase::importFrom(const QString& path) {
         PlaylistType type;
         RotationSettings rotation;
         QStringList paths;
+        QStringList mediaTypes; // each item's own media type (matters for mixed)
         int currentIndex = -1;
     };
     QVector<Source> sources;
@@ -1658,7 +1798,7 @@ int LibraryDatabase::importFrom(const QString& path) {
             QSqlQuery pl(src);
             ok = pl.exec(QStringLiteral("SELECT id, name, type, COALESCE(current_item_id, 0), rotate_on_unlock,"
                                         " rotate_on_start, rotate_on_interval, interval_minutes"
-                                        " FROM playlists WHERE type IN ('image','video') ORDER BY position, id"));
+                                        " FROM playlists WHERE type IN ('image','video','mixed') ORDER BY position, id"));
             while (ok && pl.next()) {
                 Source s;
                 s.name = pl.value(1).toString();
@@ -1666,7 +1806,7 @@ int LibraryDatabase::importFrom(const QString& path) {
                 const qint64 currentItem = pl.value(3).toLongLong();
                 s.rotation = {pl.value(4).toBool(), pl.value(5).toBool(), pl.value(6).toBool(), pl.value(7).toInt()};
                 QSqlQuery it(src);
-                it.prepare(QStringLiteral("SELECT i.id, m.path FROM playlist_items i JOIN media m ON m.id = i.media_id"
+                it.prepare(QStringLiteral("SELECT i.id, m.path, m.type FROM playlist_items i JOIN media m ON m.id = i.media_id"
                                           " WHERE i.playlist_id = ? ORDER BY i.position, i.id"));
                 it.addBindValue(pl.value(0));
                 ok = it.exec();
@@ -1675,6 +1815,7 @@ int LibraryDatabase::importFrom(const QString& path) {
                         s.currentIndex = s.paths.size();
                     }
                     s.paths << it.value(1).toString();
+                    s.mediaTypes << it.value(2).toString();
                 }
                 sources.push_back(s);
             }
@@ -1730,7 +1871,8 @@ int LibraryDatabase::importFrom(const QString& path) {
             const QString key = pathKey(s.paths[i]);
             upsert.addBindValue(s.paths[i]);
             upsert.addBindValue(key);
-            upsert.addBindValue(typeToString(s.type));
+            upsert.addBindValue(s.type == PlaylistType::Mixed ? s.mediaTypes.value(i, QStringLiteral("image"))
+                                                              : typeToString(s.type));
             upsert.addBindValue(QFileInfo(s.paths[i]).fileName());
             if (!check(upsert, "import (media)")) {
                 return -1;

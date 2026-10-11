@@ -29,6 +29,8 @@ qt_standard_project_setup()
 set(IMPLEMENTATION_SOURCES
     scripts/src/Theme.cpp
     scripts/include/Theme.h
+    scripts/src/CategoryTreePicker.cpp
+    scripts/include/CategoryTreePicker.h
     scripts/src/IconButton.cpp
     scripts/include/IconButton.h
     scripts/src/MotivaToolTip.cpp

@@ -98,8 +98,8 @@ bool PlaylistRotation::nativeEventFilter(const QByteArray& eventType, void* mess
 
 bool PlaylistRotation::fire(Trigger trigger) {
     PlaylistModel* active = m_library->activePlaylist();
-    if (!active || active->isVideo()) {
-        return false; // video playlists advance on end-of-video, not on these triggers
+    if (!active || active->currentIsVideo()) {
+        return false; // a video advances on end-of-video, not on these triggers
     }
     const RotationSettings r = active->rotation();
     const bool enabled = (trigger == Trigger::LockUnlock && r.onUnlock) ||
@@ -151,6 +151,8 @@ bool PlaylistRotation::consumeNewWindowsSession() {
 
 void PlaylistRotation::reconfigureTimer() {
     PlaylistModel* active = m_library->activePlaylist();
+    // Mixed playlists keep the timer running; a tick that lands while a video
+    // is current is ignored by fire() (the video advances when it ends).
     const bool shouldRun = active && !active->isVideo() && active->rotation().onInterval && active->scopeCount() > 1;
     if (!shouldRun) {
         if (m_intervalTimer.isActive()) {

@@ -165,7 +165,20 @@ bool PlaylistModel::isVideoFile(const QString& path) {
 }
 
 bool PlaylistModel::acceptsFile(const QString& path) const {
-    return QFileInfo(path).isFile() && (isVideo() ? isVideoFile(path) : isImageFile(path));
+    if (!QFileInfo(path).isFile()) {
+        return false;
+    }
+    if (isMixed()) {
+        return isVideoFile(path) || isImageFile(path);
+    }
+    return isVideo() ? isVideoFile(path) : isImageFile(path);
+}
+
+bool PlaylistModel::isVideoAt(int row) const {
+    if (!isMixed()) {
+        return isVideo();
+    }
+    return row >= 0 && row < m_items.size() && isVideoFile(m_items[row].path);
 }
 
 int PlaylistModel::rowCount(const QModelIndex& parent) const {
@@ -185,7 +198,7 @@ QVariant PlaylistModel::data(const QModelIndex& index, int role) const {
                                                "deleted or be on a disconnected drive.").arg(item.path);
     case Qt::AccessibleTextRole:
         return tr("%1 %2 of %3: %4%5%6")
-            .arg(isVideo() ? tr("Video") : tr("Image"))
+            .arg(isVideoAt(index.row()) ? tr("Video") : tr("Image"))
             .arg(index.row() + 1)
             .arg(m_items.size())
             .arg(QFileInfo(item.path).fileName())
@@ -198,7 +211,7 @@ QVariant PlaylistModel::data(const QModelIndex& index, int role) const {
     case IsCurrentRole:
         return index.row() == m_current;
     case IsVideoRole:
-        return isVideo();
+        return isVideoAt(index.row());
     case ThumbnailPendingRole:
         return m_pendingThumbnails.contains(item.key);
     case ThumbnailRole: {
@@ -342,8 +355,14 @@ PlaylistModel::AddResult PlaylistModel::addFiles(const QStringList& paths, int i
     if (insertRow < 0 || insertRow > m_items.size()) {
         insertRow = m_items.size();
     }
+    // Each file's own media type (a mixed playlist holds both kinds).
+    QStringList itemTypes;
+    for (const QString& file : std::as_const(toAdd)) {
+        itemTypes << (isVideoFile(file) ? QStringLiteral("video") : QStringLiteral("image"));
+    }
     const QVector<PlaylistItemRecord> records =
-        m_db->insertItems(m_id, toAdd, LibraryDatabase::typeToString(m_type), insertRow);
+        m_db->insertItems(m_id, toAdd, LibraryDatabase::typeToString(isMixed() ? PlaylistType::Image : m_type),
+                          insertRow, itemTypes);
     if (records.size() != toAdd.size()) {
         result.failed = true;
         emit errorOccurred(m_db->lastError());
@@ -602,7 +621,7 @@ void PlaylistModel::requestThumbnail(const QString& key, const QString& path) co
         watcher->deleteLater();
         self->onThumbnailReady(key, image);
     });
-    const bool video = isVideo();
+    const bool video = isMixed() ? isVideoFile(path) : isVideo();
     watcher->setFuture(QtConcurrent::run(thumbnailPool(), [path, video]() {
         return video ? videoThumbnail(path) : imageThumbnail(path);
     }));

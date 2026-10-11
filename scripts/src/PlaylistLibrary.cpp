@@ -14,6 +14,7 @@ constexpr const char* kActiveCategoryKey = "active_category_id";
 constexpr const char* kActiveSourceKey = "active_source_type";
 constexpr const char* kSelectedKey = "selected_playlist_id";
 constexpr const char* kLegacyMigratedKey = "legacy_settings_migrated";
+constexpr const char* kIncludeSubcategoriesKey = "include_subcategories";
 } // namespace
 
 // ------------------------------------------------------------ PlaylistListModel
@@ -33,7 +34,10 @@ QVariant PlaylistListModel::data(const QModelIndex& index, int role) const {
         return p.name;
     case Qt::AccessibleTextRole:
         return tr("%1, %2 playlist, %3%4")
-            .arg(p.name, p.type == PlaylistType::Video ? tr("video") : tr("image"),
+            .arg(p.name,
+                 p.type == PlaylistType::Video ? tr("video")
+                 : p.type == PlaylistType::Mixed ? tr("mixed media")
+                                                 : tr("image"),
                  p.itemCount == 1 ? tr("1 item") : tr("%1 items").arg(p.itemCount),
                  p.id == m_activeId ? tr(", active") : QString());
     case IdRole:
@@ -180,19 +184,89 @@ QSet<qint64> PlaylistLibrary::categoryItemIds(qint64 playlistId, qint64 category
     if (categoryId <= 0) {
         return m_db.matchingItems(playlistId, nullptr, QString());
     }
-    for (const PlaylistFilterInfo& f : m_db.playlistFilters(playlistId)) {
-        if (f.id == categoryId) {
-            QSet<qint64> ids = m_db.matchingItems(playlistId, f.isSelection() ? nullptr : &f.definition, QString());
-            if (f.isSelection()) {
-                ids.intersect(f.itemIds); // hand-picked: exactly the chosen items
-            }
-            return ids;
+    const QVector<PlaylistFilterInfo> all = m_db.playlistFilters(playlistId);
+    const auto own = [this, playlistId](const PlaylistFilterInfo& f) {
+        QSet<qint64> ids = m_db.matchingItems(playlistId, f.isSelection() ? nullptr : &f.definition, QString());
+        if (f.isSelection()) {
+            ids.intersect(f.itemIds); // hand-picked: exactly the chosen items
         }
+        return ids;
+    };
+    for (const PlaylistFilterInfo& f : all) {
+        if (f.id != categoryId) {
+            continue;
+        }
+        QSet<qint64> ids = own(f);
+        if (includeSubcategories()) {
+            // A set union: an item that is in several descendants appears once.
+            const QSet<qint64> below = categoryDescendantIds(all, categoryId);
+            for (const PlaylistFilterInfo& d : all) {
+                if (below.contains(d.id)) {
+                    ids.unite(own(d));
+                }
+            }
+        }
+        return ids;
     }
     if (found) {
         *found = false;
     }
     return {};
+}
+
+bool PlaylistLibrary::includeSubcategories() {
+    return m_db.meta(QLatin1String(kIncludeSubcategoriesKey), QStringLiteral("1")) != QLatin1String("0");
+}
+
+void PlaylistLibrary::setIncludeSubcategories(bool on) {
+    if (on == includeSubcategories()) {
+        return;
+    }
+    if (!m_db.setMeta(QLatin1String(kIncludeSubcategoriesKey), on ? QStringLiteral("1") : QStringLiteral("0"))) {
+        emit errorOccurred(m_db.lastError());
+        return;
+    }
+    if (m_activeId > 0) {
+        refreshActiveScope(); // the active category's membership may have changed
+    }
+    // Every playlist's category views may change; the dialog reloads its own.
+    for (const PlaylistInfo& p : std::as_const(m_list.m_rows)) {
+        emit filtersChanged(p.id);
+    }
+}
+
+bool PlaylistLibrary::setCategoryParent(qint64 categoryId, qint64 playlistId, qint64 parentId) {
+    if (!m_db.setCategoryParent(categoryId, parentId)) {
+        emit errorOccurred(m_db.lastError());
+        return false;
+    }
+    emit filtersChanged(playlistId);
+    if (playlistId == m_activeId) {
+        refreshActiveScope(); // a parent's scope may now include/exclude this branch
+    }
+    return true;
+}
+
+int PlaylistLibrary::addItemsToCategory(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds) {
+    for (const PlaylistFilterInfo& f : m_db.playlistFilters(playlistId)) {
+        if (f.id != categoryId) {
+            continue;
+        }
+        if (!f.isSelection()) {
+            emit errorOccurred(tr("\"%1\" is a rule-based category. Edit its conditions, or add items to a hand-picked "
+                                  "category.").arg(f.name));
+            return -1;
+        }
+        QSet<qint64> merged = f.itemIds;
+        const int before = merged.size();
+        merged.unite(itemIds);
+        if (merged.size() == before) {
+            return 0; // all of them were already members
+        }
+        return setCategoryItems(categoryId, playlistId, merged) ? merged.size() - before : -1;
+    }
+    emit errorOccurred(tr("That category no longer exists."));
+    return -1;
 }
 
 QString PlaylistLibrary::activeCategoryName() {

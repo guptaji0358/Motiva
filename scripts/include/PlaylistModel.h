@@ -51,6 +51,12 @@ public:
     QString name() const { return m_name; }
     PlaylistType type() const { return m_type; }
     bool isVideo() const { return m_type == PlaylistType::Video; }
+    // A mixed playlist holds images and videos in one user-defined order;
+    // each item's kind is its own (isVideoAt).
+    bool isMixed() const { return m_type == PlaylistType::Mixed; }
+    bool isVideoAt(int row) const;
+    // Whether the item playback is on right now is a video (false: image or none).
+    bool currentIsVideo() const { return m_current >= 0 && isVideoAt(m_current); }
     RotationSettings rotation() const { return m_rotation; }
 
     // Set by PlaylistLibrary: this playlist currently controls the wallpaper.

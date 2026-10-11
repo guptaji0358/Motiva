@@ -5,6 +5,7 @@
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
 #include "CategoryFilterDialog.h"
+#include "CategoryTreePicker.h"
 #include "CategoryItemPickerDialog.h"
 #include "FlowDialog.h"
 #include "DialogSizing.h"
@@ -262,7 +263,9 @@ public:
         const bool selected = option.state & QStyle::State_Selected;
         const bool hovered = option.state & QStyle::State_MouseOver;
         const bool active = index.data(PlaylistListModel::IsActiveRole).toBool();
-        const bool video = index.data(PlaylistListModel::TypeRole).toInt() == static_cast<int>(PlaylistType::Video);
+        const int type = index.data(PlaylistListModel::TypeRole).toInt();
+        const bool video = type == static_cast<int>(PlaylistType::Video);
+        const bool mixed = type == static_cast<int>(PlaylistType::Mixed);
         const int count = index.data(PlaylistListModel::CountRole).toInt();
         const int radius = cardRadius();
 
@@ -293,7 +296,7 @@ public:
 
         p->setFont(option.font);
         p->setPen(pal.textSecondary);
-        const QString subtitle = (video ? PlaylistDialog::tr("Videos") : PlaylistDialog::tr("Images")) +
+        const QString subtitle = (mixed ? PlaylistDialog::tr("Mixed") : video ? PlaylistDialog::tr("Videos") : PlaylistDialog::tr("Images")) +
             QStringLiteral("  •  ") + QString::number(count);
         p->drawText(QRectF(row.left() + 12, nameRect.bottom() + 2, row.width() - 24, fm.height()),
                     Qt::AlignLeft | Qt::AlignVCenter, subtitle);
@@ -515,6 +518,14 @@ void PlaylistView::keyPressEvent(QKeyEvent* event) {
             emit moveRequested(row, right);
             return;
         }
+        if (event->key() == Qt::Key_Home && row > 0) {
+            emit moveRequested(row, 0);
+            return;
+        }
+        if (event->key() == Qt::Key_End && m_playlist && row < m_playlist->count() - 1) {
+            emit moveRequested(row, m_playlist->count() - 1);
+            return;
+        }
     }
     if (row >= 0 && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
         emit showNowRequested(row);
@@ -539,10 +550,16 @@ void PlaylistDialog::applyThemedIcons() {
     // The two New Playlist buttons use the shared (theme-independent)
     // playlist-add badge; Build Category keeps the plain themed "+".
     const QIcon createIcon(QStringLiteral(":/playlist/playlist-add.svg"));
-    for (IconButton* b : {m_newImageButton, m_newVideoButton}) {
+    for (IconButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton}) {
         if (b) {
             b->setStateIcon(createIcon);
         }
+    }
+    if (m_categoryLabel) {
+        // The folder SVG stands in for the word "Category" (tinted per theme).
+        const Theme::ThemePalette& pal = Theme::themePalette(Theme::currentTheme());
+        m_categoryLabel->setPixmap(
+            Theme::tintedIcon(QStringLiteral(":/category/category-folder.svg"), pal.textPrimary, 20));
     }
     for (IconButton* b : {m_buildCategoryButton}) {
         if (b) {
@@ -594,9 +611,11 @@ void PlaylistView::paintEvent(QPaintEvent* event) {
             p.setFont(font());
             p.setPen(pal.textSecondary);
             const bool video = m_playlist && m_playlist->isVideo();
+            const bool mixed = m_playlist && m_playlist->isMixed();
             p.drawText(r.adjusted(0, 28, 0, 0), Qt::AlignCenter,
-                       video ? tr("Click \"Add Videos\" or drop video files here.")
-                             : tr("Click \"Add Images\" or drop image files here."));
+                       mixed ? tr("Click \"Add Media\" or drop image and video files here.")
+                       : video ? tr("Click \"Add Videos\" or drop video files here.")
+                               : tr("Click \"Add Images\" or drop image files here."));
         }
     }
     QListView::paintEvent(event);
@@ -635,6 +654,12 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     connect(newImageShortcut, &QShortcut::activated, this, [this] {
         if (!isTextInputFocused()) {
             createPlaylist(false);
+        }
+    });
+    auto* newMixedShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_M), this);
+    connect(newMixedShortcut, &QShortcut::activated, this, [this] {
+        if (!isTextInputFocused()) {
+            createMixedPlaylist();
         }
     });
     auto* newVideoShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), this);
@@ -789,6 +814,13 @@ QWidget* PlaylistDialog::buildSidebar() {
     connect(newVideo, &QPushButton::clicked, this, [this] { createPlaylist(true); });
     buttons->addWidget(newVideo);
     col->addLayout(buttons);
+    auto* mixedRow = new QHBoxLayout();
+    m_newMixedButton = new IconButton(QIcon(), tr("Mixed Playlist"), panel);
+    m_newMixedButton->setAccessibleName(tr("New Mixed Playlist"));
+    m_newMixedButton->setToolTip(tr("New mixed playlist - images and videos in one order (Ctrl+Alt+M)"));
+    connect(m_newMixedButton, &QPushButton::clicked, this, [this] { createMixedPlaylist(); });
+    mixedRow->addWidget(m_newMixedButton);
+    col->addLayout(mixedRow);
     applyThemedIcons();
     return panel;
 }
@@ -843,22 +875,33 @@ QWidget* PlaylistDialog::buildEditor() {
     // Virtual categories: saved filters of THIS playlist. "All" is built in.
     auto* filterRow = new QHBoxLayout();
     filterRow->setSpacing(8);
-    m_categoryLabel = new QLabel(tr("Category:"), editor);
+    m_categoryLabel = new QLabel(editor);
+    m_categoryLabel->setFixedSize(24, 24);
+    m_categoryLabel->setAlignment(Qt::AlignCenter);
+    m_categoryLabel->setToolTip(tr("Categories"));
+    m_categoryLabel->setAccessibleName(tr("Categories"));
     filterRow->addWidget(m_categoryLabel);
-    m_categoryCombo = new QComboBox(editor);
-    m_categoryCombo->setMinimumWidth(170);
-    m_categoryCombo->setAccessibleName(tr("Category"));
-    m_categoryCombo->setToolTip(tr("A category is a saved filter for this playlist. Right-click to edit, rename or "
-                                   "delete it."));
-    m_categoryLabel->setBuddy(m_categoryCombo);
-    m_categoryCombo->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_categoryCombo, &QWidget::customContextMenuRequested, this,
-            [this](const QPoint& pos) { showCategoryMenu(m_categoryCombo->mapToGlobal(pos)); });
-    connect(m_categoryCombo, &QComboBox::currentIndexChanged, this, [this] {
+    m_categoryPicker = new CategoryTreePicker(editor);
+    m_categoryPicker->setAccessibleName(tr("Category"));
+    m_categoryPicker->setToolTip(tr("Categories of this playlist, shown as a tree. Right-click to edit, rename, "
+                                    "move or delete the selected one."));
+    m_categoryLabel->setBuddy(m_categoryPicker);
+    m_categoryPicker->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_categoryPicker, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& pos) { showCategoryMenu(m_categoryPicker->mapToGlobal(pos)); });
+    connect(m_categoryPicker, &CategoryTreePicker::currentCategoryChanged, this, [this] {
         applyItemFilter();
         updateUi();
     });
-    filterRow->addWidget(m_categoryCombo);
+    filterRow->addWidget(m_categoryPicker);
+    // Direct contents only, or the category plus everything below it.
+    m_includeSubCheck = new QCheckBox(tr("Include subcategories"), editor);
+    m_includeSubCheck->setToolTip(tr("On: a category shows (and plays) its own items plus those of all its "
+                                     "subcategories. Off: only the items assigned to the category itself."));
+    m_includeSubCheck->setChecked(m_library->includeSubcategories());
+    connect(m_includeSubCheck, &QCheckBox::toggled, this,
+            [this](bool on) { m_library->setIncludeSubcategories(on); });
+    filterRow->addWidget(m_includeSubCheck);
     // Same actions as the right-click menu, reachable by keyboard too.
     m_categoryMenuButton = new IconButton(QIcon(), QString(), editor); // three-dots SVG, set in applyThemedIcons()
     m_categoryMenuButton->setAccessibleName(tr("Category actions"));
@@ -872,7 +915,7 @@ QWidget* PlaylistDialog::buildEditor() {
     m_buildCategoryButton->setAccessibleName(tr("Build Category"));
     auto* buildCategory = m_buildCategoryButton;
     buildCategory->setToolTip(tr("Save a filter for this playlist, e.g. file names containing \"anime\""));
-    connect(buildCategory, &QPushButton::clicked, this, &PlaylistDialog::onBuildCategory);
+    connect(buildCategory, &QPushButton::clicked, this, [this] { onBuildCategory(0); });
     filterRow->addWidget(buildCategory);
     filterRow->addStretch();
     auto* arrangeLabel = new QLabel(tr("Arrange:"), editor);
@@ -1051,6 +1094,7 @@ QWidget* PlaylistDialog::buildEditor() {
     imageCol->setContentsMargins(0, 0, 0, 0);
     imageCol->setSpacing(8);
     auto* rotationLabel = new QLabel(tr("Change image automatically"), imageSettings);
+    m_rotationLabel = rotationLabel;
     rotationLabel->setObjectName(QStringLiteral("sectionLabel"));
     QFont rf = rotationLabel->font();
     rf.setBold(true);
@@ -1342,9 +1386,11 @@ void PlaylistDialog::announce(int kind, const QString& title, const QString& mes
 void PlaylistDialog::onCreatePlaylist(int type) {
     const PlaylistType t = static_cast<PlaylistType>(type);
     bool ok = false;
-    const QString name = QInputDialog::getText(this, t == PlaylistType::Video ? tr("New Video Playlist") : tr("New Image Playlist"),
-                                               tr("Playlist name:"), QLineEdit::Normal,
-                                               t == PlaylistType::Video ? tr("My Videos") : tr("My Images"), &ok);
+    const bool mixed = t == PlaylistType::Mixed;
+    const QString name = QInputDialog::getText(
+        this, mixed ? tr("New Mixed Playlist") : t == PlaylistType::Video ? tr("New Video Playlist") : tr("New Image Playlist"),
+        tr("Playlist name:"), QLineEdit::Normal,
+        mixed ? tr("My Media") : t == PlaylistType::Video ? tr("My Videos") : tr("My Images"), &ok);
     if (!ok) {
         return;
     }
@@ -1354,11 +1400,13 @@ void PlaylistDialog::onCreatePlaylist(int type) {
         const PlaylistModel* created = m_library->playlist(id);
         const QString createdName = created ? created->name() : name;
         announce(int(Notification::Kind::Success), tr("Playlist Created"),
-                 t == PlaylistType::Video ? tr("\"%1\" was created. Add some videos to it.").arg(createdName)
-                                          : tr("\"%1\" was created. Add some images to it.").arg(createdName),
+                 mixed ? tr("\"%1\" was created. Add images and videos in any order.").arg(createdName)
+                 : t == PlaylistType::Video ? tr("\"%1\" was created. Add some videos to it.").arg(createdName)
+                                            : tr("\"%1\" was created. Add some images to it.").arg(createdName),
                  QStringLiteral("playlist-created:%1").arg(id),
-                 t == PlaylistType::Video ? tr("Video playlist created - add some videos.")
-                                          : tr("Image playlist created - add some images."));
+                 mixed ? tr("Mixed playlist created - add images and videos.")
+                 : t == PlaylistType::Video ? tr("Video playlist created - add some videos.")
+                                            : tr("Image playlist created - add some images."));
     }
 }
 
@@ -1433,6 +1481,8 @@ void PlaylistDialog::showItemMenu(const QPoint& pos) {
     QAction* findFile = nullptr;
     QAction* moveLeft = nullptr;
     QAction* moveRight = nullptr;
+    QAction* moveFirst = nullptr;
+    QAction* moveLast = nullptr;
     // Only actions that make sense for this item right now are listed.
     if (available && !(row == m->currentIndex() && m->isActive())) {
         showNow = menu.addAction(tr("Show Now"));
@@ -1449,9 +1499,41 @@ void PlaylistDialog::showItemMenu(const QPoint& pos) {
         moveRight = menu.addAction(tr("Move Right"));
         moveRight->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Right));
     }
+    if (row > 0) {
+        moveFirst = menu.addAction(tr("Move to Start"));
+        moveFirst->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Home));
+    }
+    if (row < m->count() - 1) {
+        moveLast = menu.addAction(tr("Move to End"));
+        moveLast->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_End));
+    }
     if (!menu.isEmpty()) {
         menu.addSeparator();
     }
+    // Add to Category: the playlist's own categories, as a hierarchy.
+    const qint64 itemId = m->itemIdAt(row);
+    QMenu* categoryMenu = menu.addMenu(tr("Add to Category"));
+    categoryMenu->setToolTipsVisible(true);
+    QHash<QAction*, qint64> categoryActions;
+    if (m_filters.isEmpty()) {
+        QAction* none = categoryMenu->addAction(tr("No categories yet"));
+        none->setEnabled(false);
+    } else {
+        addCategoryTree(categoryMenu, 0, {}, categoryActions, [itemId](const PlaylistFilterInfo& f, QAction* a) {
+            if (!f.isSelection()) {
+                a->setEnabled(false);
+                a->setToolTip(PlaylistDialog::tr("Rule-based category: it collects items by its conditions."));
+            } else if (f.itemIds.contains(itemId)) {
+                a->setCheckable(true);
+                a->setChecked(true);
+                a->setEnabled(false);
+                a->setToolTip(PlaylistDialog::tr("This item is already in the category."));
+            }
+        });
+    }
+    categoryMenu->addSeparator();
+    QAction* newCategory = categoryMenu->addAction(tr("New Category…"));
+    menu.addSeparator();
     QAction* remove = menu.addAction(tr("Remove"));
     remove->setShortcut(QKeySequence(QKeySequence::Delete));
     remove->setToolTip(tr("Remove from this playlist. The file itself is not deleted."));
@@ -1469,6 +1551,16 @@ void PlaylistDialog::showItemMenu(const QPoint& pos) {
         moveRow(row, -1);
     } else if (chosen == moveRight) {
         moveRow(row, +1);
+    } else if (chosen == moveFirst || chosen == moveLast) {
+        if (m_view->isArranged()) {
+            showNotice(tr("Set Arrange to None to change the order - A – Z / Z – A only rearrange the view."));
+        } else if (m->move(row, chosen == moveFirst ? 0 : m->count() - 1)) {
+            selectRow(chosen == moveFirst ? 0 : m->count() - 1);
+        }
+    } else if (categoryActions.contains(chosen)) {
+        assignItemsToCategory(categoryActions.value(chosen), {itemId});
+    } else if (chosen == newCategory) {
+        onNewCategoryFromItems({itemId});
     } else if (chosen == remove) {
         removeRow(row);
     }
@@ -1673,7 +1765,7 @@ void PlaylistDialog::onDeletePlaylist() {
     const auto answer = QMessageBox::question(
         this, tr("Delete Playlist"),
         tr("Delete the playlist \"%1\"?\n\nOnly the playlist is removed - your %2 files are not deleted.")
-            .arg(m->name(), m->isVideo() ? tr("video") : tr("image")),
+            .arg(m->name(), m->isMixed() ? tr("image and video") : m->isVideo() ? tr("video") : tr("image")),
         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
     if (answer != QMessageBox::Yes) {
         return;
@@ -1744,10 +1836,11 @@ void PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int
         return;
     }
     const bool video = m->isVideo();
+    const bool mixed = m->isMixed();
     QStringList parts;
     if (result.added > 0) {
-        parts << countText(result.added, video ? tr("Added %1 video.") : tr("Added %1 image."),
-                           video ? tr("Added %1 videos.") : tr("Added %1 images."));
+        parts << countText(result.added, mixed ? tr("Added %1 item.") : video ? tr("Added %1 video.") : tr("Added %1 image."),
+                           mixed ? tr("Added %1 items.") : video ? tr("Added %1 videos.") : tr("Added %1 images."));
     }
     if (result.duplicates > 0) {
         parts << countText(result.duplicates, tr("%1 was already in the playlist."),
@@ -1755,8 +1848,10 @@ void PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int
     }
     if (result.unsupported > 0) {
         parts << countText(result.unsupported,
-                           video ? tr("%1 file skipped - not a supported video.") : tr("%1 file skipped - not a supported image."),
-                           video ? tr("%1 files skipped - not supported videos.") : tr("%1 files skipped - not supported images."));
+                           mixed ? tr("%1 file skipped - not a supported image or video.")
+                           : video ? tr("%1 file skipped - not a supported video.") : tr("%1 file skipped - not a supported image."),
+                           mixed ? tr("%1 files skipped - not supported images or videos.")
+                           : video ? tr("%1 files skipped - not supported videos.") : tr("%1 files skipped - not supported images."));
     }
     const QString summary = parts.join(QLatin1Char(' '));
     if (result.added > 0) {
@@ -1785,17 +1880,20 @@ void PlaylistDialog::onAddMedia() {
     if (!m) {
         return;
     }
-    QStringList exts = m->isVideo() ? VideoPlayer::supportedVideoExtensions().values()
-                                    : VideoPlayer::supportedStaticImageExtensions().values();
+    QStringList exts = m->isMixed() ? (VideoPlayer::supportedVideoExtensions() + VideoPlayer::supportedStaticImageExtensions()).values()
+                       : m->isVideo() ? VideoPlayer::supportedVideoExtensions().values()
+                                      : VideoPlayer::supportedStaticImageExtensions().values();
     exts.sort(Qt::CaseInsensitive);
     QStringList patterns;
     for (const QString& ext : exts) {
         patterns << QStringLiteral("*.%1").arg(ext);
     }
-    const QString filter = (m->isVideo() ? tr("Videos (%1)") : tr("Images (%1)")).arg(patterns.join(QLatin1Char(' '))) +
-                           QStringLiteral(";;") + tr("All Files (*)");
+    const QString kind = m->isMixed() ? tr("Images and Videos (%1)") : m->isVideo() ? tr("Videos (%1)") : tr("Images (%1)");
+    const QString filter = kind.arg(patterns.join(QLatin1Char(' '))) + QStringLiteral(";;") + tr("All Files (*)");
     const QStringList files = QFileDialog::getOpenFileNames(
-        this, m->isVideo() ? tr("Add Videos to \"%1\"").arg(m->name()) : tr("Add Images to \"%1\"").arg(m->name()),
+        this,
+        m->isMixed() ? tr("Add Media to \"%1\"").arg(m->name())
+        : m->isVideo() ? tr("Add Videos to \"%1\"").arg(m->name()) : tr("Add Images to \"%1\"").arg(m->name()),
         QString(), filter);
     if (!files.isEmpty()) {
         addFilesTo(m->id(), files);
@@ -1922,9 +2020,18 @@ void PlaylistDialog::updateUi() {
     const int row = selectedRow();
     const int currentRow = m->currentIndex();
     const bool video = m->isVideo();
+    const bool mixed = m->isMixed();
 
     m_nameLabel->setText(m->name());
-    QString summary = countText(count, video ? tr("%1 video") : tr("%1 image"), video ? tr("%1 videos") : tr("%1 images"));
+    QString summary = mixed ? countText(count, tr("%1 item"), tr("%1 items"))
+                            : countText(count, video ? tr("%1 video") : tr("%1 image"), video ? tr("%1 videos") : tr("%1 images"));
+    if (mixed && count > 0) {
+        int videos = 0;
+        for (int r = 0; r < count; ++r) {
+            videos += m->isVideoAt(r) ? 1 : 0;
+        }
+        summary += tr(" (%1 images, %2 videos)").arg(count - videos).arg(videos);
+    }
     if (count > 0) {
         if (m->isActive()) {
             const QString category = m_library->activeCategoryName();
@@ -1949,16 +2056,20 @@ void PlaylistDialog::updateUi() {
                                              : tr("Showing %1 of %2 items").arg(shown).arg(count));
     m_categoryMenuButton->setEnabled(currentFilter() != nullptr);
     // Categories belong to this playlist - say so.
-    m_categoryLabel->setText(tr("Categories of \"%1\":").arg(m->name().size() > 24 ? m->name().left(23) + QStringLiteral("…") : m->name()));
+    m_categoryLabel->setToolTip(tr("Categories of \"%1\"").arg(m->name()));
+    m_categoryLabel->setAccessibleDescription(tr("Categories of the playlist \"%1\"").arg(m->name()));
     m_binding = true;
     m_activeCheck->setChecked(isSelectionActive());
     m_activeCheck->setText(currentFilter() ? tr("Use this category") : tr("Use this playlist"));
     m_binding = false;
 
-    m_addButton->setText(video ? tr("Add Videos") : tr("Add Images"));
-    m_addButton->setToolTip(video ? tr("Add one or more video files to the end of the playlist")
-                                  : tr("Add one or more image files to the end of the playlist"));
+    m_addButton->setText(mixed ? tr("Add Media") : video ? tr("Add Videos") : tr("Add Images"));
+    m_addButton->setToolTip(mixed ? tr("Add image and video files to the end of the playlist, in the order you choose")
+                            : video ? tr("Add one or more video files to the end of the playlist")
+                                    : tr("Add one or more image files to the end of the playlist"));
     m_settingsStack->setCurrentIndex(video ? 1 : 0);
+    m_rotationLabel->setText(mixed ? tr("Change image automatically (videos play to their end, then move on)")
+                                   : tr("Change image automatically"));
     m_intervalCombo->setEnabled(m_intervalCheck->isChecked());
 
     m_showNowButton->setEnabled(row >= 0 && m->isAvailable(row) && (row != currentRow || !m->isActive()));
@@ -1988,6 +2099,10 @@ void PlaylistDialog::createPlaylist(bool video) {
     onCreatePlaylist(static_cast<int>(video ? PlaylistType::Video : PlaylistType::Image));
 }
 
+void PlaylistDialog::createMixedPlaylist() {
+    onCreatePlaylist(static_cast<int>(PlaylistType::Mixed));
+}
+
 bool PlaylistDialog::isTextInputFocused() {
     QWidget* w = QApplication::focusWidget();
     if (!w) {
@@ -2004,24 +2119,24 @@ bool PlaylistDialog::isTextInputFocused() {
 
 void PlaylistDialog::reloadCategories(bool resetToAll) {
     PlaylistModel* m = current();
-    const qint64 keep = resetToAll ? 0 : m_categoryCombo->currentData().toLongLong();
+    const qint64 keep = resetToAll ? 0 : m_categoryPicker->currentCategoryId();
     m_filtersPlaylistId = m ? m->id() : 0;
     m_filters = m ? m_library->filters(m->id()) : QVector<PlaylistFilterInfo>{};
-    m_categoryCombo->blockSignals(true);
-    m_categoryCombo->clear();
-    m_categoryCombo->addItem(tr("All"), 0); // built in: every item of the playlist
-    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
-        m_categoryCombo->addItem(f.name, f.id);
+    m_categoryPicker->blockSignals(true);
+    m_categoryPicker->setCategories(m_filters, tr("All")); // "All" is built in: every item of the playlist
+    m_categoryPicker->setCurrentCategory(keep);
+    m_categoryPicker->blockSignals(false);
+    if (m_includeSubCheck && m_includeSubCheck->isChecked() != m_library->includeSubcategories()) {
+        m_includeSubCheck->blockSignals(true);
+        m_includeSubCheck->setChecked(m_library->includeSubcategories());
+        m_includeSubCheck->blockSignals(false);
     }
-    const int index = m_categoryCombo->findData(keep);
-    m_categoryCombo->setCurrentIndex(index >= 0 ? index : 0);
-    m_categoryCombo->blockSignals(false);
     applyItemFilter();
     updateUi();
 }
 
 const PlaylistFilterInfo* PlaylistDialog::currentFilter() const {
-    const qint64 id = m_categoryCombo ? m_categoryCombo->currentData().toLongLong() : 0;
+    const qint64 id = m_categoryPicker ? m_categoryPicker->currentCategoryId() : 0;
     for (const PlaylistFilterInfo& f : m_filters) {
         if (f.id == id) {
             return &f;
@@ -2043,14 +2158,17 @@ QSet<qint64> PlaylistDialog::categoryItemIds(const QString& search) const {
         }
         return ids;
     }
-    // SQL over the items' stored metadata (see LibraryDatabase::matchingItems).
-    // A hand-picked category shows exactly its selected items (that still
-    // exist in this playlist); the search then narrows within them.
-    ids = m_library->matchingItems(m->id(), filter && !filter->isSelection() ? &filter->definition : nullptr, search);
-    if (filter && filter->isSelection()) {
-        ids.intersect(filter->itemIds);
+    // The library resolves a category (rules, hand-picked members, and - when
+    // "Include subcategories" is on - everything below it) so the view and
+    // playback always agree; the search then narrows within the result.
+    if (filter) {
+        ids = m_library->categoryItemIds(m->id(), filter->id);
+        if (!search.isEmpty()) {
+            ids.intersect(m_library->matchingItems(m->id(), nullptr, search));
+        }
+        return ids;
     }
-    return ids;
+    return m_library->matchingItems(m->id(), nullptr, search);
 }
 
 void PlaylistDialog::openFlow() {
@@ -2108,7 +2226,39 @@ void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {
     }
     menu.addSeparator();
     QAction* buildAction = menu.addAction(tr("Build Category…"));
+    QAction* subAction = menu.addAction(tr("Build Subcategory…"));
+    subAction->setEnabled(user);
+    subAction->setToolTip(tr("Build a new category inside the selected one"));
+    // Move the selected category under another one (or back to the top level).
+    const qint64 selId = selected ? selected->id : 0;
+    const qint64 selParent = selected ? selected->parentId : 0;
+    QMenu* moveMenu = menu.addMenu(tr("Move Category To"));
+    moveMenu->setEnabled(user);
+    QHash<QAction*, qint64> moveActions;
+    QAction* toTop = nullptr;
+    if (user) {
+        toTop = moveMenu->addAction(tr("Top level"));
+        toTop->setEnabled(selParent > 0);
+        moveMenu->addSeparator();
+        QSet<qint64> excluded = categoryDescendantIds(m_filters, selId);
+        excluded.insert(selId); // never into itself or one of its own subcategories
+        addCategoryTree(moveMenu, 0, excluded, moveActions, [selParent](const PlaylistFilterInfo& f, QAction* a) {
+            a->setEnabled(f.id != selParent);
+        });
+    }
     QAction* chosen = menu.exec(globalPos);
+    if (chosen && chosen == toTop) {
+        onMoveCategory(selId, 0);
+        return;
+    }
+    if (chosen && moveActions.contains(chosen)) {
+        onMoveCategory(selId, moveActions.value(chosen));
+        return;
+    }
+    if (chosen == subAction) {
+        onBuildCategory(selId);
+        return;
+    }
     if (chosen == editAction) {
         onEditCategory();
     } else if (chosen == renameAction) {
@@ -2116,19 +2266,133 @@ void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {
     } else if (chosen == deleteAction) {
         onDeleteCategory();
     } else if (chosen == buildAction) {
-        onBuildCategory();
+        onBuildCategory(0);
     }
 }
 
-void PlaylistDialog::onBuildCategory() {
+void PlaylistDialog::addCategoryTree(QMenu* menu, qint64 parentId, const QSet<qint64>& excluded,
+                                     QHash<QAction*, qint64>& actions,
+                                     const std::function<void(const PlaylistFilterInfo&, QAction*)>& decorate) {
+    QSet<qint64> known;
+    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
+        known.insert(f.id);
+    }
+    const auto label = [](const QString& name) { return QString(name).replace(QLatin1Char('&'), QStringLiteral("&&")); };
+    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
+        // A category whose parent is unknown is shown at the top level.
+        const qint64 effectiveParent = known.contains(f.parentId) ? f.parentId : 0;
+        if (effectiveParent != parentId || excluded.contains(f.id)) {
+            continue;
+        }
+        bool hasChildren = false;
+        for (const PlaylistFilterInfo& c : std::as_const(m_filters)) {
+            hasChildren = hasChildren || (c.parentId == f.id && !excluded.contains(c.id));
+        }
+        if (!hasChildren) {
+            QAction* a = menu->addAction(label(f.name));
+            actions.insert(a, f.id);
+            decorate(f, a);
+            continue;
+        }
+        QMenu* sub = menu->addMenu(label(f.name));
+        sub->setToolTipsVisible(true);
+        QAction* self = sub->addAction(label(f.name));
+        actions.insert(self, f.id);
+        decorate(f, self);
+        sub->addSeparator();
+        addCategoryTree(sub, f.id, excluded, actions, decorate);
+    }
+}
+
+void PlaylistDialog::onMoveCategory(qint64 categoryId, qint64 newParentId) {
+    PlaylistModel* m = current();
+    if (!m || categoryId <= 0) {
+        return;
+    }
+    if (m_library->setCategoryParent(categoryId, m->id(), newParentId)) {
+        showNotice(newParentId > 0 ? tr("Category moved. No items were changed.")
+                                   : tr("Category moved to the top level. No items were changed."));
+    }
+}
+
+void PlaylistDialog::assignItemsToCategory(qint64 categoryId, const QSet<qint64>& itemIds) {
+    PlaylistModel* m = current();
+    if (!m || itemIds.isEmpty()) {
+        return;
+    }
+    QString name;
+    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
+        if (f.id == categoryId) {
+            name = f.name;
+        }
+    }
+    const int added = m_library->addItemsToCategory(categoryId, m->id(), itemIds);
+    if (added < 0) {
+        return; // errorOccurred already explained why
+    }
+    if (added == 0) {
+        showNotice(tr("Already in \"%1\" - nothing changed.").arg(name));
+        return;
+    }
+    announce(int(Notification::Kind::Success), tr("Added to Category"),
+             added == 1 ? tr("1 item was added to \"%1\". The playlist itself is unchanged.").arg(name)
+                        : tr("%1 items were added to \"%2\". The playlist itself is unchanged.").arg(added).arg(name),
+             QStringLiteral("category-assigned:%1").arg(categoryId),
+             tr("Added to category \"%1\".").arg(name));
+}
+
+void PlaylistDialog::onNewCategoryFromItems(const QSet<qint64>& itemIds) {
+    PlaylistModel* m = current();
+    if (!m || itemIds.isEmpty()) {
+        return;
+    }
+    bool ok = false;
+    const QString name =
+        QInputDialog::getText(this, tr("New Category"), tr("Category name:"), QLineEdit::Normal, QString(), &ok).trimmed();
+    if (!ok || name.isEmpty()) {
+        return;
+    }
+    if (name.compare(QLatin1String("All"), Qt::CaseInsensitive) == 0 || name.compare(tr("All"), Qt::CaseInsensitive) == 0) {
+        showNotice(tr("\"All\" is built in - choose another name."));
+        return;
+    }
+    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
+        if (f.name.compare(name, Qt::CaseInsensitive) == 0) {
+            showNotice(tr("This playlist already has a category called \"%1\".").arg(f.name));
+            return;
+        }
+    }
+    const qint64 id = m_library->createFilter(m->id(), name, FilterDefinition{}, QStringLiteral("selected"));
+    if (id <= 0) {
+        return;
+    }
+    if (!m_library->setCategoryItems(id, m->id(), itemIds)) {
+        m_library->deleteFilter(id, m->id()); // no half-made category
+        return;
+    }
+    showNotice(tr("Category \"%1\" created with the selected item. The playlist itself is unchanged.").arg(name));
+}
+
+void PlaylistDialog::onBuildCategory(qint64 parentId) {
     PlaylistModel* m = current();
     if (!m) {
         return;
     }
+    QString parentName;
+    for (const PlaylistFilterInfo& f : std::as_const(m_filters)) {
+        if (parentId > 0 && f.id == parentId) {
+            parentName = f.name;
+        }
+    }
+    if (parentId > 0 && parentName.isEmpty()) {
+        parentId = 0; // the parent vanished meanwhile: build a top-level category
+    }
     // Two ways to build a category: saved conditions, or a hand-picked
     // selection of this playlist's items.
-    QMessageBox choice(QMessageBox::Question, tr("Build Category"),
-                       tr("How do you want to build a category for \"%1\"?").arg(m->name()), QMessageBox::NoButton, this);
+    QMessageBox choice(QMessageBox::Question, parentId > 0 ? tr("Build Subcategory") : tr("Build Category"),
+                       parentId > 0 ? tr("How do you want to build a subcategory of \"%1\"?").arg(parentName)
+                                    : tr("How do you want to build a category for \"%1\"?").arg(m->name()),
+                       QMessageBox::NoButton, this);
     choice.setInformativeText(tr("Conditions: a saved filter, e.g. file names containing \"anime\". Matching items "
                                  "are included automatically.\n\nSelect from Playlist: tick the items of this playlist "
                                  "yourself. Nothing is copied."));
@@ -2150,8 +2414,11 @@ void PlaylistDialog::onBuildCategory() {
             m_library->deleteFilter(id, m->id()); // no half-made category
             return;
         }
+        if (parentId > 0) {
+            m_library->setCategoryParent(id, m->id(), parentId);
+        }
         reloadCategories(false);
-        m_categoryCombo->setCurrentIndex(qMax(0, m_categoryCombo->findData(id)));
+        m_categoryPicker->setCurrentCategory(id);
         showNotice(tr("Category created from your selection. Nothing was copied - the playlist is unchanged."));
         return;
     }
@@ -2160,8 +2427,11 @@ void PlaylistDialog::onBuildCategory() {
     }
     CategoryFilterDialog dialog(m_library, m, nullptr, this);
     if (dialog.exec() == QDialog::Accepted) {
+        if (parentId > 0) {
+            m_library->setCategoryParent(dialog.filterId(), m->id(), parentId);
+        }
         reloadCategories(false);
-        m_categoryCombo->setCurrentIndex(qMax(0, m_categoryCombo->findData(dialog.filterId())));
+        m_categoryPicker->setCurrentCategory(dialog.filterId());
         showNotice(tr("Category created. It's a saved filter - the playlist itself is unchanged."));
     }
 }
@@ -2223,12 +2493,15 @@ void PlaylistDialog::onDeleteCategory() {
         this, tr("Delete Category"),
         tr("Delete the category \"%1\"?\n\nOnly the saved filter is removed. Every item stays in \"%2\".")
                 .arg(copy.name, m->name()) +
+            (categoryDescendantIds(m_filters, copy.id).isEmpty()
+                 ? QString()
+                 : tr("\n\nIts subcategories are kept and move up one level.")) +
             (m_library->activeId() == m->id() && m_library->activeCategoryId() == copy.id
                  ? tr("\n\nThis category is the current wallpaper source; Motiva will stop rotating until you choose another.")
                  : QString()),
         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
     if (answer == QMessageBox::Yes && m_library->deleteFilter(copy.id, m->id())) {
-        m_categoryCombo->setCurrentIndex(0);
+        m_categoryPicker->setCurrentCategory(0);
         showNotice(tr("Deleted category \"%1\". No items were removed.").arg(copy.name));
     }
 }

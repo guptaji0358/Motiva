@@ -813,6 +813,9 @@ QString FlowDialog::timingSummary() const {
     QString when;
     if (m_playlist->isVideo()) {
         when = tr("Each video plays to its end, then the next one in this order starts.");
+    } else if (m_playlist->isMixed()) {
+        when = tr("Each video plays to its end, then the next item in this order starts. An image stays until "
+                  "its automatic change (unlock, Windows start or the timer) moves to the next item.");
     } else {
         QStringList parts;
         if (r.onInterval) {

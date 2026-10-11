@@ -62,6 +62,8 @@
         <file alias="category/dark/remove-condition.svg">../Assets/category/dark/remove-condition.svg</file>
         <file alias="category/dark/remove-condition-hover.svg">../Assets/category/dark/remove-condition-hover.svg</file>
         <file alias="category/dark/remove-condition-disabled.svg">../Assets/category/dark/remove-condition-disabled.svg</file>
+        <file alias="category/category-folder.svg">../Assets/category/category-folder.svg</file>
+        <file alias="category/chevron-down.svg">../Assets/category/chevron-down.svg</file>
         <file alias="status/status-dot.svg">../Assets/status/status-dot.svg</file>
         <file alias="status/check.svg">../Assets/status/check.svg</file>
         <file alias="status/cross.svg">../Assets/status/cross.svg</file>

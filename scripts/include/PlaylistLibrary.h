@@ -80,6 +80,15 @@ public:
     bool clearFlowPositions(qint64 playlistId) { return m_db.clearFlowPositions(playlistId); }
     bool setCategoryItems(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds);
     bool updateFilter(qint64 filterId, qint64 playlistId, const QString& name, const FilterDefinition& definition);
+    // Category hierarchy (see LibraryDatabase::setCategoryParent). parentId 0 = top level.
+    bool setCategoryParent(qint64 categoryId, qint64 playlistId, qint64 parentId);
+    // Whether choosing a category also takes in the media of its subcategories
+    // (default on). One library-wide display/playback preference.
+    bool includeSubcategories();
+    void setIncludeSubcategories(bool on);
+    // Adds `itemIds` to a hand-picked category (existing members stay; nothing
+    // is duplicated). Returns how many items were newly added, -1 on failure.
+    int addItemsToCategory(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds);
     bool deleteFilter(qint64 filterId, qint64 playlistId);
     QSet<qint64> matchingItems(qint64 playlistId, const FilterDefinition* definition, const QString& search) {
         return m_db.matchingItems(playlistId, definition, search);

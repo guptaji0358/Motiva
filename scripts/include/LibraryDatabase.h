@@ -12,10 +12,10 @@
 class QSqlDatabase;
 class QSqlQuery;
 
-// What a playlist holds. Stored as text ('image'/'video') so the file is
-// self-describing; the schema also accepts 'mixed', reserved for a future
-// mixed-media playlist UX (not exposed by Motiva yet).
-enum class PlaylistType { Image, Video };
+// What a playlist holds. Stored as text ('image'/'video'/'mixed') so the
+// file is self-describing. A Mixed playlist holds images AND videos in one
+// user-defined order; each item's kind comes from its own media record.
+enum class PlaylistType { Image, Video, Mixed };
 
 // Per-playlist automatic-change settings. Only meaningful for image
 // playlists today (video playlists advance when a video ends) - stored for
@@ -125,8 +125,26 @@ struct PlaylistFilterInfo {
     FilterDefinition definition;
     QString mode = QStringLiteral("condition"); // "condition" | "selected"
     QSet<qint64> itemIds;                       // selected mode only
+    qint64 parentId = 0;                        // 0 = top-level; see LibraryDatabase::setCategoryParent
     bool isSelection() const { return mode == QLatin1String("selected"); }
 };
+
+// Ids of every category below `categoryId` (children, grandchildren, ...),
+// never including `categoryId` itself. Safe against malformed parent data.
+inline QSet<qint64> categoryDescendantIds(const QVector<PlaylistFilterInfo>& all, qint64 categoryId) {
+    QSet<qint64> result;
+    QVector<qint64> pending{categoryId};
+    while (!pending.isEmpty()) {
+        const qint64 parent = pending.takeLast();
+        for (const PlaylistFilterInfo& f : all) {
+            if (f.parentId == parent && f.id != categoryId && !result.contains(f.id)) {
+                result.insert(f.id);
+                pending.push_back(f.id);
+            }
+        }
+    }
+    return result;
+}
 
 // The Motiva library: a .mtv file, which is a SQLite database (Qt SQL's
 // bundled SQLite driver - no separate SQLite dependency). It holds only
@@ -195,8 +213,12 @@ public:
     QVector<PlaylistItemRecord> items(qint64 playlistId);
     // Inserts `paths` (in order) at `position` (0-based; clamped). Returns
     // the new records in order; empty + lastError on failure.
+    // `itemTypes` (optional, same length as `paths`) gives each file's own
+    // media type ('image'/'video') - used by mixed playlists; otherwise
+    // `mediaType` applies to every file.
     QVector<PlaylistItemRecord> insertItems(qint64 playlistId, const QStringList& paths,
-                                            const QString& mediaType, int position);
+                                            const QString& mediaType, int position,
+                                            const QStringList& itemTypes = QStringList());
     bool removeItem(qint64 playlistId, qint64 itemId);
     bool clearItems(qint64 playlistId);
     // Rewrites every item's position to match `itemIdsInOrder`.
@@ -229,8 +251,14 @@ public:
     // `playlistId` are stored; the rows vanish with the item (FK cascade).
     bool setCategoryItems(qint64 categoryId, qint64 playlistId, const QSet<qint64>& itemIds);
     bool updatePlaylistFilter(qint64 filterId, const QString& name, const FilterDefinition& definition);
-    // Deletes the saved filter only - never media or playlist items.
+    // Deletes the saved filter only - never media or playlist items. Its
+    // subcategories move up to the deleted category's own parent.
     bool deletePlaylistFilter(qint64 filterId);
+    // Category hierarchy. Stored in library_metadata ("category_parents", a
+    // JSON child->parent map), so the schema is unchanged and categories from
+    // older libraries simply have no parent. parentId 0 = top level. Rejects
+    // unknown ids, categories of different playlists, self and cycles.
+    bool setCategoryParent(qint64 categoryId, qint64 parentId);
     // playlist_items.id of the playlist's items that pass `definition`
     // (nullptr = All) and contain every word of `search` in their file name
     // or path. Evaluated in SQL on stored metadata - no file is opened.
@@ -288,6 +316,11 @@ private:
     bool migrateToV8();
     bool migrateV8toV9();
     bool migrateV1toV4();
+    // Sanitized child->parent map (entries for missing categories, other
+    // playlists, self-parents and cycles are dropped). *changed tells the
+    // caller the stored JSON differs from the sanitized map.
+    QHash<qint64, qint64> loadCategoryParents(bool* changed = nullptr);
+    bool saveCategoryParents(const QHash<qint64, qint64>& parents);
     bool createV3CategoryTables(QSqlQuery& q);
     bool createFilterTable(QSqlQuery& q);
     int queryInt(const QString& sql, int fallback);
