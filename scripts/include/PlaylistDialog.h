@@ -201,6 +201,8 @@ private:
     IconButton* m_categoryMenuButton = nullptr;
     IconButton* m_newImageButton = nullptr;
     IconButton* m_newVideoButton = nullptr;
+    IconButton* m_importButton = nullptr;
+    IconButton* m_exportButton = nullptr;
     IconButton* m_buildCategoryButton = nullptr;
     QComboBox* m_arrangeCombo = nullptr;
     QPushButton* m_flowButton = nullptr;

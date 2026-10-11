@@ -77,6 +77,10 @@
         <file alias="playlist/light/add.svg">../Assets/playlist/light/add.svg</file>
         <file alias="playlist/light/add-disabled.svg">../Assets/playlist/light/add-disabled.svg</file>
         <file alias="playlist/light/search.svg">../Assets/playlist/light/search.svg</file>
+        <file alias="playlist/dark/import.svg">../Assets/playlist/dark/import.svg</file>
+        <file alias="playlist/dark/export.svg">../Assets/playlist/dark/export.svg</file>
+        <file alias="playlist/light/import.svg">../Assets/playlist/light/import.svg</file>
+        <file alias="playlist/light/export.svg">../Assets/playlist/light/export.svg</file>
         <file alias="playlist/dark/more.svg">../Assets/playlist/dark/more.svg</file>
         <file alias="playlist/dark/more-disabled.svg">../Assets/playlist/dark/more-disabled.svg</file>
         <file alias="playlist/light/more.svg">../Assets/playlist/light/more.svg</file>

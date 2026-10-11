@@ -549,6 +549,12 @@ void PlaylistDialog::applyThemedIcons() {
             b->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
         }
     }
+    if (m_importButton) {
+        m_importButton->setStateIcon(icon("import"));
+    }
+    if (m_exportButton) {
+        m_exportButton->setStateIcon(icon("export"));
+    }
     if (m_categoryMenuButton) {
         m_categoryMenuButton->setStateIcon(icon("more"), QIcon(), QIcon(), icon("more-disabled"));
     }
@@ -680,15 +686,19 @@ void PlaylistDialog::buildUi() {
     title->setFont(titleFont);
     header->addWidget(title);
     header->addStretch();
-    auto* importButton = new QPushButton(tr("Import…"), this);
-    importButton->setToolTip(tr("Add the playlists from another Motiva library (.mtv) to yours"));
-    connect(importButton, &QPushButton::clicked, this, &PlaylistDialog::onImport);
-    header->addWidget(importButton);
-    auto* exportButton = new QPushButton(tr("Export…"), this);
-    exportButton->setToolTip(tr("Save a copy of your playlist library as a .mtv file. Media files are "
-                                "referenced, not copied."));
-    connect(exportButton, &QPushButton::clicked, this, &PlaylistDialog::onExport);
-    header->addWidget(exportButton);
+    // Icon-only (SVGs set in applyThemedIcons); the tooltip and accessible
+    // name carry the text.
+    m_importButton = new IconButton(this);
+    m_importButton->setAccessibleName(tr("Import"));
+    m_importButton->setToolTip(tr("Import: add the playlists from another Motiva library (.mtv) to yours"));
+    connect(m_importButton, &QPushButton::clicked, this, &PlaylistDialog::onImport);
+    header->addWidget(m_importButton);
+    m_exportButton = new IconButton(this);
+    m_exportButton->setAccessibleName(tr("Export"));
+    m_exportButton->setToolTip(tr("Export: save a copy of your playlist library as a .mtv file. Media files "
+                                  "are referenced, not copied."));
+    connect(m_exportButton, &QPushButton::clicked, this, &PlaylistDialog::onExport);
+    header->addWidget(m_exportButton);
     root->addLayout(header);
 
     auto* rule = new QFrame(this);
