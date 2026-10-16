@@ -13,7 +13,7 @@
 // the screen it opens on. Not a fixed size, never maximized.
 namespace DialogSizing {
 
-inline void applyComfortableSize(QDialog* dialog, QSize preferred, qreal maxScreenFraction = 0.9) {
+inline void applyComfortableSize(QWidget* dialog, QSize preferred, qreal maxScreenFraction = 0.9) {
     if (QLayout* layout = dialog->layout()) {
         layout->activate();
     }

@@ -10,6 +10,7 @@
 #include "FlowDialog.h"
 #include "DialogSizing.h"
 #include "Theme.h"
+#include "SettingsManager.h"
 #include "VideoPlayer.h"
 
 #include <QAbstractProxyModel>
@@ -17,6 +18,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCollator>
+#include <QDialog>
 #include <QComboBox>
 #include <QDir>
 #include <QDrag>
@@ -24,6 +26,10 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGuiApplication>
+#include <QMoveEvent>
+#include <QResizeEvent>
+#include <QScreen>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -578,7 +584,7 @@ void PlaylistDialog::applyThemedIcons() {
 }
 
 void PlaylistDialog::changeEvent(QEvent* event) {
-    QDialog::changeEvent(event);
+    QWidget::changeEvent(event);
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
         applyThemedIcons();
     }
@@ -640,7 +646,8 @@ void PlaylistView::paintEvent(QPaintEvent* event) {
 // -------------------------------------------------------------- PlaylistDialog
 
 PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
-    : QDialog(parent), m_library(library) {
+    : QWidget(parent, Qt::Window), m_library(library) {
+    setObjectName(QStringLiteral("playlistsWindow"));
     setWindowTitle(tr("Playlists"));
     setWindowIcon(QIcon(playlistIconPath()));
     buildUi();
@@ -698,6 +705,14 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
 }
 
 void PlaylistDialog::buildUi() {
+    const auto createButton = [this](IconButton*& slot, const QString& text, const QString& name,
+                                     const QString& tip, const std::function<void()>& onClick) {
+        slot = new IconButton(QIcon(), text, this);
+        slot->setAccessibleName(name);
+        slot->setToolTip(tip);
+        connect(slot, &QPushButton::clicked, this, [onClick] { onClick(); });
+        return slot;
+    };
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(20, 18, 20, 18);
     root->setSpacing(12);
@@ -710,6 +725,22 @@ void PlaylistDialog::buildUi() {
     titleFont.setPointSize(titleFont.pointSize() + 3);
     title->setFont(titleFont);
     header->addWidget(title);
+    header->addSpacing(14);
+    // Creation and add actions live here (they used to sit at the bottom of
+    // the sidebar / editor); same buttons, same handlers and shortcuts.
+    header->addWidget(createButton(m_newImageButton, tr("Image Playlist"), tr("New Image Playlist"),
+                                   tr("New image playlist (Ctrl+Alt+N)"), [this] { createPlaylist(false); }));
+    header->addWidget(createButton(m_newVideoButton, tr("Video Playlist"), tr("New Video Playlist"),
+                                   tr("New video playlist (Ctrl+Shift+N)"), [this] { createPlaylist(true); }));
+    header->addWidget(createButton(m_newMixedButton, tr("Mixed Playlist"), tr("New Mixed Playlist"),
+                                   tr("New mixed playlist - images and videos in one order (Ctrl+Alt+M)"),
+                                   [this] { createMixedPlaylist(); }));
+    header->addSpacing(10);
+    m_addButton = new IconButton(this); // text/tooltip follow the open playlist (updateUi)
+    m_addButton->setAccessibleName(tr("Add Media"));
+    connect(m_addButton, &QPushButton::clicked, this, &PlaylistDialog::onAddMedia);
+    header->addWidget(m_addButton);
+    applyThemedIcons();
     header->addStretch();
     // Icon-only (SVGs set in applyThemedIcons); the tooltip and accessible
     // name carry the text.
@@ -757,7 +788,7 @@ void PlaylistDialog::buildUi() {
     });
     footer->addWidget(m_applyButton);
     auto* closeButton = new QPushButton(tr("Close"), this);
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
+    connect(closeButton, &QPushButton::clicked, this, &QWidget::close);
     footer->addWidget(closeButton);
     root->addLayout(footer);
 }
@@ -798,30 +829,6 @@ QWidget* PlaylistDialog::buildSidebar() {
             &PlaylistDialog::onSelectionInSidebar);
     col->addWidget(m_playlistList, 1);
 
-    auto* buttons = new QHBoxLayout();
-    buttons->setSpacing(6);
-    // Two direct buttons - no type menu (that dropdown was what Ctrl+N popped).
-    m_newImageButton = new IconButton(QIcon(), tr("Image Playlist"), panel);
-    m_newImageButton->setAccessibleName(tr("New Image Playlist"));
-    auto* newImage = m_newImageButton;
-    newImage->setToolTip(tr("New image playlist (Ctrl+Alt+N)"));
-    connect(newImage, &QPushButton::clicked, this, [this] { createPlaylist(false); });
-    buttons->addWidget(newImage);
-    m_newVideoButton = new IconButton(QIcon(), tr("Video Playlist"), panel);
-    m_newVideoButton->setAccessibleName(tr("New Video Playlist"));
-    auto* newVideo = m_newVideoButton;
-    newVideo->setToolTip(tr("New video playlist (Ctrl+Shift+N)"));
-    connect(newVideo, &QPushButton::clicked, this, [this] { createPlaylist(true); });
-    buttons->addWidget(newVideo);
-    col->addLayout(buttons);
-    auto* mixedRow = new QHBoxLayout();
-    m_newMixedButton = new IconButton(QIcon(), tr("Mixed Playlist"), panel);
-    m_newMixedButton->setAccessibleName(tr("New Mixed Playlist"));
-    m_newMixedButton->setToolTip(tr("New mixed playlist - images and videos in one order (Ctrl+Alt+M)"));
-    connect(m_newMixedButton, &QPushButton::clicked, this, [this] { createMixedPlaylist(); });
-    mixedRow->addWidget(m_newMixedButton);
-    col->addLayout(mixedRow);
-    applyThemedIcons();
     return panel;
 }
 
@@ -1002,10 +1009,6 @@ QWidget* PlaylistDialog::buildEditor() {
 
     auto* actions = new QHBoxLayout();
     actions->setSpacing(8);
-    m_addButton = new IconButton(editor);
-    applyThemedIcons();
-    connect(m_addButton, &QPushButton::clicked, this, &PlaylistDialog::onAddMedia);
-    actions->addWidget(m_addButton);
     m_showNowButton = new QPushButton(tr("Show Now"), editor);
     m_showNowButton->setToolTip(tr("Make the selected item the current one (Enter)"));
     connect(m_showNowButton, &QPushButton::clicked, this, &PlaylistDialog::onShowNow);
@@ -1272,8 +1275,84 @@ void PlaylistDialog::onRotationEdited() {
     m_intervalCombo->setEnabled(r.onInterval);
 }
 
+void PlaylistDialog::setSettings(SettingsManager* settings) {
+    m_settings = settings;
+    restoreSavedGeometry();
+}
+
+void PlaylistDialog::restoreSavedGeometry() {
+    if (!m_settings) {
+        return;
+    }
+    const QByteArray saved = m_settings->playlistWindowGeometry();
+    if (saved.isEmpty() || !restoreGeometry(saved)) {
+        return;
+    }
+    // Monitors may have changed since: if too little of the window is on any
+    // screen to grab it, bring it back onto the nearest one.
+    const QRect frame = frameGeometry();
+    bool reachable = false;
+    for (QScreen* screen : QGuiApplication::screens()) {
+        const QRect shared = screen->availableGeometry().intersected(frame);
+        if (shared.width() >= 120 && shared.height() >= 60) {
+            reachable = true;
+            break;
+        }
+    }
+    if (!reachable) {
+        QScreen* screen = QGuiApplication::primaryScreen();
+        const QRect avail = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 720);
+        resize(size().boundedTo(avail.size() * 9 / 10));
+        move(avail.center() - rect().center());
+    }
+}
+
+void PlaylistDialog::saveGeometryLater() {
+    if (!m_settings || !isVisible()) {
+        return;
+    }
+    if (!m_geometryTimer) {
+        m_geometryTimer = new QTimer(this);
+        m_geometryTimer->setSingleShot(true);
+        m_geometryTimer->setInterval(400);
+        connect(m_geometryTimer, &QTimer::timeout, this, [this] {
+            if (m_settings && !isMinimized()) {
+                m_settings->setPlaylistWindowGeometry(saveGeometry());
+            }
+        });
+    }
+    m_geometryTimer->start();
+}
+
+void PlaylistDialog::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    saveGeometryLater();
+}
+
+void PlaylistDialog::moveEvent(QMoveEvent* event) {
+    QWidget::moveEvent(event);
+    saveGeometryLater();
+}
+
+void PlaylistDialog::hideEvent(QHideEvent* event) {
+    QWidget::hideEvent(event);
+    // Closed inside the debounce window: write the geometry now.
+    if (m_settings && !isMinimized() && !event->spontaneous()) {
+        m_settings->setPlaylistWindowGeometry(saveGeometry());
+    }
+}
+
+void PlaylistDialog::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier) {
+        close();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
 void PlaylistDialog::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    QWidget::showEvent(event);
     setWindowIcon(QIcon(playlistIconPath()));
     bindSelectedPlaylist();
 }
@@ -1455,7 +1534,7 @@ bool PlaylistDialog::eventFilter(QObject* watched, QEvent* event) {
             return true; // also keeps 'D' from triggering the list's type-ahead search
         }
     }
-    return QDialog::eventFilter(watched, event);
+    return QWidget::eventFilter(watched, event);
 }
 
 void PlaylistDialog::showItemMenu(const QPoint& pos) {
@@ -2008,6 +2087,7 @@ void PlaylistDialog::updateUi() {
                                        : tr("Create a playlist with \"Image Playlist\" or \"Video Playlist\" to get started.\n\n"
                                             "Image playlists change image on unlock, at Windows start or on a timer.\n"
                                             "Video playlists play their videos one after another."));
+    m_addButton->setEnabled(m != nullptr);
     if (!m) {
         m_applyButton->setEnabled(false);
         m_applyButton->setText(tr("Set as Wallpaper"));

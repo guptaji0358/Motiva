@@ -838,6 +838,7 @@ void MainWindow::buildUi() {
 
     m_playlistDialog = new PlaylistDialog(m_library, this);
     m_playlistDialog->setBackupManager(m_backup);
+    m_playlistDialog->setSettings(&m_settings);
     connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
 
     m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, m_backup, this);
@@ -1851,7 +1852,13 @@ void MainWindow::openPlaylist() {
         return;
     }
     syncPlaylistDialogState();
-    m_playlistDialog->show();
+    // One window, reused: a minimized one is restored, a hidden one shown,
+    // an open one just brought forward.
+    if (m_playlistDialog->isMinimized()) {
+        m_playlistDialog->showNormal();
+    } else {
+        m_playlistDialog->show();
+    }
     m_playlistDialog->raise();
     m_playlistDialog->activateWindow();
 }

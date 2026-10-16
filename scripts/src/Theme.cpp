@@ -155,7 +155,7 @@ QString colorSheet(const QColor& c) { return c.name(QColor::HexArgb); }
 QString auroraStyleSheet(const ThemePalette& p) {
     constexpr int kAuroraRadius = 8;
     return QStringLiteral(R"(
-QMainWindow, QDialog {
+QMainWindow, QDialog, QWidget#playlistsWindow {
     background: %1;
 }
 QWidget {
@@ -410,7 +410,7 @@ QDialogButtonBox QPushButton {
 QString onyxStyleSheet(const ThemePalette& p) {
     constexpr int kOnyxRadius = 2;
     return QStringLiteral(R"(
-QMainWindow, QDialog {
+QMainWindow, QDialog, QWidget#playlistsWindow {
     background: %1;
 }
 QWidget {

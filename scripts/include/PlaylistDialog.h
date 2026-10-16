@@ -3,7 +3,8 @@
 #include <functional>
 #include <QHash>
 
-#include <QDialog>
+#include <QWidget>
+#include <QByteArray>
 #include <QListView>
 #include <QStringList>
 #include "LibraryDatabase.h" // PlaylistFilterInfo
@@ -26,6 +27,7 @@ class QPushButton;
 class QSortFilterProxyModel;
 class QStackedWidget;
 class QWidget;
+class SettingsManager;
 
 // Card strip for one playlist (images or videos): cards in playlist order,
 // reorderable by dragging a card to a new position (drop indicator drawn
@@ -86,11 +88,12 @@ private:
 
 // "Playlists" window: the user-facing side of PlaylistLibrary. Left: My
 // Playlists (create/rename/delete, which one is active). Right: the
-// selected playlist's items, actions and settings. Non-modal, like
-// SettingsDialog. Everything here edits the library; MainWindow reacts to
+// selected playlist's items, actions and settings. A dedicated top-level
+// window (Qt::Window, owned by MainWindow, one instance that MainWindow
+// re-activates), not a modal dialog. Everything here edits the library; MainWindow reacts to
 // the library's signals to keep the actual wallpaper in sync, so this
 // window never touches the wallpaper pipeline itself.
-class PlaylistDialog : public QDialog {
+class PlaylistDialog : public QWidget {
     Q_OBJECT
 public:
     PlaylistDialog(PlaylistLibrary* library, QWidget* parent = nullptr);
@@ -107,6 +110,10 @@ public:
     // For "Restore from Backup" in the missing-file banner (optional - without
     // a backup manager the button simply never appears).
     void setBackupManager(BackupManager* backup);
+
+    // Remembers the window's size/position (playlistWindow/geometry) and
+    // restores it now, kept on a visible screen. Optional.
+    void setSettings(SettingsManager* settings);
 
     // "New Image Playlist" (Ctrl+Alt+N) / "New Video Playlist"
     // (Ctrl+Shift+N): the normal name-then-create flow, no type menu first.
@@ -126,6 +133,12 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    // Esc closes the window (what QDialog did); editors and popups that use Esc
+    // themselves consume it first, so it only gets here when nothing else wants it.
+    void keyPressEvent(QKeyEvent* event) override;
     void changeEvent(QEvent* event) override;
     // Delete / D on the My Playlists list (only while the list itself has
     // focus - an inline rename editor or any text field keeps its keys).
@@ -209,7 +222,12 @@ private:
     void onRenameCategory();
     void onDeleteCategory();
 
+    void saveGeometryLater();
+    void restoreSavedGeometry();
+
     PlaylistLibrary* m_library;
+    SettingsManager* m_settings = nullptr;
+    QTimer* m_geometryTimer = nullptr;
     bool m_onDesktop = false;
     bool m_binding = false;
 

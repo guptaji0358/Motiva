@@ -211,6 +211,13 @@ void SettingsManager::setNotifyPlayback(bool enabled) {
     m_settings.setValue("notifications/playback", enabled);
 }
 
+QByteArray SettingsManager::playlistWindowGeometry() const {
+    return m_settings.value("playlistWindow/geometry").toByteArray();
+}
+void SettingsManager::setPlaylistWindowGeometry(const QByteArray& geometry) {
+    m_settings.setValue("playlistWindow/geometry", geometry);
+}
+
 int SettingsManager::settingsLayout() const {
     const int v = m_settings.value("app/settingsLayout", 0).toInt();
     return (v >= 0 && v <= 2) ? v : 0;
@@ -346,7 +353,7 @@ void SettingsManager::resetPreferences() {
                             "app/theme", "app/uiStyle", "app/appearance", "notifications/inApp",
                             "notifications/desktop", "notifications/success", "notifications/error",
                             "notifications/warning", "notifications/background", "notifications/playback",
-                            "app/settingsLayout"}) {
+                            "app/settingsLayout", "playlistWindow/geometry"}) {
         m_settings.remove(QLatin1String(key));
     }
     m_settings.sync();

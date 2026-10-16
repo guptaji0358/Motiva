@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QSettings>
 #include <QString>
 #include <QStringList>
@@ -86,6 +87,10 @@ public:
 
     // How the Settings window presents its groups: 0 = Tabs (default),
     // 1 = Sidebar, 2 = Grouped page. Presentation only.
+    // Playlists window size/position (QWidget::saveGeometry blob); empty = never saved.
+    QByteArray playlistWindowGeometry() const;
+    void setPlaylistWindowGeometry(const QByteArray& geometry);
+
     int settingsLayout() const;
     void setSettingsLayout(int layout);
 
