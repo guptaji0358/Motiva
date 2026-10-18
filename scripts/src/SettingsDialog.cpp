@@ -3,6 +3,7 @@
 #include "SettingsManager.h"
 #include "DialogSizing.h"
 #include "Theme.h"
+#include "GlUi.h"
 #include "ThemeEditorDialog.h"
 #include "ThemeTransitionOverlay.h"
 #include "CleanupManager.h"
@@ -34,123 +35,171 @@ SettingsDialog::SettingsDialog(WallpaperManager* manager, SettingsManager* setti
                                BackupManager* backup, QWidget* parent)
     : QDialog(parent), m_manager(manager), m_settings(settings), m_cleanup(cleanup), m_backup(backup) {
     setWindowTitle(tr("Settings"));
+    // Borderless GL window like the main window (see GlUi): custom title
+    // strip, drag/resize through nativeEvent().
+    setWindowFlag(Qt::FramelessWindowHint, true);
     m_transitionOverlay = new ThemeTransitionOverlay(this);
     // Embedded via resources/app.qrc (Assets/settings-icon/settings.svg)
     // - same gear icon as the header button/tray menu entry that opens
-    // this dialog, for visual consistency. Picks the light/dark SVG
-    // variant matching the current Motiva Theme - see Theme::iconVariant()
-    // and MainWindow.cpp's settingsIconPath().
+    // this dialog. Picks the light/dark SVG variant matching the current
+    // Motiva Theme - see Theme::iconVariant() and MainWindow.cpp's
+    // settingsIconPath().
     setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg")
                              .arg(Theme::iconVariant(Theme::currentTheme()))));
     buildUi();
-    // Redo of the "Popup proportions" fix: the previous pass split content
-    // into two columns but only bumped setMinimumSize() to 560x320 (a
-    // 1.75:1 ratio that's landscape on paper, yet still rendered
-    // basically square/tall in practice) - because a QFormLayout's fields
-    // default to growing only as much as their sizeHint demands
-    // (QFormLayout::FieldsStayAtSizeHint is the *default* growth policy),
-    // so the combo boxes/labels never actually claimed the extra width
-    // columns->addLayout(..., 3/2) implied; adjustSize() then shrank the
-    // window right back down to that narrow content's sizeHint, with only
-    // the 560px floor propping the width up at all - the two columns were
-    // narrow content Qt was free to shrink, not a real landscape layout.
-    //
-    // Real fix, in the layout itself (see buildUi() below), not a bigger
-    // hardcoded floor fighting the layout:
-    //  - both QFormLayout instances now use AllNonFixedFieldsGrow, so their
-    //    combo boxes actually expand to fill the column width given to them
-    //    by the QHBoxLayout stretch factors, instead of sizing to content;
-    //  - both columns are wrapped in a QWidget with
-    //    QSizePolicy::Expanding so the QHBoxLayout's 1:1 stretch is
-    //    honored by real widgets, not by two QVBoxLayouts Qt can still
-    //    collapse.
-    // With the layout itself now landscape-shaped, this minimum is a
-    // sensible floor (not a fight): resulting default size lands in the
-    // ~760x380 range on this content, comfortably inside the requested
-    // 720-800 x 360-450 range, and the dialog stays freely resizable
-    // larger or smaller (down to this floor) afterward.
     connect(m_cleanup, &CleanupManager::preferencesChanged, this, &SettingsDialog::onPreferencesChangedExternally);
-    DialogSizing::applyComfortableSize(this, QSize(880, 520));
+    resize(920, 640);
+    setMinimumSize(640, 440);
 }
 
 void SettingsDialog::buildUi() {
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 20, 20, 20);
-    root->setSpacing(14);
+    auto* box = new QVBoxLayout(this);
+    box->setContentsMargins(0, 0, 0, 0);
+    m_canvas = new GlCanvas(this);
+    box->addWidget(m_canvas);
+    m_canvas->setAccessibleName(tr("Settings"));
+    m_canvas->setLayoutCallback([this](const QSizeF& s) { layoutGl(s); });
+    m_canvas->setWheelCallback([this](int delta, const QPointF& pos) {
+        if (m_contentPanel && m_contentPanel->rect().contains(pos)) {
+            scrollBy(-delta / 120.0 * 64.0);
+        }
+    });
 
-    // Settings are grouped into pages (see SettingsPage). Every control is
-    // created exactly once and only re-parented when the navigation layout
-    // changes (applyNavigationLayout), so values are never duplicated or reset.
-    QVBoxLayout* leftCol = nullptr;
-    QVBoxLayout* rightCol = nullptr;
-    const auto makePage = [this](int order, const QString& title) {
-        auto* page = new QWidget(this);
-        auto* col = new QVBoxLayout(page);
-        col->setContentsMargins(4, 8, 4, 4);
-        col->setSpacing(14);
-        m_pages.push_back({order, title, page});
-        return col;
+    // Settings are grouped into pages. Every control is created exactly once;
+    // the navigation style (tabs / sidebar / one grouped page) only decides
+    // which rows are laid out where, so values are never duplicated or reset.
+    m_pages = {{0, tr("General")},
+               {1, tr("Appearance")},
+               {2, tr("Display and Playback")},
+               {3, tr("Notifications")},
+               {4, tr("Integration")}};
+    enum { PgGeneral, PgAppearance, PgDisplay, PgNotify, PgIntegration };
+
+    // Panels first so every control paints above them.
+    m_titlePanel = new GlPanel(m_canvas);
+    m_titlePanel->setBlock(GlPanel::Block::Accent);
+    m_titlePanel->setRadiusPx(16);
+    m_navPanel = new GlPanel(m_canvas);
+    m_navPanel->setBlock(GlPanel::Block::Accent2);
+    m_contentPanel = new GlPanel(m_canvas);
+    m_contentPanel->setRadiusPx(20);
+
+    m_titleLabel = new GlLabel(m_canvas);
+    m_titleLabel->setText(tr("Settings"));
+    m_titleLabel->setPointSize(14);
+    m_titleLabel->setBold(true);
+    m_subtitleLabel = new GlLabel(m_canvas);
+    m_subtitleLabel->setText(tr("Preferences"));
+    m_subtitleLabel->setPointSize(7.5);
+    m_subtitleLabel->setBold(true);
+    m_subtitleLabel->setCaps(true);
+    m_subtitleLabel->setTone(GlLabel::Tone::Dim);
+    m_closeButton = new GlButton(m_canvas, GlButton::Kind::Close);
+    m_closeButton->setToolTip(tr("Close"));
+    connect(m_closeButton, &GlButton::clicked, this, &QDialog::close);
+
+    // Rows ------------------------------------------------------------
+    const auto addSection = [this](int page, const QString& title) {
+        auto* l = new GlLabel(m_canvas);
+        l->setText(title);
+        l->setCaps(true);
+        l->setBold(true);
+        l->setPointSize(8.5);
+        l->setTone(GlLabel::Tone::Accent);
+        l->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
+        m_rows.push_back({Row::Section, page, l, nullptr, 46});
+    };
+    const auto addToggle = [this](int page, const QString& text, const QString& tip = QString(), qreal indent = 0) {
+        auto* t = new GlToggle(m_canvas);
+        t->setText(text);
+        t->setToolTip(tip);
+        t->setIndent(indent);
+        m_rows.push_back({Row::Toggle, page, t, nullptr, 46});
+        return t;
+    };
+    const auto addDropdown = [this](int page, const QString& text) {
+        auto* d = new GlDropdown(m_canvas);
+        d->setText(text);
+        m_rows.push_back({Row::Dropdown, page, d, nullptr, 54});
+        return d;
+    };
+    const auto addButtonRow = [this](int page, GlLabel* desc, const QString& button) {
+        auto* b = new GlButton(m_canvas, GlButton::Kind::Secondary);
+        b->setText(button);
+        m_rows.push_back({Row::ButtonRow, page, desc, b, 58});
+        return b;
+    };
+    const auto makeDesc = [this](const QString& text) {
+        auto* l = new GlLabel(m_canvas);
+        l->setText(text);
+        l->setPointSize(9.5);
+        l->setTone(GlLabel::Tone::Dim);
+        l->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        return l;
     };
 
-    leftCol = makePage(2, tr("Display and Playback"));
-    auto* displaySection = new QLabel(tr("Display"));
-    displaySection->setObjectName(QStringLiteral("sectionLabel"));
-    QFont sectionFont = displaySection->font();
-    sectionFont.setBold(true);
-    displaySection->setFont(sectionFont);
-    leftCol->addWidget(displaySection);
+    // General
+    addSection(PgGeneral, tr("General"));
+    m_startWithWindowsCheck = addToggle(PgGeneral, tr("Start with Windows"));
+    connect(m_startWithWindowsCheck, &GlToggle::toggled, this, &SettingsDialog::onStartWithWindowsToggled);
+    m_playImagesOnBatteryCheck = addToggle(
+        PgGeneral, tr("Play Images on Battery"),
+        tr("Keep image wallpapers visible (and let image playlists advance) while running on battery power. "
+           "When off, they are hidden on battery and come back when AC power returns."));
+    connect(m_playImagesOnBatteryCheck, &GlToggle::toggled, this, &SettingsDialog::onPlayImagesOnBatteryToggled);
+    m_playVideosOnBatteryCheck = addToggle(
+        PgGeneral, tr("Play Videos on Battery"),
+        tr("Keep video wallpapers playing while running on battery power. When off, they are paused and hidden "
+           "on battery and come back when AC power returns."));
+    connect(m_playVideosOnBatteryCheck, &GlToggle::toggled, this, &SettingsDialog::onPlayVideosOnBatteryToggled);
 
-    auto* displayForm = new QFormLayout();
-    displayForm->setSpacing(10);
-    displayForm->setContentsMargins(0, 4, 0, 0);
-    // Default growth policy (FieldsStayAtSizeHint) is exactly what let
-    // the combo boxes sit narrow inside a "wide" column - this makes them
-    // actually claim the width the column now really has.
-    displayForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    // Appearance
+    addSection(PgAppearance, tr("Theme"));
+    // One "Theme" selector - each entry is a complete, independently-designed
+    // Motiva appearance (see Theme.h). Item order matches Theme::AppTheme's
+    // ordinal order exactly, so the index casts straight to Theme::AppTheme.
+    m_themeCombo = addDropdown(PgAppearance, tr("Theme"));
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::DarkAurora));
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::LightAurora));
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::DarkOnyx));
+    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::LightOnyx));
+    m_themeCombo->setToolTip(tr("Choose Motiva's visual theme."));
+    connect(m_themeCombo, &GlDropdown::currentIndexChanged, this, &SettingsDialog::onThemeChanged);
+    auto* customizeThemeButton =
+        addButtonRow(PgAppearance, makeDesc(tr("Edit colors, pick an accent preset, check contrast.")), tr("Customize Theme..."));
+    customizeThemeButton->setToolTip(
+        tr("Edit the colors of the current theme, pick an accent preset, or check text contrast. "
+           "Each theme keeps its own customization, and the original palette can always be restored."));
+    connect(customizeThemeButton, &GlButton::clicked, this, [this] {
+        ThemeEditorDialog editor(m_settings, this);
+        editor.exec();
+    });
 
-    m_scalingCombo = new QComboBox(this);
+    // Display and Playback
+    addSection(PgDisplay, tr("Display"));
+    m_scalingCombo = addDropdown(PgDisplay, tr("Scaling"));
     m_scalingCombo->addItems({tr("Fill"), tr("Fit"), tr("Stretch"), tr("Original")});
-    connect(m_scalingCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &SettingsDialog::onScalingChanged);
-    displayForm->addRow(tr("Scaling:"), m_scalingCombo);
-
-    m_monitorCombo = new QComboBox(this);
-    connect(m_monitorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &SettingsDialog::onMonitorSelectionChanged);
-    displayForm->addRow(tr("Monitor:"), m_monitorCombo);
+    connect(m_scalingCombo, &GlDropdown::currentIndexChanged, this, &SettingsDialog::onScalingChanged);
+    m_monitorCombo = addDropdown(PgDisplay, tr("Monitor"));
+    connect(m_monitorCombo, &GlDropdown::currentIndexChanged, this, &SettingsDialog::onMonitorSelectionChanged);
     refreshMonitorList();
-
-    leftCol->addLayout(displayForm);
-
-    auto* playbackSection = new QLabel(tr("Playback"));
-    playbackSection->setObjectName(QStringLiteral("sectionLabel"));
-    playbackSection->setFont(sectionFont);
-    leftCol->addWidget(playbackSection);
-
-    auto* volLayout = new QHBoxLayout();
-    volLayout->setSpacing(10);
-    volLayout->addWidget(new QLabel(tr("Volume:")));
-    m_volumeSlider = new QSlider(Qt::Horizontal, this);
-    m_volumeSlider->setRange(0, 100);
-    connect(m_volumeSlider, &QSlider::valueChanged, this, &SettingsDialog::onVolumeChanged);
-    volLayout->addWidget(m_volumeSlider);
-    leftCol->addLayout(volLayout);
-
-    m_muteCheck = new QCheckBox(tr("Mute"), this);
-    connect(m_muteCheck, &QCheckBox::toggled, this, &SettingsDialog::onMuteToggled);
-    leftCol->addWidget(m_muteCheck);
-
-    m_loopCheck = new QCheckBox(tr("Loop video"), this);
-    connect(m_loopCheck, &QCheckBox::toggled, this, &SettingsDialog::onLoopToggled);
-    leftCol->addWidget(m_loopCheck);
+    addSection(PgDisplay, tr("Playback"));
+    {
+        auto* v = new GlSlider(m_canvas);
+        v->setText(tr("Volume"));
+        v->setRange(0, 100);
+        m_rows.push_back({Row::Slider, PgDisplay, v, nullptr, 54});
+        m_volumeSlider = v;
+    }
+    connect(m_volumeSlider, &GlSlider::valueChanged, this, &SettingsDialog::onVolumeChanged);
+    m_muteCheck = addToggle(PgDisplay, tr("Mute"));
+    connect(m_muteCheck, &GlToggle::toggled, this, &SettingsDialog::onMuteToggled);
+    m_loopCheck = addToggle(PgDisplay, tr("Loop video"));
+    connect(m_loopCheck, &GlToggle::toggled, this, &SettingsDialog::onLoopToggled);
 
     // Notifications (see NotificationManager). Each switch is saved the
     // moment it is toggled and read live by the notifier - no restart.
-    leftCol = makePage(3, tr("Notifications"));
-    auto* notifySection = new QLabel(tr("Notifications"));
-    notifySection->setObjectName(QStringLiteral("sectionLabel"));
-    notifySection->setFont(sectionFont);
-    leftCol->addWidget(notifySection);
+    addSection(PgNotify, tr("Notifications"));
     struct NotifyRow {
         const char* text;
         const char* tip;
@@ -174,103 +223,28 @@ void SettingsDialog::buildUi() {
          &SettingsManager::setNotifyPlayback},
     };
     for (int i = 0; i < 7; ++i) {
-        m_notifyChecks[i] = new QCheckBox(tr(rows[i].text), this);
-        m_notifyChecks[i]->setToolTip(tr(rows[i].tip));
-        if (i >= 2) {
-            m_notifyChecks[i]->setStyleSheet(QStringLiteral("margin-left: 18px;")); // sub-switches of the two channels
-        }
+        m_notifyChecks[i] = addToggle(PgNotify, tr(rows[i].text), tr(rows[i].tip), i >= 2 ? 22 : 0); // sub-switches
         const auto setter = rows[i].setter;
-        connect(m_notifyChecks[i], &QCheckBox::toggled, this, [this, setter](bool on) { (m_settings->*setter)(on); });
-        leftCol->addWidget(m_notifyChecks[i]);
+        connect(m_notifyChecks[i], &GlToggle::toggled, this, [this, setter](bool on) { (m_settings->*setter)(on); });
     }
 
-    rightCol = makePage(0, tr("General"));
-    auto* generalSection = new QLabel(tr("General"));
-    generalSection->setObjectName(QStringLiteral("sectionLabel"));
-    generalSection->setFont(sectionFont);
-    rightCol->addWidget(generalSection);
-
-    m_startWithWindowsCheck = new QCheckBox(tr("Start with Windows"), this);
-    connect(m_startWithWindowsCheck, &QCheckBox::toggled, this, &SettingsDialog::onStartWithWindowsToggled);
-    rightCol->addWidget(m_startWithWindowsCheck);
-
-    m_playImagesOnBatteryCheck = new QCheckBox(tr("Play Images on Battery"), this);
-    m_playImagesOnBatteryCheck->setToolTip(
-        tr("Keep image wallpapers visible (and let image playlists advance) while running on battery power. "
-           "When off, they are hidden on battery and come back when AC power returns."));
-    connect(m_playImagesOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onPlayImagesOnBatteryToggled);
-    rightCol->addWidget(m_playImagesOnBatteryCheck);
-
-    m_playVideosOnBatteryCheck = new QCheckBox(tr("Play Videos on Battery"), this);
-    m_playVideosOnBatteryCheck->setToolTip(
-        tr("Keep video wallpapers playing while running on battery power. When off, they are paused and hidden "
-           "on battery and come back when AC power returns."));
-    connect(m_playVideosOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onPlayVideosOnBatteryToggled);
-    rightCol->addWidget(m_playVideosOnBatteryCheck);
-
-    rightCol = makePage(1, tr("Appearance"));
-    auto* themeForm = new QFormLayout();
-    themeForm->setSpacing(10);
-    themeForm->setContentsMargins(0, 4, 0, 0);
-    themeForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-
-    // One "Theme" selector, not two competing Appearance/Visual Style
-    // axes - each entry is a complete, independently-designed Motiva
-    // appearance (see Theme.h). Item order matches Theme::AppTheme's own
-    // ordinal order exactly, so `index` here can be cast straight to
-    // Theme::AppTheme with no separate lookup table.
-    m_themeCombo = new QComboBox(this);
-    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::DarkAurora));
-    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::LightAurora));
-    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::DarkOnyx));
-    m_themeCombo->addItem(Theme::themeName(Theme::AppTheme::LightOnyx));
-    m_themeCombo->setToolTip(tr("Choose Motiva's visual theme."));
-    connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &SettingsDialog::onThemeChanged);
-    themeForm->addRow(tr("Theme:"), m_themeCombo);
-    rightCol->addLayout(themeForm);
-
-    auto* customizeThemeButton = new QPushButton(tr("Customize Theme..."), this);
-    customizeThemeButton->setToolTip(
-        tr("Edit the colors of the current theme, pick an accent preset, or check text contrast. "
-           "Each theme keeps its own customization, and the original palette can always be restored."));
-    connect(customizeThemeButton, &QPushButton::clicked, this, [this] {
-        ThemeEditorDialog editor(m_settings, this);
-        editor.exec();
-    });
-    rightCol->addWidget(customizeThemeButton, 0, Qt::AlignLeft);
-
-    rightCol = makePage(4, tr("Integration"));
-    auto* integrationSection = new QLabel(tr("Windows Integration"));
-    integrationSection->setObjectName(QStringLiteral("sectionLabel"));
-    integrationSection->setFont(sectionFont);
-    rightCol->addWidget(integrationSection);
-
-    m_showInWindowsSearchCheck = new QCheckBox(tr("Show Motiva in Windows Search"), this);
-    m_showInWindowsSearchCheck->setToolTip(
-        tr("Add a Start Menu shortcut so Motiva can be found via Windows Search."));
-    connect(m_showInWindowsSearchCheck, &QCheckBox::toggled, this,
-        &SettingsDialog::onShowInWindowsSearchToggled);
-    rightCol->addWidget(m_showInWindowsSearchCheck);
-
-    m_explorerIntegrationCheck = new QCheckBox(tr("Set as background for supported media"), this);
-    m_explorerIntegrationCheck->setToolTip(
+    // Integration
+    addSection(PgIntegration, tr("Windows Integration"));
+    m_showInWindowsSearchCheck = addToggle(PgIntegration, tr("Show Motiva in Windows Search"),
+                                           tr("Add a Start Menu shortcut so Motiva can be found via Windows Search."));
+    connect(m_showInWindowsSearchCheck, &GlToggle::toggled, this, &SettingsDialog::onShowInWindowsSearchToggled);
+    m_explorerIntegrationCheck = addToggle(
+        PgIntegration, tr("Set as background for supported media"),
         tr("Adds one \"Motiva\" entry to the right-click menu for supported video, GIF and image files "
            "in File Explorer, with \"Set as background\" and \"Add to playlist\" (videos and images). On "
            "Windows 11 this may appear under \"Show more options\"."));
-    connect(m_explorerIntegrationCheck, &QCheckBox::toggled, this,
-        &SettingsDialog::onExplorerIntegrationToggled);
-    rightCol->addWidget(m_explorerIntegrationCheck);
+    connect(m_explorerIntegrationCheck, &GlToggle::toggled, this, &SettingsDialog::onExplorerIntegrationToggled);
 
     // Optional local media backup: the ON/OFF switch (OFF by default) and a
     // one-line status; details, progress and storage live in BackupWindow.
-    auto* backupSection = new QLabel(tr("Media Backup"));
-    backupSection->setObjectName(QStringLiteral("sectionLabel"));
-    backupSection->setFont(sectionFont);
-    rightCol->addWidget(backupSection);
-    m_backupCheck = new QCheckBox(tr("Back up my media"), this);
-    m_backupCheck->setToolTip(BackupWindow::explanationText());
-    connect(m_backupCheck, &QCheckBox::toggled, this, [this](bool on) {
+    addSection(PgIntegration, tr("Media Backup"));
+    m_backupCheck = addToggle(PgIntegration, tr("Back up my media"), BackupWindow::explanationText());
+    connect(m_backupCheck, &GlToggle::toggled, this, [this](bool on) {
         const bool ok = on ? BackupWindow::confirmAndEnable(m_backup, this) : BackupWindow::confirmAndDisable(m_backup, this);
         if (!ok) {
             m_backupCheck->blockSignals(true);
@@ -279,16 +253,9 @@ void SettingsDialog::buildUi() {
         }
         updateBackupRow();
     });
-    rightCol->addWidget(m_backupCheck);
-    auto* backupRow = new QHBoxLayout();
-    m_backupStatus = new QLabel(this);
-    m_backupStatus->setObjectName(QStringLiteral("secondaryText"));
-    m_backupStatus->setWordWrap(true);
-    backupRow->addWidget(m_backupStatus, 1);
-    auto* manageBackup = new QPushButton(tr("Manage…"), this);
-    connect(manageBackup, &QPushButton::clicked, this, &SettingsDialog::openBackup);
-    backupRow->addWidget(manageBackup);
-    rightCol->addLayout(backupRow);
+    m_backupStatus = makeDesc(QString());
+    auto* manageBackup = addButtonRow(PgIntegration, m_backupStatus, tr("Manage…"));
+    connect(manageBackup, &GlButton::clicked, this, &SettingsDialog::openBackup);
     for (auto signal : {&BackupManager::enabledChanged}) {
         connect(m_backup, signal, this, &SettingsDialog::updateBackupRow);
     }
@@ -298,51 +265,48 @@ void SettingsDialog::buildUi() {
     updateBackupRow();
 
     // Compact entry only - the cleanup levels live in their own window.
-    auto* cleanupSection = new QLabel(tr("Cleanup & Reset"));
-    cleanupSection->setObjectName(QStringLiteral("sectionLabel"));
-    cleanupSection->setFont(sectionFont);
-    rightCol->addWidget(cleanupSection);
-    auto* cleanupRow = new QHBoxLayout();
-    auto* cleanupDesc = new QLabel(tr("Manage cache, data, and factory reset."), this);
-    cleanupDesc->setObjectName(QStringLiteral("secondaryText"));
-    cleanupDesc->setWordWrap(true);
-    cleanupRow->addWidget(cleanupDesc, 1);
-    auto* openCleanupButton = new QPushButton(tr("Open Cleanup"), this);
-    connect(openCleanupButton, &QPushButton::clicked, this, &SettingsDialog::openCleanup);
-    cleanupRow->addWidget(openCleanupButton);
-    rightCol->addLayout(cleanupRow);
+    addSection(PgIntegration, tr("Cleanup & Reset"));
+    auto* openCleanupButton =
+        addButtonRow(PgIntegration, makeDesc(tr("Manage cache, data, and factory reset.")), tr("Open Cleanup"));
+    connect(openCleanupButton, &GlButton::clicked, this, &SettingsDialog::openCleanup);
 
-    std::stable_sort(m_pages.begin(), m_pages.end(),
-                     [](const SettingsPage& l, const SettingsPage& r) { return l.order < r.order; });
+    // Grouped-page headings (only shown in the "Grouped page" layout).
     for (const SettingsPage& page : m_pages) {
-        static_cast<QVBoxLayout*>(page.widget->layout())->addStretch();
+        auto* h = new GlLabel(m_canvas);
+        h->setText(page.title);
+        h->setPointSize(13);
+        h->setBold(true);
+        h->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
+        m_headings.push_back(h);
     }
 
-    m_navHost = new QWidget(this);
-    auto* navLayout = new QVBoxLayout(m_navHost);
-    navLayout->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(m_navHost, 1);
+    // Navigation entries (tabs along the top, or a sidebar column).
+    for (int i = 0; i < int(m_pages.size()); ++i) {
+        auto* b = new GlButton(m_canvas, GlButton::Kind::Tab);
+        b->setText(m_pages[i].title);
+        connect(b, &GlButton::clicked, this, [this, i] { setPage(i); });
+        m_navButtons.push_back(b);
+    }
 
-    // Presentation-only preference: how the groups above are navigated.
-    auto* footer = new QHBoxLayout();
-    footer->setSpacing(10);
-    auto* layoutLabel = new QLabel(tr("Settings layout:"), this);
-    m_layoutCombo = new QComboBox(this);
+    m_scrollBar = new GlScrollBar(m_canvas);
+    connect(m_scrollBar, &GlScrollBar::offsetChanged, this, [this](qreal y) {
+        m_scrollY = y;
+        m_canvas->relayout();
+    });
+
+    // Footer: presentation-only preference for how the groups are navigated,
+    // plus Close.
+    m_layoutCombo = new GlDropdown(m_canvas);
+    m_layoutCombo->setText(tr("Settings layout"));
     m_layoutCombo->addItems({tr("Tabs"), tr("Sidebar"), tr("Grouped page")});
     m_layoutCombo->setToolTip(tr("Choose how settings groups are shown. Only the navigation changes, "
                                  "not the settings themselves."));
-    layoutLabel->setBuddy(m_layoutCombo);
-    footer->addWidget(layoutLabel);
-    footer->addWidget(m_layoutCombo);
-    footer->addStretch();
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
-    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::close);
-    footer->addWidget(buttons);
-    root->addLayout(footer);
+    m_footerClose = new GlButton(m_canvas, GlButton::Kind::Secondary);
+    m_footerClose->setText(tr("Close"));
+    connect(m_footerClose, &GlButton::clicked, this, &QDialog::close);
 
     m_layoutCombo->setCurrentIndex(m_settings->settingsLayout());
-    connect(m_layoutCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+    connect(m_layoutCombo, &GlDropdown::currentIndexChanged, this, [this](int index) {
         m_settings->setSettingsLayout(index);
         applyNavigationLayout(index);
     });
@@ -350,90 +314,138 @@ void SettingsDialog::buildUi() {
 }
 
 void SettingsDialog::applyNavigationLayout(int layout) {
-    // Extension point: add a case here (and an entry in m_layoutCombo) for a
-    // new navigation style. Pages are never destroyed, only re-parented.
-    auto* host = m_navHost->layout();
-    int currentPage = 0;
-    if (m_navWidget) {
-        if (auto* tabs = qobject_cast<QTabWidget*>(m_navWidget)) {
-            currentPage = tabs->currentIndex();
-        } else if (auto* list = m_navWidget->findChild<QListWidget*>()) {
-            currentPage = list->currentRow();
-        }
-        for (const SettingsPage& page : m_pages) {
-            page.widget->hide();
-            page.widget->setParent(this); // rescue from the container being deleted
-        }
-        delete m_navWidget;
-        m_navWidget = nullptr;
+    // Extension point: add a case in layoutGl() (and an entry in m_layoutCombo)
+    // for a new navigation style. Rows are never destroyed, only re-placed.
+    m_navMode = qBound(0, layout, 2);
+    m_scrollY = 0;
+    if (m_canvas) {
+        m_canvas->relayout();
     }
-    currentPage = qBound(0, currentPage, int(m_pages.size()) - 1);
+}
 
-    // Pages taller than the window scroll instead of clipping.
-    const auto scrollable = [](QWidget* page, QWidget* parent) {
-        auto* area = new QScrollArea(parent);
-        area->setObjectName(QStringLiteral("settingsPage"));
-        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        area->setWidgetResizable(true);
-        area->setFrameShape(QFrame::NoFrame);
-        area->setWidget(page);
-        return area;
-    };
+void SettingsDialog::setPage(int page) {
+    m_currentPage = qBound(0, page, int(m_pages.size()) - 1);
+    m_scrollY = 0;
+    m_canvas->relayout();
+}
 
-    if (layout == 1) { // Sidebar
-        auto* container = new QWidget(m_navHost);
-        auto* row = new QHBoxLayout(container);
-        row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(14);
-        auto* list = new QListWidget(container);
-        list->setObjectName(QStringLiteral("settingsNav"));
-        list->setFixedWidth(190);
-        list->setAccessibleName(tr("Settings groups"));
-        auto* stack = new QStackedWidget(container);
-        for (const SettingsPage& page : m_pages) {
-            list->addItem(page.title);
-            stack->addWidget(scrollable(page.widget, stack));
-        }
-        connect(list, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
-        list->setCurrentRow(currentPage);
-        row->addWidget(list);
-        row->addWidget(stack, 1);
-        m_navWidget = container;
-    } else if (layout == 2) { // Grouped page
-        auto* content = new QWidget();
-        auto* col = new QVBoxLayout(content);
-        col->setContentsMargins(0, 0, 8, 0);
-        col->setSpacing(10);
-        for (const SettingsPage& page : m_pages) {
-            auto* heading = new QLabel(page.title, content);
-            heading->setObjectName(QStringLiteral("sectionLabel"));
-            QFont f = heading->font();
-            f.setBold(true);
-            f.setPointSize(f.pointSize() + 2);
-            heading->setFont(f);
-            col->addWidget(heading);
-            col->addWidget(page.widget);
-        }
-        col->addStretch();
-        auto* area = new QScrollArea(m_navHost);
-        area->setObjectName(QStringLiteral("settingsPage"));
-        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        area->setWidgetResizable(true);
-        area->setFrameShape(QFrame::NoFrame);
-        area->setWidget(content);
-        m_navWidget = area;
-    } else { // Tabs
-        auto* tabs = new QTabWidget(m_navHost);
-        for (const SettingsPage& page : m_pages) {
-            tabs->addTab(scrollable(page.widget, tabs), page.title);
-        }
-        tabs->setCurrentIndex(currentPage);
-        m_navWidget = tabs;
+void SettingsDialog::scrollBy(qreal dy) {
+    m_scrollY += dy;
+    m_canvas->relayout();
+}
+
+void SettingsDialog::layoutGl(const QSizeF& size) {
+    if (!m_scrollBar || !m_footerClose) {
+        return;
     }
-    host->addWidget(m_navWidget);
-    for (const SettingsPage& page : m_pages) {
-        page.widget->show();
+    const qreal W = size.width(), H = size.height();
+    const qreal m = 12;
+
+    const QRectF strip(m, m, W - 2 * m, 46);
+    m_titlePanel->setRect(strip);
+    m_titleLabel->setRect(QRectF(strip.left() + 20, strip.top() + 5, 200, 24));
+    m_subtitleLabel->setRect(QRectF(strip.left() + 20, strip.top() + 27, 200, 14));
+    m_closeButton->setRect(QRectF(strip.right() - 10 - 36, strip.top() + 8, 36, 30));
+
+    const qreal footerH = 54;
+    const QRectF footer(m, H - m - footerH, W - 2 * m, footerH);
+    m_layoutCombo->setRect(QRectF(footer.left(), footer.top(), std::min<qreal>(520, footer.width() - 140), footerH));
+    m_footerClose->setRect(QRectF(footer.right() - 110, footer.top() + 10, 110, 36));
+
+    const QRectF body(m, strip.bottom() + 10, W - 2 * m, footer.top() - 10 - (strip.bottom() + 10));
+    QRectF content = body;
+    const bool sidebar = m_navMode == 1, tabs = m_navMode == 0;
+    m_navPanel->setVisible(sidebar);
+    const int pageCount = int(m_pages.size());
+    if (sidebar) {
+        const qreal navW = 200;
+        m_navPanel->setRect(QRectF(body.left(), body.top(), navW, body.height()));
+        content = QRectF(body.left() + navW + 10, body.top(), body.width() - navW - 10, body.height());
+        for (int i = 0; i < pageCount; ++i) {
+            m_navButtons[i]->setAlignLeft(true);
+            m_navButtons[i]->setRect(QRectF(body.left() + 12, body.top() + 22 + i * 48, navW - 24, 40));
+        }
+    } else if (tabs) {
+        const qreal tabH = 40;
+        qreal x = body.left();
+        for (int i = 0; i < pageCount; ++i) {
+            m_navButtons[i]->setAlignLeft(false);
+            const qreal w = std::clamp<qreal>(body.width() / pageCount - 6, 90, 190);
+            m_navButtons[i]->setRect(QRectF(x, body.top(), w, tabH));
+            x += w + 6;
+        }
+        content = QRectF(body.left(), body.top() + tabH + 10, body.width(), body.height() - tabH - 10);
     }
+    for (int i = 0; i < pageCount; ++i) {
+        m_navButtons[i]->setVisible(sidebar || tabs);
+        m_navButtons[i]->setSelected(i == m_currentPage);
+    }
+    m_contentPanel->setRect(content);
+
+    // Scrolling viewport inside the content panel.
+    const QRectF vp(content.left() + 18, content.top() + 12, content.width() - 36 - 10, content.height() - 24);
+    qreal y = vp.top() - m_scrollY;
+    const qreal top0 = y;
+    for (GlLabel* h : m_headings) {
+        h->setVisible(false);
+    }
+    for (Row& row : m_rows) {
+        const bool shown = m_navMode == 2 || row.page == m_currentPage;
+        if (!shown) {
+            row.a->setVisible(false);
+            if (row.b) row.b->setVisible(false);
+        }
+    }
+    int lastPage = -1;
+    for (Row& row : m_rows) {
+        const bool shown = m_navMode == 2 || row.page == m_currentPage;
+        if (!shown) {
+            continue;
+        }
+        if (m_navMode == 2 && row.page != lastPage) {
+            lastPage = row.page;
+            GlLabel* h = m_headings[row.page];
+            const QRectF hr(vp.left(), y, vp.width(), 54);
+            h->setRect(hr);
+            h->setClip(vp);
+            h->setVisible(hr.intersects(vp));
+            y += 54;
+        }
+        const QRectF r(vp.left(), y, vp.width(), row.height);
+        const bool vis = r.intersects(vp);
+        row.a->setClip(vp);
+        row.a->setVisible(vis);
+        if (row.type == Row::ButtonRow) {
+            row.a->setRect(QRectF(r.left() + 14, r.top(), r.width() - 14 - 190, r.height()));
+            row.b->setClip(vp);
+            row.b->setVisible(vis);
+            row.b->setRect(QRectF(r.right() - 176, r.center().y() - 18, 170, 36));
+        } else {
+            row.a->setRect(r);
+        }
+        y += row.height;
+    }
+    const qreal contentH = (y - top0) + 6;
+    const qreal maxScroll = std::max<qreal>(0, contentH - vp.height());
+    if (m_scrollY > maxScroll) {
+        m_scrollY = maxScroll; // content shrank (e.g. window grew): stay in range
+    }
+    m_scrollBar->setRect(QRectF(vp.right() + 4, vp.top(), 8, vp.height()));
+    m_scrollBar->setMetrics(vp.height(), contentH, m_scrollY);
+    m_scrollBar->setVisible(maxScroll > 0);
+}
+
+bool SettingsDialog::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
+    if (eventType == "windows_generic_MSG" && m_titlePanel &&
+        GlUi::handleFrameHitTest(this, m_canvas, m_titlePanel->rect(), message, result)) {
+        return true;
+    }
+    return QDialog::nativeEvent(eventType, message, result);
+}
+
+void SettingsDialog::showEvent(QShowEvent* event) {
+    QDialog::showEvent(event);
+    GlUi::applyRoundedCorners(this);
 }
 
 void SettingsDialog::restoreFromSettings() {

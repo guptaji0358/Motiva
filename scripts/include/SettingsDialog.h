@@ -16,6 +16,15 @@ class CleanupWindow;
 class BackupManager;
 class BackupWindow;
 class QLabel;
+class GlCanvas;
+class GlPanel;
+class GlLabel;
+class GlButton;
+class GlToggle;
+class GlSlider;
+class GlDropdown;
+class GlScrollBar;
+class GlItem;
 class QCheckBox;
 
 // Houses the settings users rarely change (scaling, monitor selection,
@@ -44,6 +53,10 @@ public:
 
     bool isMuted() const;
 
+protected:
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+    void showEvent(QShowEvent* event) override;
+
 public slots:
     // Used by MainWindow to mirror the tray menu's checkable "Mute" action
     // into this dialog without a circular update loop.
@@ -68,6 +81,9 @@ private:
     void buildUi();
     // 0 = Tabs, 1 = Sidebar, 2 = Grouped page; re-parents the same pages.
     void applyNavigationLayout(int layout);
+    void layoutGl(const QSizeF& size);
+    void setPage(int page);
+    void scrollBy(qreal dy);
     void onScalingChanged(int index);
     void onMonitorSelectionChanged(int index);
     void onVolumeChanged(int value);
@@ -107,8 +123,8 @@ private:
     CleanupWindow* m_cleanupWindow = nullptr;
     BackupManager* m_backup;
     BackupWindow* m_backupWindow = nullptr;
-    QCheckBox* m_backupCheck = nullptr;
-    QLabel* m_backupStatus = nullptr;
+    GlToggle* m_backupCheck = nullptr;
+    GlLabel* m_backupStatus = nullptr;
 
     ThemeTransitionOverlay* m_transitionOverlay = nullptr;
     bool m_themeTransitionActive = false;
@@ -117,28 +133,49 @@ private:
     struct SettingsPage {
         int order;
         QString title;
-        QWidget* widget;
+    };
+    // One settings row: a section heading, a labelled control, or a
+    // description + button. Rows belong to a page; layoutGl() places them.
+    struct Row {
+        enum Type { Section, Toggle, Dropdown, Slider, ButtonRow };
+        Type type;
+        int page;
+        GlItem* a;
+        GlItem* b;
+        qreal height;
     };
     std::vector<SettingsPage> m_pages;
-    QWidget* m_navHost = nullptr;
-    QWidget* m_navWidget = nullptr;
-    QComboBox* m_layoutCombo = nullptr;
+    std::vector<Row> m_rows;
+    std::vector<GlLabel*> m_headings;
+    std::vector<GlButton*> m_navButtons;
+    int m_navMode = 0;     // 0 Tabs, 1 Sidebar, 2 Grouped page
+    int m_currentPage = 0;
+    qreal m_scrollY = 0;
 
-    QComboBox* m_scalingCombo = nullptr;
-    QComboBox* m_monitorCombo = nullptr;
-    QSlider* m_volumeSlider = nullptr;
-    QCheckBox* m_muteCheck = nullptr;
-    QCheckBox* m_loopCheck = nullptr;
+    GlCanvas* m_canvas = nullptr;
+    GlPanel* m_titlePanel = nullptr;
+    GlPanel* m_navPanel = nullptr;
+    GlPanel* m_contentPanel = nullptr;
+    GlLabel* m_titleLabel = nullptr;
+    GlLabel* m_subtitleLabel = nullptr;
+    GlButton* m_closeButton = nullptr;
+    GlButton* m_footerClose = nullptr;
+    GlScrollBar* m_scrollBar = nullptr;
+    GlDropdown* m_layoutCombo = nullptr;
+
+    GlDropdown* m_scalingCombo = nullptr;
+    GlDropdown* m_monitorCombo = nullptr;
+    GlSlider* m_volumeSlider = nullptr;
+    GlToggle* m_muteCheck = nullptr;
+    GlToggle* m_loopCheck = nullptr;
     // Notifications: in-app, desktop, success, error, warning, background, playback.
-    QCheckBox* m_notifyChecks[7] = {};
-    QCheckBox* m_startWithWindowsCheck = nullptr;
-    QCheckBox* m_playImagesOnBatteryCheck = nullptr;
-    QCheckBox* m_playVideosOnBatteryCheck = nullptr;
-    QCheckBox* m_showInWindowsSearchCheck = nullptr;
-    QCheckBox* m_explorerIntegrationCheck = nullptr;
-    // Single "Theme" combo (Dark Aurora / Light Aurora / Dark Onyx /
-    // Light Onyx) - replaces the old separate Appearance + Visual Style
-    // combos, see the "Motiva Theme System" task. Index order matches
-    // Theme::AppTheme's own ordinal order exactly.
-    QComboBox* m_themeCombo = nullptr;
+    GlToggle* m_notifyChecks[7] = {};
+    GlToggle* m_startWithWindowsCheck = nullptr;
+    GlToggle* m_playImagesOnBatteryCheck = nullptr;
+    GlToggle* m_playVideosOnBatteryCheck = nullptr;
+    GlToggle* m_showInWindowsSearchCheck = nullptr;
+    GlToggle* m_explorerIntegrationCheck = nullptr;
+    // Single "Theme" selector (Dark Aurora / Light Aurora / Dark Onyx /
+    // Light Onyx). Index order matches Theme::AppTheme's ordinal order exactly.
+    GlDropdown* m_themeCombo = nullptr;
 };

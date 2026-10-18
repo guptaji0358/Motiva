@@ -2,6 +2,12 @@
 #include "Theme.h"
 
 #include <QFocusEvent>
+#include <QWheelEvent>
+#include <QScreen>
+#include <QWindow>
+#include <windows.h>
+#include <windowsx.h>
+#include <dwmapi.h>
 #include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QLinearGradient>
@@ -62,6 +68,41 @@ QFont uiFont(qreal pointSize, bool bold) {
     f.setPointSizeF(pointSize);
     f.setWeight(bold ? QFont::DemiBold : QFont::Normal);
     return f;
+}
+
+bool handleFrameHitTest(QWidget* w, GlCanvas* canvas, const QRectF& captionRect, const void* nativeMsg,
+                        qintptr* result) {
+    const MSG* msg = static_cast<const MSG*>(nativeMsg);
+    if (msg->message != WM_NCHITTEST || !canvas) {
+        return false;
+    }
+    RECT wr;
+    GetWindowRect(reinterpret_cast<HWND>(w->winId()), &wr);
+    const LONG px = GET_X_LPARAM(msg->lParam) - wr.left;
+    const LONG py = GET_Y_LPARAM(msg->lParam) - wr.top;
+    const qreal dpr = w->devicePixelRatioF();
+    const LONG ww = wr.right - wr.left, hh = wr.bottom - wr.top;
+    const LONG edge = LONG(std::lround(7 * dpr));
+    if (!w->isMaximized()) {
+        const bool l = px < edge, r = px >= ww - edge, t = py < edge, b = py >= hh - edge;
+        if (t && l) { *result = HTTOPLEFT; return true; }
+        if (t && r) { *result = HTTOPRIGHT; return true; }
+        if (b && l) { *result = HTBOTTOMLEFT; return true; }
+        if (b && r) { *result = HTBOTTOMRIGHT; return true; }
+        if (l) { *result = HTLEFT; return true; }
+        if (r) { *result = HTRIGHT; return true; }
+        if (t) { *result = HTTOP; return true; }
+        if (b) { *result = HTBOTTOM; return true; }
+    }
+    const QPointF local(px / dpr, py / dpr);
+    *result = (captionRect.contains(local) && !canvas->interactiveAt(local)) ? HTCAPTION : HTCLIENT;
+    return true;
+}
+
+void applyRoundedCorners(QWidget* w) {
+    static const DWORD kCornerPref = 33; // DWMWA_WINDOW_CORNER_PREFERENCE
+    const int round = 2;                 // DWMWCP_ROUND
+    DwmSetWindowAttribute(reinterpret_cast<HWND>(w->winId()), kCornerPref, &round, sizeof(round));
 }
 
 namespace {
@@ -146,6 +187,18 @@ void GlItem::setRect(const QRectF& r) {
     }
     m_rect = r;
     update();
+}
+
+void GlItem::setClip(const QRectF& r) {
+    if (r == m_clip) {
+        return;
+    }
+    m_clip = r;
+    update();
+}
+
+bool GlItem::isHit(const QPointF& p) const {
+    return m_visible && m_rect.contains(p) && (m_clip.isNull() || m_clip.contains(p));
 }
 
 void GlItem::setVisible(bool v) {
@@ -266,7 +319,7 @@ void GlLabel::paint(QPainter& p, const Style& s) {
         f.setLetterSpacing(QFont::AbsoluteSpacing, 1.6);
     }
     p.setFont(f);
-    QColor c = m_tone == Tone::Dim ? s.textDim : m_tone == Tone::Custom ? m_color : s.text;
+    QColor c = m_tone == Tone::Dim ? s.textDim : m_tone == Tone::Accent ? s.accent2 : m_tone == Tone::Custom ? m_color : s.text;
     if (!isEnabled()) {
         c.setAlphaF(0.5);
     }
@@ -406,6 +459,30 @@ void GlButton::paint(QPainter& p, const Style& s) {
             p.setPen(fg);
             p.drawText(QRectF(x, r.top(), tw + 2, r.height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
         }
+        break;
+    }
+    case Kind::Tab: {
+        const qreal radius = std::max(6.0, 14 * s.radius);
+        if (m_selected) {
+            QLinearGradient g(r.topLeft(), r.topRight());
+            g.setColorAt(0, s.accent);
+            g.setColorAt(1, GlUi::mix(s.accent, s.accent2, 0.8));
+            p.setPen(Qt::NoPen);
+            p.setBrush(g);
+            p.drawRoundedRect(r, radius, radius);
+        } else if (h > 0.01) {
+            QColor c = s.accent;
+            c.setAlphaF(0.18 * h);
+            p.setPen(Qt::NoPen);
+            p.setBrush(c);
+            p.drawRoundedRect(r, radius, radius);
+        }
+        const QColor fg = m_selected ? GlUi::bestText(GlUi::mix(s.accent, s.accent2, 0.4))
+                                     : GlUi::mix(s.textDim, s.text, 0.4 + 0.6 * h);
+        p.setFont(GlUi::uiFont(10.5, m_selected));
+        p.setPen(fg);
+        p.drawText(r.adjusted(m_alignLeft ? 16 : 0, 0, -8, 0), (m_alignLeft ? Qt::AlignLeft : Qt::AlignHCenter) | Qt::AlignVCenter,
+                   m_text);
         break;
     }
     case Kind::Minimize:
@@ -817,6 +894,7 @@ void GlCanvas::tick() {
 
 void GlCanvas::showEvent(QShowEvent* e) {
     QOpenGLWidget::showEvent(e);
+    m_shownNs = m_frameClock.nsecsElapsed();
     requestAnimation();
 }
 void GlCanvas::hideEvent(QHideEvent* e) {
@@ -892,8 +970,18 @@ void GlCanvas::paintGL() {
     }
     for (GlItem* it : m_items) {
         if (it->isVisible()) {
-            it->paint(p, s);
+            if (!it->clip().isNull()) {
+                p.save();
+                p.setClipRect(it->clip());
+                it->paint(p, s);
+                p.restore();
+            } else {
+                it->paint(p, s);
+            }
         }
+    }
+    if (m_popup) {
+        m_popup->paintOverlay(p, s);
     }
     // Window edge: neon hairline (the window itself is borderless).
     QLinearGradient rim(0, 0, width(), height());
@@ -916,7 +1004,7 @@ QImage GlCanvas::snapshot() {
 GlItem* GlCanvas::itemAt(const QPointF& pt) const {
     for (int i = m_items.size() - 1; i >= 0; --i) {
         GlItem* it = m_items[i];
-        if (it->isVisible() && it->rect().contains(pt)) {
+        if (it->isHit(pt)) {
             return it;
         }
     }
@@ -926,7 +1014,7 @@ GlItem* GlCanvas::itemAt(const QPointF& pt) const {
 bool GlCanvas::interactiveAt(const QPointF& pt) const {
     for (int i = m_items.size() - 1; i >= 0; --i) {
         GlItem* it = m_items[i];
-        if (it->isVisible() && it->isInteractive() && it->rect().contains(pt)) {
+        if (it->isInteractive() && it->isHit(pt)) {
             return true;
         }
     }
@@ -937,7 +1025,7 @@ void GlCanvas::updateHover(const QPointF& pt) {
     GlItem* hit = nullptr;
     for (int i = m_items.size() - 1; i >= 0; --i) {
         GlItem* it = m_items[i];
-        if (it->isVisible() && it->isInteractive() && it->rect().contains(pt)) {
+        if (it->isInteractive() && it->isHit(pt)) {
             hit = it;
             break;
         }
@@ -952,7 +1040,7 @@ void GlCanvas::updateHover(const QPointF& pt) {
     QString tip;
     for (int i = m_items.size() - 1; i >= 0 && tip.isEmpty(); --i) {
         GlItem* it = m_items[i];
-        if (it->isVisible() && !it->toolTip().isEmpty() && it->rect().contains(pt)) {
+        if (!it->toolTip().isEmpty() && it->isHit(pt)) {
             tip = it->toolTip();
         }
     }
@@ -962,15 +1050,57 @@ void GlCanvas::updateHover(const QPointF& pt) {
 }
 
 void GlCanvas::mouseMoveEvent(QMouseEvent* e) {
+    if (m_popup) {
+        m_popup->popupHover(e->position());
+        return;
+    }
+    if (m_press && (e->buttons() & Qt::LeftButton)) {
+        m_press->mouseDragTo(e->position());
+        requestAnimation();
+        return;
+    }
     updateHover(e->position());
 }
 
+void GlCanvas::setPopup(GlItem* item) {
+    m_popup = item;
+    requestAnimation();
+}
+
+void GlCanvas::wheelEvent(QWheelEvent* e) {
+    if (m_popup) {
+        return;
+    }
+    if (m_wheel) {
+        m_wheel(e->angleDelta().y(), e->position());
+        e->accept();
+    } else {
+        QOpenGLWidget::wheelEvent(e);
+    }
+}
+
+void GlCanvas::changeEvent(QEvent* e) {
+    QOpenGLWidget::changeEvent(e);
+    if (e->type() == QEvent::PaletteChange || e->type() == QEvent::StyleChange) {
+        requestAnimation(); // theme switched: repaint from the new palette
+    }
+}
+
 void GlCanvas::mousePressEvent(QMouseEvent* e) {
-    updateHover(e->position());
     setFocus(Qt::MouseFocusReason);
+    if (m_popup) {
+        GlItem* pop = m_popup;
+        if (!pop->popupPress(e->position())) {
+            m_popup = nullptr; // click outside closes the list and is consumed
+        }
+        requestAnimation();
+        return;
+    }
+    updateHover(e->position());
     if (e->button() == Qt::LeftButton && m_hover && m_hover->isEnabled()) {
         m_press = m_hover;
         m_press->m_pressed = true;
+        m_press->mousePressAt(e->position());
         m_keyboardFocusVisible = false;
         m_focus = m_press;
         requestAnimation();
@@ -1028,6 +1158,15 @@ bool GlCanvas::focusNextPrevChild(bool next) {
 }
 
 void GlCanvas::keyPressEvent(QKeyEvent* e) {
+    if (m_popup) {
+        if (m_popup->popupKey(e)) {
+            return;
+        }
+    } else if (m_focus && m_focus->isEnabled() && m_focus->isVisible() && m_focus->keyPressed(e)) {
+        m_keyboardFocusVisible = true;
+        requestAnimation();
+        return;
+    }
     if (e->key() == Qt::Key_Space || e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
         if (m_focus && m_focus->isEnabled() && m_focus->isVisible()) {
             m_keyboardFocusVisible = true;
@@ -1041,7 +1180,10 @@ void GlCanvas::keyPressEvent(QKeyEvent* e) {
 
 void GlCanvas::focusInEvent(QFocusEvent* e) {
     QOpenGLWidget::focusInEvent(e);
-    if (e->reason() == Qt::TabFocusReason || e->reason() == Qt::BacktabFocusReason) {
+    // A window being shown also focuses its first child with Tab reason;
+    // only a real Tab press (well after show) should reveal the focus ring.
+    const bool justShown = (m_frameClock.nsecsElapsed() - m_shownNs) < 400000000;
+    if (!justShown && (e->reason() == Qt::TabFocusReason || e->reason() == Qt::BacktabFocusReason)) {
         cycleFocus(e->reason() == Qt::TabFocusReason);
     }
     requestAnimation();
@@ -1049,4 +1191,436 @@ void GlCanvas::focusInEvent(QFocusEvent* e) {
 void GlCanvas::focusOutEvent(QFocusEvent* e) {
     QOpenGLWidget::focusOutEvent(e);
     requestAnimation();
+}
+
+
+// ------------------------------------------------------------- GlToggle
+
+GlToggle::GlToggle(GlCanvas* canvas) : GlItem(canvas) {}
+
+void GlToggle::setChecked(bool on) {
+    if (on == m_checked) {
+        return;
+    }
+    m_checked = on;
+    update();
+    emit toggled(on);
+}
+
+bool GlToggle::advance(qreal dt) {
+    bool busy = GlItem::advance(dt);
+    const qreal target = m_checked ? 1.0 : 0.0;
+    m_knob += (target - m_knob) * std::min(1.0, dt * 16.0);
+    if (std::abs(target - m_knob) < 0.01) m_knob = target; else busy = true;
+    return busy;
+}
+
+bool GlToggle::keyPressed(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Left || e->key() == Qt::Key_Right) {
+        setChecked(e->key() == Qt::Key_Right);
+        return true;
+    }
+    return false;
+}
+
+void GlToggle::paint(QPainter& p, const Style& s) {
+    const QRectF r = rect();
+    const qreal h = hoverAmount();
+    p.save();
+    if (!isEnabled()) {
+        p.setOpacity(0.5);
+    }
+    if (h > 0.01) {
+        QColor c = s.accent;
+        c.setAlphaF(0.08 * h);
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawRoundedRect(r, 10 * s.radius + 2, 10 * s.radius + 2);
+    }
+    p.setFont(GlUi::uiFont(10.5));
+    p.setPen(s.text);
+    p.drawText(QRectF(r.left() + 14 + m_indent, r.top(), r.width() - 90 - m_indent, r.height()),
+               Qt::AlignVCenter | Qt::AlignLeft, QFontMetricsF(p.font()).elidedText(m_text, Qt::ElideRight, r.width() - 100 - m_indent));
+    // Switch: gradient track when on, glass when off, sliding knob.
+    const QRectF track(r.right() - 14 - 46, r.center().y() - 12, 46, 24);
+    const qreal tr = track.height() / 2 * (0.55 + 0.45 * s.radius);
+    if (m_knob > 0.01) {
+        QLinearGradient g(track.topLeft(), track.topRight());
+        g.setColorAt(0, s.accent);
+        g.setColorAt(1, s.accent2);
+        p.setPen(Qt::NoPen);
+        p.setBrush(g);
+        p.setOpacity(p.opacity() * (0.35 + 0.65 * m_knob));
+        p.drawRoundedRect(track, tr, tr);
+        p.setOpacity(isEnabled() ? 1.0 : 0.5);
+    }
+    QColor off = s.glass;
+    off.setAlphaF(std::min(1.0, off.alphaF() + 0.10));
+    if (m_knob < 0.99) {
+        p.setOpacity(p.opacity() * (1.0 - m_knob));
+        p.setPen(QPen(s.glassEdge, 1.2));
+        p.setBrush(off);
+        p.drawRoundedRect(track.adjusted(0.6, 0.6, -0.6, -0.6), tr, tr);
+        p.setOpacity(isEnabled() ? 1.0 : 0.5);
+    }
+    glow(p, track, tr, s.accent2, 0.5 * m_knob);
+    const qreal kd = track.height() - 8;
+    const QPointF kc(track.left() + 4 + kd / 2 + (track.width() - 8 - kd) * m_knob, track.center().y());
+    p.setPen(Qt::NoPen);
+    p.setBrush(GlUi::mix(QColor(200, 200, 215), QColor(Qt::white), m_knob));
+    p.drawEllipse(kc, kd / 2, kd / 2);
+    p.restore();
+    if (hasFocus()) {
+        p.save();
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(s.accent2, 2.0));
+        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 10 * s.radius + 2, 10 * s.radius + 2);
+        p.restore();
+    }
+}
+
+// ------------------------------------------------------------- GlSlider
+
+GlSlider::GlSlider(GlCanvas* canvas) : GlItem(canvas) {}
+
+void GlSlider::setRange(int lo, int hi) {
+    m_min = lo;
+    m_max = std::max(lo, hi);
+    m_value = std::clamp(m_value, m_min, m_max);
+    update();
+}
+
+void GlSlider::setValue(int v) {
+    v = std::clamp(v, m_min, m_max);
+    if (v == m_value) {
+        return;
+    }
+    m_value = v;
+    update();
+    emit valueChanged(v);
+}
+
+QRectF GlSlider::trackRect() const {
+    const QRectF r = rect();
+    const qreal left = r.left() + std::min<qreal>(190, r.width() * 0.34);
+    return QRectF(left, r.center().y() - 3, std::max<qreal>(40, r.right() - 64 - left), 6);
+}
+
+void GlSlider::setFromX(qreal x) {
+    const QRectF t = trackRect();
+    const qreal f = std::clamp((x - t.left()) / t.width(), 0.0, 1.0);
+    setValue(m_min + qRound(f * (m_max - m_min)));
+}
+
+bool GlSlider::keyPressed(QKeyEvent* e) {
+    const int step = (e->modifiers() & Qt::ShiftModifier) ? 10 : 1;
+    if (e->key() == Qt::Key_Left || e->key() == Qt::Key_Down) {
+        setValue(m_value - step);
+        return true;
+    }
+    if (e->key() == Qt::Key_Right || e->key() == Qt::Key_Up) {
+        setValue(m_value + step);
+        return true;
+    }
+    return false;
+}
+
+void GlSlider::paint(QPainter& p, const Style& s) {
+    const QRectF r = rect();
+    p.save();
+    if (!isEnabled()) {
+        p.setOpacity(0.5);
+    }
+    p.setFont(GlUi::uiFont(10.5));
+    p.setPen(s.text);
+    p.drawText(QRectF(r.left() + 14, r.top(), 170, r.height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
+    const QRectF t = trackRect();
+    p.setPen(Qt::NoPen);
+    p.setBrush(s.glass.alpha() < 100 ? QColor(255, 255, 255, 34) : QColor(0, 0, 0, 40));
+    p.drawRoundedRect(t, 3, 3);
+    const qreal f = m_max > m_min ? qreal(m_value - m_min) / (m_max - m_min) : 0;
+    QRectF fill(t.left(), t.top(), t.width() * f, t.height());
+    QLinearGradient g(t.topLeft(), t.topRight());
+    g.setColorAt(0, s.accent);
+    g.setColorAt(1, s.accent2);
+    p.setBrush(g);
+    p.drawRoundedRect(fill, 3, 3);
+    const QPointF kc(t.left() + t.width() * f, t.center().y());
+    const qreal kr = 8 + 2 * hoverAmount();
+    glow(p, QRectF(kc.x() - kr, kc.y() - kr, kr * 2, kr * 2), kr, s.accent2, 0.5 + 0.5 * hoverAmount());
+    p.setBrush(QColor(Qt::white));
+    p.drawEllipse(kc, kr, kr);
+    p.setPen(s.textDim);
+    p.setFont(GlUi::uiFont(10, true));
+    p.drawText(QRectF(r.right() - 56, r.top(), 44, r.height()), Qt::AlignVCenter | Qt::AlignRight, QString::number(m_value));
+    p.restore();
+    if (hasFocus()) {
+        p.save();
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(s.accent2, 2.0));
+        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8);
+        p.restore();
+    }
+}
+
+// ----------------------------------------------------------- GlDropdown
+
+GlDropdown::GlDropdown(GlCanvas* canvas) : GlItem(canvas) {}
+
+void GlDropdown::clear() {
+    m_items.clear();
+    m_index = -1;
+    update();
+}
+
+void GlDropdown::setCurrentIndex(int i) {
+    i = (i >= 0 && i < m_items.size()) ? i : (m_items.isEmpty() ? -1 : std::clamp(i, 0, int(m_items.size()) - 1));
+    if (i == m_index) {
+        return;
+    }
+    m_index = i;
+    update();
+    emit currentIndexChanged(i);
+}
+
+QRectF GlDropdown::fieldRect() const {
+    const QRectF r = rect();
+    const qreal w = std::min<qreal>(280, r.width() * 0.58);
+    return QRectF(r.right() - 14 - w, r.center().y() - 17, w, 34);
+}
+
+QRectF GlDropdown::popupRect() const {
+    const QRectF f = fieldRect();
+    const qreal h = m_items.size() * 34 + 10;
+    qreal top = f.bottom() + 4;
+    const qreal limit = canvas()->height() - 8;
+    if (top + h > limit) {
+        top = std::max<qreal>(8, f.top() - 4 - h); // open upward when there is no room below
+    }
+    return QRectF(f.left(), top, f.width(), h);
+}
+
+int GlDropdown::indexAt(const QPointF& pt) const {
+    const QRectF pr = popupRect();
+    if (!pr.contains(pt)) {
+        return -1;
+    }
+    const int i = int((pt.y() - pr.top() - 5) / 34);
+    return (i >= 0 && i < m_items.size()) ? i : -1;
+}
+
+void GlDropdown::closePopup() {
+    m_open = false;
+    if (canvas()->popup() == this) {
+        canvas()->setPopup(nullptr);
+    }
+}
+
+void GlDropdown::activate() {
+    if (m_open) {
+        closePopup();
+        return;
+    }
+    if (m_items.isEmpty()) {
+        return;
+    }
+    m_open = true;
+    m_highlight = m_index;
+    canvas()->setPopup(this);
+}
+
+bool GlDropdown::popupPress(const QPointF& pt) {
+    const int i = indexAt(pt);
+    if (i >= 0) {
+        closePopup();
+        setCurrentIndex(i);
+        return true;
+    }
+    closePopup();
+    return fieldRect().contains(pt); // clicking the field again just closes
+}
+
+void GlDropdown::popupHover(const QPointF& pt) {
+    const int i = indexAt(pt);
+    if (i != m_highlight && i >= 0) {
+        m_highlight = i;
+        update();
+    }
+}
+
+bool GlDropdown::popupKey(QKeyEvent* e) {
+    switch (e->key()) {
+    case Qt::Key_Escape:
+        closePopup();
+        return true;
+    case Qt::Key_Up:
+        m_highlight = std::max(0, m_highlight - 1);
+        update();
+        return true;
+    case Qt::Key_Down:
+        m_highlight = std::min(int(m_items.size()) - 1, m_highlight + 1);
+        update();
+        return true;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Space: {
+        const int i = m_highlight;
+        closePopup();
+        if (i >= 0) {
+            setCurrentIndex(i);
+        }
+        return true;
+    }
+    default:
+        return true; // swallow everything else while open
+    }
+}
+
+bool GlDropdown::keyPressed(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Down || e->key() == Qt::Key_Up) {
+        setCurrentIndex(m_index + (e->key() == Qt::Key_Down ? 1 : -1));
+        return true;
+    }
+    return false;
+}
+
+void GlDropdown::paint(QPainter& p, const Style& s) {
+    const QRectF r = rect();
+    const qreal h = hoverAmount();
+    p.save();
+    if (!isEnabled()) {
+        p.setOpacity(0.5);
+    }
+    p.setFont(GlUi::uiFont(10.5));
+    p.setPen(s.text);
+    p.drawText(QRectF(r.left() + 14, r.top(), r.width() * 0.4, r.height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
+    const QRectF f = fieldRect();
+    const qreal rad = std::max(6.0, 14 * s.radius);
+    QColor fill = s.glass;
+    fill.setAlphaF(std::min(1.0, fill.alphaF() + 0.12 + 0.1 * h));
+    p.setPen(QPen(GlUi::mix(s.glassEdge, s.accent2, std::max(h, m_open ? 1.0 : 0.0)), 1.1));
+    p.setBrush(fill);
+    p.drawRoundedRect(f.adjusted(0.5, 0.5, -0.5, -0.5), rad, rad);
+    glow(p, f, rad, s.accent2, 0.4 * h);
+    p.setFont(GlUi::uiFont(10.5, true));
+    p.setPen(s.text);
+    const QString cur = (m_index >= 0 && m_index < m_items.size()) ? m_items[m_index] : QString();
+    p.drawText(f.adjusted(14, 0, -34, 0), Qt::AlignVCenter | Qt::AlignLeft,
+               QFontMetricsF(p.font()).elidedText(cur, Qt::ElideRight, f.width() - 50));
+    // Chevron.
+    p.setPen(QPen(GlUi::mix(s.textDim, s.accent2, h), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const QPointF c(f.right() - 18, f.center().y() + (m_open ? 1 : -1));
+    if (m_open) {
+        p.drawPolyline(QPolygonF({QPointF(c.x() - 5, c.y() + 2), QPointF(c.x(), c.y() - 3), QPointF(c.x() + 5, c.y() + 2)}));
+    } else {
+        p.drawPolyline(QPolygonF({QPointF(c.x() - 5, c.y() - 2), QPointF(c.x(), c.y() + 3), QPointF(c.x() + 5, c.y() - 2)}));
+    }
+    p.restore();
+    if (hasFocus()) {
+        p.save();
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(s.accent2, 2.0));
+        p.drawRoundedRect(f.adjusted(-2, -2, 2, 2), rad + 2, rad + 2);
+        p.restore();
+    }
+}
+
+void GlDropdown::paintOverlay(QPainter& p, const Style& s) {
+    if (!m_open) {
+        return;
+    }
+    const QRectF pr = popupRect();
+    const qreal rad = std::max(6.0, 14 * s.radius);
+    p.save();
+    // Opaque body so the list stays readable over any content.
+    p.setPen(Qt::NoPen);
+    for (int i = 0; i < 4; ++i) {
+        p.setBrush(QColor(0, 0, 0, 40 - i * 8));
+        p.drawRoundedRect(pr.translated(0, 3 + i * 2).adjusted(-i, -i, i, i), rad + i, rad + i);
+    }
+    p.setBrush(GlUi::mix(s.bgBase, s.bgTint, 0.5));
+    p.drawRoundedRect(pr, rad, rad);
+    p.setBrush(s.glass);
+    p.drawRoundedRect(pr, rad, rad);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(GlUi::mix(s.glassEdge, s.accent2, 0.7), 1.2));
+    p.drawRoundedRect(pr.adjusted(0.6, 0.6, -0.6, -0.6), rad, rad);
+    for (int i = 0; i < m_items.size(); ++i) {
+        const QRectF row(pr.left() + 5, pr.top() + 5 + i * 34, pr.width() - 10, 34);
+        if (i == m_highlight) {
+            QLinearGradient g(row.topLeft(), row.topRight());
+            QColor a = s.accent, b = s.accent2;
+            a.setAlphaF(0.55);
+            b.setAlphaF(0.35);
+            g.setColorAt(0, a);
+            g.setColorAt(1, b);
+            p.setPen(Qt::NoPen);
+            p.setBrush(g);
+            p.drawRoundedRect(row, std::max(4.0, 10 * s.radius), std::max(4.0, 10 * s.radius));
+        }
+        p.setFont(GlUi::uiFont(10.5, i == m_index));
+        p.setPen(i == m_index ? s.accent2 : s.text);
+        p.drawText(row.adjusted(12, 0, -28, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                   QFontMetricsF(p.font()).elidedText(m_items[i], Qt::ElideRight, row.width() - 40));
+        if (i == m_index) {
+            p.setPen(QPen(s.accent2, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            const QPointF c(row.right() - 16, row.center().y());
+            p.drawPolyline(QPolygonF({QPointF(c.x() - 5, c.y()), QPointF(c.x() - 1, c.y() + 4), QPointF(c.x() + 6, c.y() - 5)}));
+        }
+    }
+    p.restore();
+}
+
+// ---------------------------------------------------------- GlScrollBar
+
+GlScrollBar::GlScrollBar(GlCanvas* canvas) : GlItem(canvas) {}
+
+void GlScrollBar::setMetrics(qreal viewport, qreal content, qreal offset) {
+    m_viewport = std::max<qreal>(1, viewport);
+    m_content = std::max<qreal>(1, content);
+    m_offset = std::clamp(offset, 0.0, std::max<qreal>(0, m_content - m_viewport));
+    update();
+}
+
+QRectF GlScrollBar::thumb() const {
+    const QRectF r = rect();
+    const qreal th = std::max<qreal>(32, r.height() * m_viewport / m_content);
+    const qreal range = std::max<qreal>(1, m_content - m_viewport);
+    return QRectF(r.left(), r.top() + (r.height() - th) * (m_offset / range), r.width(), th);
+}
+
+void GlScrollBar::mousePressAt(const QPointF& p) {
+    const QRectF t = thumb();
+    if (t.contains(p)) {
+        m_grab = p.y() - t.top();
+    } else {
+        m_grab = t.height() / 2;
+        mouseDragTo(p);
+    }
+}
+
+void GlScrollBar::mouseDragTo(const QPointF& p) {
+    const QRectF r = rect();
+    const qreal th = thumb().height();
+    const qreal span = std::max<qreal>(1, r.height() - th);
+    const qreal f = std::clamp((p.y() - m_grab - r.top()) / span, 0.0, 1.0);
+    m_offset = f * (m_content - m_viewport);
+    update();
+    emit offsetChanged(m_offset);
+}
+
+void GlScrollBar::paint(QPainter& p, const Style& s) {
+    if (m_content <= m_viewport + 0.5) {
+        return;
+    }
+    const QRectF t = thumb();
+    p.save();
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(255, 255, 255, s.dark ? 18 : 0) );
+    p.drawRoundedRect(rect(), rect().width() / 2, rect().width() / 2);
+    QColor c = GlUi::mix(s.accent, s.accent2, 0.5);
+    c.setAlphaF(0.55 + 0.35 * std::max(hoverAmount(), pressAmount()));
+    p.setBrush(c);
+    p.drawRoundedRect(t, t.width() / 2, t.width() / 2);
+    p.restore();
 }

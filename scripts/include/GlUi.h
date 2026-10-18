@@ -9,6 +9,7 @@
 #include <QOpenGLWidget>
 #include <QPixmap>
 #include <QRectF>
+#include <QStringList>
 #include <QString>
 #include <functional>
 #include <memory>
@@ -19,6 +20,10 @@ class QOpenGLVertexArrayObject;
 class QPainter;
 class QTimer;
 class QSvgRenderer;
+class GlCanvas;
+class QWidget;
+class QKeyEvent;
+class QWheelEvent;
 
 // Motiva's own GPU-drawn UI toolkit ("Colorful Modular x dark glass/neon").
 // Nothing here is a QWidget except the single GlCanvas: items are light
@@ -42,6 +47,14 @@ struct Style {
 };
 
 QFont uiFont(qreal pointSize, bool bold = false);
+
+// Borderless-window support shared by every Motiva window.
+// handleFrameHitTest answers WM_NCHITTEST: resize edges, caption over
+// `captionRect` wherever no interactive item sits, client elsewhere.
+bool handleFrameHitTest(QWidget* window, GlCanvas* canvas, const QRectF& captionRect, const void* nativeMsg,
+                        qintptr* result);
+// Windows 11 rounded corners for a borderless window.
+void applyRoundedCorners(QWidget* window);
 
 } // namespace GlUi
 
@@ -78,6 +91,23 @@ public:
     virtual void paint(QPainter& p, const GlUi::Style& s) = 0;
     virtual void activate() {}
 
+    // Optional clip (e.g. a scrolling viewport): the item is neither painted
+    // nor hit outside it. A null rect means no clip.
+    void setClip(const QRectF& r);
+    QRectF clip() const { return m_clip; }
+    bool isHit(const QPointF& p) const;
+
+    // Pointer/keyboard hooks for controls that need more than a click.
+    virtual void mousePressAt(const QPointF&) {}
+    virtual void mouseDragTo(const QPointF&) {}
+    virtual bool keyPressed(QKeyEvent*) { return false; }
+    // Popup support (dropdowns): painted above everything, and while open it
+    // receives all pointer/keyboard input.
+    virtual void paintOverlay(QPainter&, const GlUi::Style&) {}
+    virtual bool popupPress(const QPointF&) { return false; } // true = handled inside
+    virtual void popupHover(const QPointF&) {}
+    virtual bool popupKey(QKeyEvent*) { return false; }
+
 protected:
     GlCanvas* canvas() const { return m_canvas; }
 
@@ -85,6 +115,7 @@ private:
     friend class GlCanvas;
     GlCanvas* m_canvas;
     QRectF m_rect;
+    QRectF m_clip;
     QString m_toolTip;
     QString m_name;
     bool m_visible = true;
@@ -113,7 +144,7 @@ private:
 class GlLabel : public GlItem {
     Q_OBJECT
 public:
-    enum class Tone { Normal, Dim, Custom };
+    enum class Tone { Normal, Dim, Accent, Custom };
     explicit GlLabel(GlCanvas* canvas);
 
     void setText(const QString& t);
@@ -147,6 +178,7 @@ public:
         Primary,   // split-color neon capsule: icon segment + gradient body
         Secondary, // glass pill, text and/or icon
         Icon,      // round/squircle glass icon-only control
+        Tab,       // navigation entry: selectable, optionally left-aligned
         Minimize,
         Maximize,
         Restore,
@@ -166,6 +198,9 @@ public:
         setIcon(normal);
     }
     void setDefaultAction(bool d) { m_default = d; }
+    void setSelected(bool on) { m_selected = on; update(); }
+    bool isSelected() const { return m_selected; }
+    void setAlignLeft(bool on) { m_alignLeft = on; update(); }
 
     bool isInteractive() const override { return true; }
     void paint(QPainter& p, const GlUi::Style& s) override;
@@ -179,6 +214,108 @@ private:
     QString m_text;
     QIcon m_icon;
     bool m_default = false;
+    bool m_selected = false;
+    bool m_alignLeft = false;
+};
+
+// Row controls. Each draws its own label on the left and the control on the
+// right so a settings page is just a column of rows.
+class GlToggle : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlToggle(GlCanvas* canvas);
+    void setText(const QString& t) { m_text = t; update(); }
+    void setIndent(qreal px) { m_indent = px; update(); }
+    bool isChecked() const { return m_checked; }
+    void setChecked(bool on);
+    bool isInteractive() const override { return true; }
+    bool advance(qreal dt) override;
+    void paint(QPainter& p, const GlUi::Style& s) override;
+    void activate() override { setChecked(!m_checked); }
+    bool keyPressed(QKeyEvent* e) override;
+signals:
+    void toggled(bool on);
+
+private:
+    QString m_text;
+    bool m_checked = false;
+    qreal m_indent = 0;
+    qreal m_knob = 0.0;
+};
+
+class GlSlider : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlSlider(GlCanvas* canvas);
+    void setText(const QString& t) { m_text = t; update(); }
+    void setRange(int lo, int hi);
+    int value() const { return m_value; }
+    void setValue(int v);
+    bool isInteractive() const override { return true; }
+    void paint(QPainter& p, const GlUi::Style& s) override;
+    void mousePressAt(const QPointF& p) override { setFromX(p.x()); }
+    void mouseDragTo(const QPointF& p) override { setFromX(p.x()); }
+    bool keyPressed(QKeyEvent* e) override;
+signals:
+    void valueChanged(int v);
+
+private:
+    QRectF trackRect() const;
+    void setFromX(qreal x);
+    QString m_text;
+    int m_min = 0, m_max = 100, m_value = 0;
+};
+
+class GlDropdown : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlDropdown(GlCanvas* canvas);
+    void setText(const QString& t) { m_text = t; update(); }
+    void addItem(const QString& t) { m_items << t; update(); }
+    void addItems(const QStringList& l) { m_items << l; update(); }
+    void clear();
+    int count() const { return m_items.size(); }
+    int currentIndex() const { return m_index; }
+    void setCurrentIndex(int i);
+    bool isInteractive() const override { return true; }
+    void paint(QPainter& p, const GlUi::Style& s) override;
+    void paintOverlay(QPainter& p, const GlUi::Style& s) override;
+    void activate() override;
+    bool popupPress(const QPointF& pt) override;
+    void popupHover(const QPointF& pt) override;
+    bool popupKey(QKeyEvent* e) override;
+    bool keyPressed(QKeyEvent* e) override;
+signals:
+    void currentIndexChanged(int index);
+
+private:
+    QRectF fieldRect() const;
+    QRectF popupRect() const;
+    int indexAt(const QPointF& pt) const;
+    void closePopup();
+    QString m_text;
+    QStringList m_items;
+    int m_index = -1;
+    int m_highlight = -1;
+    bool m_open = false;
+};
+
+// Thin vertical scrollbar for a caller-managed scrolling viewport.
+class GlScrollBar : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlScrollBar(GlCanvas* canvas);
+    void setMetrics(qreal viewport, qreal content, qreal offset);
+    bool isInteractive() const override { return m_content > m_viewport + 0.5; }
+    void paint(QPainter& p, const GlUi::Style& s) override;
+    void mousePressAt(const QPointF& p) override;
+    void mouseDragTo(const QPointF& p) override;
+signals:
+    void offsetChanged(qreal offset);
+
+private:
+    QRectF thumb() const;
+    qreal m_viewport = 1, m_content = 1, m_offset = 0, m_grab = 0;
 };
 
 // The media preview panel: shows the current frame letterboxed inside a
@@ -239,6 +376,12 @@ public:
     GlItem* itemAt(const QPointF& p) const;
     bool interactiveAt(const QPointF& p) const;
 
+    // Popups (dropdown lists): painted last, take all input while open.
+    void setPopup(GlItem* item);
+    GlItem* popup() const { return m_popup; }
+    // Wheel scrolling is owned by whoever builds a scrolling viewport.
+    void setWheelCallback(std::function<void(int delta, const QPointF& pos)> fn) { m_wheel = std::move(fn); }
+
     qreal clock() const { return m_clock; }
     void setBackgroundAnimated(bool animated);
     void requestAnimation(); // keep the tick running a little longer
@@ -253,6 +396,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void leaveEvent(QEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void wheelEvent(QWheelEvent* e) override;
+    void changeEvent(QEvent* e) override;
     void focusInEvent(QFocusEvent* e) override;
     void focusOutEvent(QFocusEvent* e) override;
     void showEvent(QShowEvent* e) override;
@@ -269,12 +414,15 @@ private:
     GlItem* m_hover = nullptr;
     GlItem* m_press = nullptr;
     GlItem* m_focus = nullptr;
+    GlItem* m_popup = nullptr;
+    std::function<void(int, const QPointF&)> m_wheel;
     bool m_keyboardFocusVisible = false;
     std::function<void(const QSizeF&)> m_layout;
 
     QTimer* m_timer = nullptr;
     QElapsedTimer m_frameClock;
     qint64 m_lastNs = 0;
+    qint64 m_shownNs = 0;
     qreal m_clock = 0.0;
     bool m_bgAnimated = true;
     int m_hotFrames = 0;

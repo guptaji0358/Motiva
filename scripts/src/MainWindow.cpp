@@ -838,45 +838,16 @@ void MainWindow::updateWindowButtons() {
 }
 
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
-    if (eventType == "windows_generic_MSG") {
-        const MSG* msg = static_cast<const MSG*>(message);
-        if (msg->message == WM_NCHITTEST && m_canvas) {
-            RECT wr;
-            GetWindowRect(reinterpret_cast<HWND>(winId()), &wr);
-            const LONG px = GET_X_LPARAM(msg->lParam) - wr.left;
-            const LONG py = GET_Y_LPARAM(msg->lParam) - wr.top;
-            const qreal dpr = devicePixelRatioF();
-            const LONG w = wr.right - wr.left, h = wr.bottom - wr.top;
-            const LONG edge = LONG(std::lround(7 * dpr));
-            if (!isMaximized()) {
-                const bool l = px < edge, r = px >= w - edge, t = py < edge, b = py >= h - edge;
-                if (t && l) { *result = HTTOPLEFT; return true; }
-                if (t && r) { *result = HTTOPRIGHT; return true; }
-                if (b && l) { *result = HTBOTTOMLEFT; return true; }
-                if (b && r) { *result = HTBOTTOMRIGHT; return true; }
-                if (l) { *result = HTLEFT; return true; }
-                if (r) { *result = HTRIGHT; return true; }
-                if (t) { *result = HTTOP; return true; }
-                if (b) { *result = HTBOTTOM; return true; }
-            }
-            const QPointF local(px / dpr, py / dpr);
-            if (m_titlePanel && m_titlePanel->rect().contains(local) && !m_canvas->interactiveAt(local)) {
-                *result = HTCAPTION;
-                return true;
-            }
-            *result = HTCLIENT;
-            return true;
-        }
+    if (eventType == "windows_generic_MSG" && m_titlePanel &&
+        GlUi::handleFrameHitTest(this, m_canvas, m_titlePanel->rect(), message, result)) {
+        return true;
     }
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
     QMainWindow::showEvent(event);
-    // Windows 11: round the borderless window's corners like a native one.
-    static const DWORD kCornerPref = 33; // DWMWA_WINDOW_CORNER_PREFERENCE
-    const int round = 2;                 // DWMWCP_ROUND
-    DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), kCornerPref, &round, sizeof(round));
+    GlUi::applyRoundedCorners(this);
     updateWindowButtons();
 }
 
