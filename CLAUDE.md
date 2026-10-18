@@ -23,6 +23,26 @@ to `deployment/resources/Qt/`; check the installer/MSIX file list too).
 accent presets, WCAG contrast fixes), `ThemeEditorDialog`, persisted as JSON in
 `themeEditor/<Theme>/colors` via `SettingsManager::themeOverrides`.
 
+## Current status (2026-10-18b, Settings + Playlists windows on the GL UI)
+
+`Settings` and `Playlists` are now borderless GL windows (same `GlCanvas`,
+`GlUi::handleFrameHitTest/applyRoundedCorners`). GlUi gained `GlToggle`,
+`GlSlider`, `GlDropdown` (popup, compact mode, per-item data), `GlTreeDropdown`
+(category tree), `GlTextInput` (single-line: caret, selection, clipboard, clear
+button, no IME), `GlScrollBar`, `GlItemView` (model-driven list/card grid that
+paints through a `QStyledItemDelegate`, hidden rows, wheel + scrollbar,
+in-canvas drag-to-reorder, external-drop insertion bar) and item hooks
+(clip rect, hover/context-menu/double-click/wheel). `SettingsDialog` keeps its
+logic (controls are API-compatible GL equivalents; tabs/sidebar/grouped
+layouts preserved). `PlaylistView` is now a QObject adapter over `GlItemView`
+(arrangement proxy, source-row mapping); the `PlaylistDialog` handlers are
+unchanged except widget plumbing. GlItemView clears hidden rows on any
+structural/sort change - the owner re-applies its filter (PlaylistDialog does).
+Delegates must clip with `Qt::IntersectClip` (a replacing clip escapes the
+view). Still Qt Widgets: Flow, Category filter/picker, media-recovery, Cleanup,
+Backup, ThemeEditor dialogs, and all QMenu / QInputDialog / QMessageBox /
+QFileDialog popups. No screen-reader support for GL items.
+
 ## Current status (2026-10-11b, mixed playlists + nested categories)
 
 **Mixed playlists**: `PlaylistType::Mixed` ('mixed' was already allowed by the

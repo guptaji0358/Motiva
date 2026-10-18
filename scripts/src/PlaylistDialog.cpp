@@ -8,12 +8,17 @@
 #include "CategoryTreePicker.h"
 #include "CategoryItemPickerDialog.h"
 #include "FlowDialog.h"
+#include "GlUi.h"
 #include "DialogSizing.h"
 #include "Theme.h"
 #include "SettingsManager.h"
 #include "VideoPlayer.h"
 
 #include <QAbstractProxyModel>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QLinearGradient>
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCheckBox>
@@ -56,7 +61,6 @@
 
 namespace {
 
-constexpr const char* kRowMimeType = "application/x-motiva-playlist-row";
 constexpr int kCardWidth = 184;
 constexpr int kCardHeight = 158;
 constexpr int kCardSpacing = 12;
@@ -108,19 +112,35 @@ QPainterPath roundedPath(const QRectF& rect, qreal radius) {
     return path;
 }
 
-void drawPill(QPainter* p, const QRectF& rect, const QColor& fill, const QString& text, int radius) {
+// A small label chip used on cards and rows (glass-dark by default).
+void drawChip(QPainter* p, const QRectF& rect, const QColor& fill, const QString& text, qreal radius,
+              const QColor& textColor = Qt::white) {
     p->setPen(Qt::NoPen);
     p->setBrush(fill);
-    p->drawRoundedRect(rect, qMin(4, radius), qMin(4, radius));
-    p->setPen(Qt::white);
+    p->drawRoundedRect(rect, radius, radius);
+    p->setPen(textColor);
     p->drawText(rect, Qt::AlignCenter, text);
 }
 
-// One playlist item as a card: thumbnail (cropped to fill, on the same
-// fixed-dark media surface the main preview uses), order number, a video
-// marker for video items, "Now showing" on the active playlist's current
-// item, and an explicit "File not found" state. Colors come from the active
-// Motiva Theme at paint time, so a live theme switch restyles it.
+void drawGradientChip(QPainter* p, const QRectF& rect, const GlUi::Style& s, const QString& text) {
+    QLinearGradient g(rect.topLeft(), rect.topRight());
+    g.setColorAt(0, s.accent);
+    g.setColorAt(1, s.accent2);
+    p->setPen(Qt::NoPen);
+    p->setBrush(g);
+    const qreal r = qMin<qreal>(rect.height() / 2, 4 + 6 * s.radius);
+    p->drawRoundedRect(rect, r, r);
+    const QColor c = Theme::contrastRatio(Qt::white, s.accent) >= Theme::contrastRatio(Qt::black, s.accent)
+                         ? QColor(Qt::white) : QColor(8, 8, 12);
+    p->setPen(c);
+    p->drawText(rect, Qt::AlignCenter, text);
+}
+
+// One playlist item as a glass card: thumbnail (cropped to fill, on a
+// near-black media well), order number, a video marker for video items,
+// "Now showing" on the active playlist's current item, and an explicit
+// "File not found" state. Colors come from the active Theme at paint time
+// (GlUi::Style), so a live theme switch restyles it.
 class PlaylistCardDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
@@ -130,44 +150,57 @@ public:
     }
 
     void paint(QPainter* p, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-        const Theme::ThemePalette& pal = Theme::themePalette(Theme::currentTheme());
+        const GlUi::Style s = GlUi::Style::current();
         const auto* model = qobject_cast<const PlaylistModel*>(index.model());
         const bool selected = option.state & QStyle::State_Selected;
         const bool hovered = option.state & QStyle::State_MouseOver;
         const bool available = index.data(PlaylistModel::AvailableRole).toBool();
         const bool isCurrent = index.data(PlaylistModel::IsCurrentRole).toBool();
         const bool isVideo = index.data(PlaylistModel::IsVideoRole).toBool();
-        const bool playlistActive = model && model->isActive();
-        const int radius = cardRadius();
+        bool playlistActive = model && model->isActive();
+        if (const auto* proxy = qobject_cast<const QAbstractProxyModel*>(index.model())) {
+            if (const auto* src = qobject_cast<const PlaylistModel*>(proxy->sourceModel())) {
+                playlistActive = src->isActive();
+            }
+        }
+        const qreal radius = 16 * s.radius + 2;
 
         p->save();
         p->setRenderHint(QPainter::Antialiasing, true);
         p->setRenderHint(QPainter::SmoothPixmapTransform, true);
 
-        const QRectF card = QRectF(option.rect).adjusted(3, 3, -3, -3);
+        QRectF card = QRectF(option.rect).adjusted(4, 4, -4, -4);
+        if (hovered || selected) {
+            card.translate(0, -2); // hover lift
+        }
+        // Soft shadow + glass body.
         p->setPen(Qt::NoPen);
-        p->setBrush(pal.panelBg);
-        p->drawPath(roundedPath(card, radius));
+        for (int i = 0; i < 3; ++i) {
+            p->setBrush(QColor(0, 0, 0, (hovered || selected ? 38 : 22) - i * 7));
+            p->drawRoundedRect(card.translated(0, 2 + i * 2).adjusted(-i, -i, i, i), radius + i, radius + i);
+        }
+        p->setBrush(s.dark ? QColor(255, 255, 255, 22) : QColor(255, 255, 255, 170));
+        p->drawRoundedRect(card, radius, radius);
 
         const QRectF thumb = card.adjusted(8, 8, -8, -36);
-        const QPainterPath thumbPath = roundedPath(thumb, qMax(1, radius - 3));
+        const QPainterPath thumbPath = roundedPath(thumb, qMax(2.0, radius - 6));
         p->fillPath(thumbPath, QColor(Theme::kPreviewSurfaceBg));
         if (available) {
             const QImage image = index.data(PlaylistModel::ThumbnailRole).value<QImage>();
             if (!image.isNull()) {
                 p->save();
-                p->setClipPath(thumbPath);
+                p->setClipPath(thumbPath, Qt::IntersectClip);
                 const QSizeF scaled = QSizeF(image.size()).scaled(thumb.size(), Qt::KeepAspectRatioByExpanding);
                 p->drawImage(QRectF(thumb.center().x() - scaled.width() / 2, thumb.center().y() - scaled.height() / 2,
                                     scaled.width(), scaled.height()),
                              image);
                 p->restore();
             } else {
+                p->setFont(option.font);
                 p->setPen(QColor(Theme::kPreviewText));
                 const bool pending = index.data(PlaylistModel::ThumbnailPendingRole).toBool();
                 const QString message = pending ? PlaylistDialog::tr("Loading…") : PlaylistDialog::tr("No preview");
                 if (isVideo && !pending) {
-                    // Video marker is an SVG badge, drawn left of the text.
                     const int iconSize = 14;
                     const int gap = 6;
                     const int textW = p->fontMetrics().horizontalAdvance(message);
@@ -182,13 +215,13 @@ public:
                 }
             }
         } else {
-            p->setPen(QPen(QColor(Theme::kStatusWarning), 1.2, Qt::DashLine));
+            p->setPen(QPen(s.warn, 1.4, Qt::DashLine));
             p->setBrush(Qt::NoBrush);
-            p->drawPath(roundedPath(thumb.adjusted(1, 1, -1, -1), qMax(1, radius - 3)));
+            p->drawPath(roundedPath(thumb.adjusted(1, 1, -1, -1), qMax(2.0, radius - 6)));
             QFont f = option.font;
             f.setBold(true);
             p->setFont(f);
-            p->setPen(QColor(Theme::kStatusWarning));
+            p->setPen(s.warn);
             p->drawText(thumb, Qt::AlignCenter, PlaylistDialog::tr("File not found"));
         }
 
@@ -203,14 +236,15 @@ public:
             sequence = proxy->mapToSource(index).row();
         }
         const QString number = QStringLiteral("%1").arg(sequence + 1, 2, 10, QLatin1Char('0'));
-        drawPill(p, QRectF(thumb.left() + 6, thumb.top() + 6, fm.horizontalAdvance(number) + 12, fm.height() + 4),
-                 QColor(0, 0, 0, 165), number, radius);
+        const qreal chipR = 3 + 6 * s.radius;
+        drawChip(p, QRectF(thumb.left() + 6, thumb.top() + 6, fm.horizontalAdvance(number) + 12, fm.height() + 4),
+                 QColor(0, 0, 0, 165), number, chipR);
         if (isVideo && available) {
             const QString tag = PlaylistDialog::tr("VIDEO");
             const int iconSize = fm.height() - 2;
             const QRectF tagRect(thumb.left() + 6, thumb.bottom() - fm.height() - 10,
                                  fm.horizontalAdvance(tag) + iconSize + 18, fm.height() + 4);
-            drawPill(p, tagRect, QColor(0, 0, 0, 165), QString(), radius);
+            drawChip(p, tagRect, QColor(0, 0, 0, 165), QString(), chipR);
             p->drawPixmap(QPointF(tagRect.left() + 6, tagRect.center().y() - iconSize / 2.0),
                           Theme::tintedIcon(QStringLiteral(":/playlist/video-badge.svg"), Qt::white, iconSize));
             p->setPen(Qt::white);
@@ -221,31 +255,41 @@ public:
         if (isCurrent) {
             const QString label = playlistActive ? PlaylistDialog::tr("Now showing") : PlaylistDialog::tr("Resumes here");
             const qreal w = fm.horizontalAdvance(label) + 14;
-            drawPill(p, QRectF(thumb.right() - 6 - w, thumb.top() + 6, w, fm.height() + 4),
-                     playlistActive ? pal.accent : QColor(0, 0, 0, 165), label, radius);
+            const QRectF chip(thumb.right() - 6 - w, thumb.top() + 6, w, fm.height() + 4);
+            if (playlistActive) {
+                drawGradientChip(p, chip, s, label);
+            } else {
+                drawChip(p, chip, QColor(0, 0, 0, 165), label, chipR);
+            }
         }
 
         p->setFont(option.font);
         const QRectF nameRect(card.left() + 10, thumb.bottom() + 6, card.width() - 20, 22);
-        p->setPen(available ? pal.textPrimary : pal.textDisabled);
+        p->setPen(available ? s.text : s.textDim);
         p->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
                     p->fontMetrics().elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideMiddle,
                                                 int(nameRect.width())));
 
-        QColor outline = pal.border;
-        qreal width = 1.0;
-        if (selected) {
-            outline = pal.accent;
-            width = 2.0;
-        } else if (isCurrent && playlistActive) {
-            outline = pal.accent;
-            width = 1.5;
-        } else if (hovered) {
-            outline = pal.borderStrong;
-        }
-        p->setPen(QPen(outline, width));
+        // Rim: gradient + glow when selected, accent when it is what is on the desktop.
         p->setBrush(Qt::NoBrush);
-        p->drawPath(roundedPath(card.adjusted(width / 2, width / 2, -width / 2, -width / 2), radius));
+        if (selected) {
+            QLinearGradient g(card.topLeft(), card.bottomRight());
+            g.setColorAt(0, s.accent);
+            g.setColorAt(1, s.accent2);
+            p->setPen(QPen(QBrush(g), 2.2));
+            p->drawRoundedRect(card.adjusted(1.1, 1.1, -1.1, -1.1), radius, radius);
+            for (int i = 1; i <= 4; ++i) {
+                QColor k = s.accent2;
+                k.setAlphaF(0.22 * (1.0 - i / 5.0));
+                p->setPen(QPen(k, 2));
+                p->drawRoundedRect(card.adjusted(-i * 1.5, -i * 1.5, i * 1.5, i * 1.5), radius + i * 1.5, radius + i * 1.5);
+            }
+        } else {
+            QColor outline = (isCurrent && playlistActive) ? s.accent : hovered ? GlUi::Style::current().accent2 : s.glassEdge;
+            if (hovered && !(isCurrent && playlistActive)) outline.setAlphaF(0.8);
+            p->setPen(QPen(outline, (isCurrent && playlistActive) ? 1.8 : 1.1));
+            p->drawRoundedRect(card.adjusted(0.6, 0.6, -0.6, -0.6), radius, radius);
+        }
         p->restore();
     }
 };
@@ -256,16 +300,10 @@ class PlaylistRowDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
-    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override { return QSize(200, 52); }
-
-    // Inline rename: a plain line edit over the name line of the row.
-    void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex&) const override {
-        const QRect row = option.rect.adjusted(8, 4, -8, -4);
-        editor->setGeometry(QRect(row.left(), row.top(), row.width(), qMin(row.height(), 28)));
-    }
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override { return QSize(200, 58); }
 
     void paint(QPainter* p, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-        const Theme::ThemePalette& pal = Theme::themePalette(Theme::currentTheme());
+        const GlUi::Style s = GlUi::Style::current();
         const bool selected = option.state & QStyle::State_Selected;
         const bool hovered = option.state & QStyle::State_MouseOver;
         const bool active = index.data(PlaylistListModel::IsActiveRole).toBool();
@@ -273,19 +311,30 @@ public:
         const bool video = type == static_cast<int>(PlaylistType::Video);
         const bool mixed = type == static_cast<int>(PlaylistType::Mixed);
         const int count = index.data(PlaylistListModel::CountRole).toInt();
-        const int radius = cardRadius();
+        const qreal radius = 14 * s.radius + 3;
 
         p->save();
         p->setRenderHint(QPainter::Antialiasing, true);
-        const QRectF row = QRectF(option.rect).adjusted(4, 2, -4, -2);
-        if (selected || hovered) {
-            p->setPen(Qt::NoPen);
-            p->setBrush(selected ? pal.accentSoft : pal.buttonHoverBg);
-            p->drawRoundedRect(row, qMin(6, radius), qMin(6, radius));
-        }
+        const QRectF row = QRectF(option.rect).adjusted(2, 3, -2, -3);
+        QColor titleColor = s.text, subColor = s.textDim;
         if (selected) {
-            p->setBrush(pal.accent);
-            p->drawRoundedRect(QRectF(row.left(), row.top() + 8, 3, row.height() - 16), 1.5, 1.5);
+            QLinearGradient g(row.topLeft(), row.topRight());
+            g.setColorAt(0, s.accent);
+            g.setColorAt(1, GlUi::Style::current().accent2);
+            p->setPen(Qt::NoPen);
+            p->setBrush(g);
+            p->drawRoundedRect(row, radius, radius);
+            const QColor on = Theme::contrastRatio(Qt::white, s.accent) >= Theme::contrastRatio(Qt::black, s.accent)
+                                  ? QColor(Qt::white) : QColor(8, 8, 12);
+            titleColor = on;
+            subColor = on;
+            subColor.setAlphaF(0.78);
+        } else if (hovered) {
+            QColor c = s.accent;
+            c.setAlphaF(0.16);
+            p->setPen(Qt::NoPen);
+            p->setBrush(c);
+            p->drawRoundedRect(row, radius, radius);
         }
 
         QFont bold = option.font;
@@ -293,23 +342,27 @@ public:
         const QFontMetrics boldFm(bold);
         const QFontMetrics fm(option.font);
         const QString activeLabel = PlaylistDialog::tr("Active");
-        const qreal pillW = active ? fm.horizontalAdvance(activeLabel) + 14 : 0;
-        const QRectF nameRect(row.left() + 12, row.top() + 6, row.width() - 24 - pillW, boldFm.height());
+        const qreal pillW = active ? fm.horizontalAdvance(activeLabel) + 16 : 0;
+        const QRectF nameRect(row.left() + 14, row.top() + 7, row.width() - 28 - pillW, boldFm.height());
         p->setFont(bold);
-        p->setPen(pal.textPrimary);
+        p->setPen(titleColor);
         p->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
                     boldFm.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, int(nameRect.width())));
 
         p->setFont(option.font);
-        p->setPen(pal.textSecondary);
+        p->setPen(subColor);
         const QString subtitle = (mixed ? PlaylistDialog::tr("Mixed") : video ? PlaylistDialog::tr("Videos") : PlaylistDialog::tr("Images")) +
             QStringLiteral("  •  ") + QString::number(count);
-        p->drawText(QRectF(row.left() + 12, nameRect.bottom() + 2, row.width() - 24, fm.height()),
+        p->drawText(QRectF(row.left() + 14, nameRect.bottom() + 2, row.width() - 28, fm.height()),
                     Qt::AlignLeft | Qt::AlignVCenter, subtitle);
 
         if (active) {
-            drawPill(p, QRectF(row.right() - 8 - pillW, row.top() + 6, pillW, fm.height() + 4), pal.accent,
-                     activeLabel, radius);
+            const QRectF chip(row.right() - 10 - pillW, row.top() + 8, pillW, fm.height() + 4);
+            if (selected) {
+                drawChip(p, chip, QColor(0, 0, 0, 90), activeLabel, 4 + 6 * s.radius);
+            } else {
+                drawGradientChip(p, chip, s, activeLabel);
+            }
         }
         p->restore();
     }
@@ -319,38 +372,43 @@ public:
 
 // ---------------------------------------------------------------- PlaylistView
 
-PlaylistView::PlaylistView(QWidget* parent) : QListView(parent) {
+PlaylistView::PlaylistView(GlCanvas* canvas, QObject* parent) : QObject(parent) {
     m_proxy = new ArrangeProxy(this);
-    setModel(m_proxy);
-    setItemDelegate(new PlaylistCardDelegate(this));
-    setViewMode(QListView::IconMode);
-    setFlow(QListView::LeftToRight);
-    setWrapping(true);
-    setResizeMode(QListView::Adjust);
-    setMovement(QListView::Static);
-    setUniformItemSizes(true); // constant-time layout even for thousands of items
-    setLayoutMode(QListView::Batched);
-    setSpacing(kCardSpacing / 2);
-    setSelectionMode(QAbstractItemView::SingleSelection);
-    setDragEnabled(true);
-    setAcceptDrops(true);
-    viewport()->setAcceptDrops(true);
-    setDragDropMode(QAbstractItemView::DragDrop);
-    setDropIndicatorShown(false); // drawn ourselves, between cards
-    setMouseTracking(true);
-    setFrameShape(QFrame::NoFrame);
-    viewport()->setAutoFillBackground(false); // background painted in paintEvent (theme-aware)
-    setContextMenuPolicy(Qt::CustomContextMenu); // item actions live in the right-click menu (PlaylistDialog)
-    setAccessibleName(tr("Playlist items"));
-    setAccessibleDescription(tr("Ordered playlist items. Right-click or press the Menu key for item actions. "
-                                "Ctrl+Left and Ctrl+Right move the selected item, Enter shows it now, Delete "
-                                "removes it from the playlist."));
+    m_item = new GlItemView(canvas);
+    m_item->setModel(m_proxy);
+    m_item->setDelegate(new PlaylistCardDelegate(this));
+    m_item->setMode(GlItemView::Mode::Grid, QSize(kCardWidth, kCardHeight), kCardSpacing / 2);
+    m_item->setReorderEnabled(true);
+    m_item->setAccessibleName(tr("Playlist items"));
+    m_item->setKeyFilter([this](QKeyEvent* e) { return handleKey(e); });
+    connect(m_item, &GlItemView::reorderRequested, this, [this](int from, int pos) {
+        if (isArranged()) {
+            return; // dragging reorders the playlist - not while the cards are arranged by name
+        }
+        const int src = sourceRow(from);
+        const int to = (pos > src) ? pos - 1 : pos;
+        if (src >= 0 && to != src) {
+            emit moveRequested(src, to);
+        }
+    });
+    connect(m_item, &GlItemView::doubleClicked, this, [this](int vr) { emit itemDoubleClicked(sourceRow(vr)); });
+    connect(m_item, &GlItemView::activated, this, [this](int vr) { emit showNowRequested(sourceRow(vr)); });
+    connect(m_item, &GlItemView::currentRowChanged, this, [this](int) { emit selectionChanged(); });
+    connect(m_item, &GlItemView::contextMenuRequested, this, [this](const QPointF&, const QPoint& global, int vr) {
+        emit itemContextMenu(global, vr >= 0 ? sourceRow(vr) : -1);
+    });
 }
 
 void PlaylistView::setPlaylist(PlaylistModel* playlist) {
     m_playlist = playlist;
     m_proxy->setSourceModel(playlist);
-    viewport()->update();
+    const bool video = playlist && playlist->isVideo();
+    const bool mixed = playlist && playlist->isMixed();
+    m_item->setEmptyText(tr("This playlist is empty"),
+                         mixed ? tr("Click \"Add Media\" or drop image and video files here.")
+                         : video ? tr("Click \"Add Videos\" or drop video files here.")
+                                 : tr("Click \"Add Images\" or drop image files here."));
+    m_item->update();
 }
 
 void PlaylistView::setArrangement(Arrangement arrangement) {
@@ -361,27 +419,45 @@ void PlaylistView::setArrangement(Arrangement arrangement) {
     } else {
         m_proxy->sort(0, arrangement == Arrangement::AtoZ ? Qt::AscendingOrder : Qt::DescendingOrder);
     }
-    viewport()->update();
+    m_item->update();
 }
 
-int PlaylistView::sourceRow(const QModelIndex& viewIndex) const {
-    return viewIndex.isValid() ? m_proxy->mapToSource(viewIndex).row() : -1;
+int PlaylistView::sourceRow(int viewRow) const {
+    if (viewRow < 0) {
+        return -1;
+    }
+    return m_proxy->mapToSource(m_proxy->index(viewRow, 0)).row();
 }
 
-QModelIndex PlaylistView::viewIndex(int row) const {
-    return m_playlist ? m_proxy->mapFromSource(m_playlist->index(row)) : QModelIndex();
+int PlaylistView::viewRow(int sourceRow) const {
+    return m_playlist ? m_proxy->mapFromSource(m_playlist->index(sourceRow)).row() : -1;
+}
+
+int PlaylistView::selectedSourceRow() const {
+    return sourceRow(m_item->currentRow());
+}
+
+void PlaylistView::selectSourceRow(int row) {
+    const int vr = viewRow(row);
+    if (vr >= 0) {
+        m_item->setCurrentRow(vr, true);
+    }
+}
+
+void PlaylistView::clearSelection() {
+    m_item->clearCurrent();
 }
 
 void PlaylistView::setSourceRowHidden(int row, bool hidden) {
-    const QModelIndex idx = viewIndex(row);
-    if (idx.isValid()) {
-        setRowHidden(idx.row(), hidden);
+    const int vr = viewRow(row);
+    if (vr >= 0) {
+        m_item->setRowHidden(vr, hidden);
     }
 }
 
 bool PlaylistView::isSourceRowHidden(int row) const {
-    const QModelIndex idx = viewIndex(row);
-    return idx.isValid() && isRowHidden(idx.row());
+    const int vr = viewRow(row);
+    return vr >= 0 && m_item->isRowHidden(vr);
 }
 
 QStringList PlaylistView::acceptedLocalFiles(const QMimeData* mime) const {
@@ -397,105 +473,6 @@ QStringList PlaylistView::acceptedLocalFiles(const QMimeData* mime) const {
     return files;
 }
 
-int PlaylistView::insertPositionAt(const QPoint& pos) const {
-    const int n = model() ? model()->rowCount() : 0;
-    for (int row = 0; row < n; ++row) {
-        const QRect r = visualRect(model()->index(row, 0));
-        if (pos.y() < r.top() - spacing()) {
-            return row;
-        }
-        if (pos.y() <= r.bottom() + spacing() && pos.x() < r.center().x()) {
-            return row;
-        }
-    }
-    return n;
-}
-
-void PlaylistView::startDrag(Qt::DropActions) {
-    const QModelIndex idx = currentIndex();
-    if (!idx.isValid() || isArranged()) {
-        return; // dragging reorders the playlist - not while the cards are arranged by name
-    }
-    auto* mime = new QMimeData();
-    mime->setData(kRowMimeType, QByteArray::number(sourceRow(idx)));
-    auto* drag = new QDrag(this);
-    drag->setMimeData(mime);
-    const QImage thumb = idx.data(PlaylistModel::ThumbnailRole).value<QImage>();
-    if (!thumb.isNull()) {
-        const QPixmap pm = QPixmap::fromImage(thumb.scaled(128, 84, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        drag->setPixmap(pm);
-        drag->setHotSpot(QPoint(pm.width() / 2, pm.height() / 2));
-    }
-    drag->exec(Qt::MoveAction);
-    drag->deleteLater();
-    m_dropIndicatorPos = -1;
-    viewport()->update();
-}
-
-void PlaylistView::dragEnterEvent(QDragEnterEvent* event) {
-    const QMimeData* mime = event->mimeData();
-    if (mime->hasFormat(kRowMimeType) && event->source() == this) {
-        event->setDropAction(Qt::MoveAction);
-        event->accept();
-    } else if (!acceptedLocalFiles(mime).isEmpty()) {
-        event->setDropAction(Qt::CopyAction);
-        event->accept();
-    } else {
-        event->ignore();
-    }
-}
-
-void PlaylistView::dragMoveEvent(QDragMoveEvent* event) {
-    const QMimeData* mime = event->mimeData();
-    const bool internal = mime->hasFormat(kRowMimeType) && event->source() == this;
-    if (!internal && acceptedLocalFiles(mime).isEmpty()) {
-        event->ignore();
-        return;
-    }
-    const int pos = insertPositionAt(event->position().toPoint());
-    if (pos != m_dropIndicatorPos) {
-        m_dropIndicatorPos = pos;
-        viewport()->update();
-    }
-    event->setDropAction(internal ? Qt::MoveAction : Qt::CopyAction);
-    event->accept();
-}
-
-void PlaylistView::dragLeaveEvent(QDragLeaveEvent* event) {
-    m_dropIndicatorPos = -1;
-    viewport()->update();
-    QListView::dragLeaveEvent(event);
-}
-
-void PlaylistView::dropEvent(QDropEvent* event) {
-    const QMimeData* mime = event->mimeData();
-    const int pos = insertPositionAt(event->position().toPoint());
-    m_dropIndicatorPos = -1;
-    viewport()->update();
-    if (mime->hasFormat(kRowMimeType) && event->source() == this) {
-        if (isArranged()) {
-            event->ignore();
-            return;
-        }
-        const int from = mime->data(kRowMimeType).toInt();
-        const int to = (pos > from) ? pos - 1 : pos;
-        event->setDropAction(Qt::MoveAction);
-        event->accept();
-        if (to != from) {
-            emit moveRequested(from, to);
-        }
-        return;
-    }
-    const QStringList files = acceptedLocalFiles(mime);
-    if (files.isEmpty()) {
-        event->ignore();
-        return;
-    }
-    event->setDropAction(Qt::CopyAction);
-    event->accept();
-    emit filesDropped(files, isArranged() ? -1 : pos); // no meaningful insert spot in an arranged view
-}
-
 int PlaylistView::visibleNeighbour(int row, int step) const {
     if (!m_playlist) {
         return -1;
@@ -508,9 +485,8 @@ int PlaylistView::visibleNeighbour(int row, int step) const {
     return -1;
 }
 
-void PlaylistView::keyPressEvent(QKeyEvent* event) {
-    const QModelIndexList selected = selectionModel() ? selectionModel()->selectedIndexes() : QModelIndexList();
-    const int row = selected.isEmpty() ? -1 : sourceRow(selected.first());
+bool PlaylistView::handleKey(QKeyEvent* event) {
+    const int row = selectedSourceRow();
     if (row >= 0 && !isArranged() && (event->modifiers() & Qt::ControlModifier)) {
         // Past the visible neighbour - rows outside the current category
         // are hidden and keep their place.
@@ -518,68 +494,53 @@ void PlaylistView::keyPressEvent(QKeyEvent* event) {
         const int right = visibleNeighbour(row, +1);
         if (event->key() == Qt::Key_Left && left >= 0) {
             emit moveRequested(row, left);
-            return;
+            return true;
         }
         if (event->key() == Qt::Key_Right && right >= 0) {
             emit moveRequested(row, right);
-            return;
+            return true;
         }
         if (event->key() == Qt::Key_Home && row > 0) {
             emit moveRequested(row, 0);
-            return;
+            return true;
         }
         if (event->key() == Qt::Key_End && m_playlist && row < m_playlist->count() - 1) {
             emit moveRequested(row, m_playlist->count() - 1);
-            return;
+            return true;
         }
-    }
-    if (row >= 0 && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
-        emit showNowRequested(row);
-        return;
     }
     if (row >= 0 && event->key() == Qt::Key_Delete) {
         emit removeRequested(row);
-        return;
+        return true;
     }
-    QListView::keyPressEvent(event);
+    return false;
 }
 
 void PlaylistDialog::applyThemedIcons() {
     const QString v = Theme::iconVariant(Theme::currentTheme());
     const auto icon = [&v](const char* n) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(n))); };
     if (m_addButton) {
-        m_addButton->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
+        m_addButton->setIcon(icon("add"));
     }
-    if (m_searchAction) {
-        m_searchAction->setIcon(icon("search"));
-    }
-    // The two New Playlist buttons use the shared (theme-independent)
-    // playlist-add badge; Build Category keeps the plain themed "+".
+    // The New Playlist buttons use the shared (theme-independent) playlist-add badge.
     const QIcon createIcon(QStringLiteral(":/playlist/playlist-add.svg"));
-    for (IconButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton}) {
+    for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton}) {
         if (b) {
-            b->setStateIcon(createIcon);
+            b->setIcon(createIcon);
+            b->setTintIcon(false); // the badge keeps its own colors
         }
     }
-    if (m_categoryLabel) {
-        // The folder SVG stands in for the word "Category" (tinted per theme).
-        const Theme::ThemePalette& pal = Theme::themePalette(Theme::currentTheme());
-        m_categoryLabel->setPixmap(
-            Theme::tintedIcon(QStringLiteral(":/category/category-folder.svg"), pal.textPrimary, 20));
-    }
-    for (IconButton* b : {m_buildCategoryButton}) {
-        if (b) {
-            b->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
-        }
+    if (m_buildCategoryButton) {
+        m_buildCategoryButton->setIcon(icon("add"));
     }
     if (m_importButton) {
-        m_importButton->setStateIcon(icon("import"));
+        m_importButton->setIcon(icon("import"));
     }
     if (m_exportButton) {
-        m_exportButton->setStateIcon(icon("export"));
+        m_exportButton->setIcon(icon("export"));
     }
     if (m_categoryMenuButton) {
-        m_categoryMenuButton->setStateIcon(icon("more"), QIcon(), QIcon(), icon("more-disabled"));
+        m_categoryMenuButton->setIcon(icon("more"));
     }
 }
 
@@ -587,59 +548,9 @@ void PlaylistDialog::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
         applyThemedIcons();
-    }
-}
-
-void PlaylistView::changeEvent(QEvent* event) {
-    QListView::changeEvent(event);
-    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) {
-        viewport()->update(); // delegate re-reads the active theme's colors
-    }
-}
-
-void PlaylistView::paintEvent(QPaintEvent* event) {
-    const Theme::ThemePalette& pal = Theme::themePalette(Theme::currentTheme());
-    const int n = model() ? model()->rowCount() : 0;
-    {
-        QPainter p(viewport());
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.setPen(QPen(pal.border, 1));
-        p.setBrush(pal.altBg);
-        p.drawRoundedRect(QRectF(viewport()->rect()).adjusted(0.5, 0.5, -0.5, -0.5), cardRadius(), cardRadius());
-        if (n == 0) {
-            QFont title = font();
-            title.setBold(true);
-            title.setPointSizeF(title.pointSizeF() + 2);
-            p.setFont(title);
-            p.setPen(pal.textPrimary);
-            const QRect r = viewport()->rect();
-            p.drawText(r.adjusted(0, 0, 0, -28), Qt::AlignCenter, tr("This playlist is empty"));
-            p.setFont(font());
-            p.setPen(pal.textSecondary);
-            const bool video = m_playlist && m_playlist->isVideo();
-            const bool mixed = m_playlist && m_playlist->isMixed();
-            p.drawText(r.adjusted(0, 28, 0, 0), Qt::AlignCenter,
-                       mixed ? tr("Click \"Add Media\" or drop image and video files here.")
-                       : video ? tr("Click \"Add Videos\" or drop video files here.")
-                               : tr("Click \"Add Images\" or drop image files here."));
+        if (m_canvas) {
+            m_canvas->requestAnimation();
         }
-    }
-    QListView::paintEvent(event);
-    if (m_dropIndicatorPos >= 0 && n > 0) {
-        QPainter p(viewport());
-        QRect r;
-        int x = 0;
-        if (m_dropIndicatorPos < n) {
-            r = visualRect(model()->index(m_dropIndicatorPos, 0));
-            x = r.left() - 1;
-        } else {
-            r = visualRect(model()->index(n - 1, 0));
-            x = r.right() + 1;
-        }
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.setPen(Qt::NoPen);
-        p.setBrush(pal.accent);
-        p.drawRoundedRect(QRectF(x - 2, r.top() + 6, 4, r.height() - 12), 2, 2);
     }
 }
 
@@ -648,6 +559,8 @@ void PlaylistView::paintEvent(QPaintEvent* event) {
 PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     : QWidget(parent, Qt::Window), m_library(library) {
     setObjectName(QStringLiteral("playlistsWindow"));
+    setWindowFlag(Qt::FramelessWindowHint, true);
+    setAcceptDrops(true);
     setWindowTitle(tr("Playlists"));
     setWindowIcon(QIcon(playlistIconPath()));
     buildUi();
@@ -701,170 +614,132 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
                  tr("The change could not be saved to the playlist library. %1").arg(message), /*desktop=*/true);
     });
     selectPlaylist(m_library->selectedId());
-    DialogSizing::applyComfortableSize(this, QSize(1080, 720));
+    DialogSizing::applyComfortableSize(this, QSize(1180, 780));
+    setMinimumSize(920, 660);
 }
 
 void PlaylistDialog::buildUi() {
-    const auto createButton = [this](IconButton*& slot, const QString& text, const QString& name,
-                                     const QString& tip, const std::function<void()>& onClick) {
-        slot = new IconButton(QIcon(), text, this);
-        slot->setAccessibleName(name);
-        slot->setToolTip(tip);
-        connect(slot, &QPushButton::clicked, this, [onClick] { onClick(); });
-        return slot;
-    };
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 18, 20, 18);
-    root->setSpacing(12);
+    auto* box = new QVBoxLayout(this);
+    box->setContentsMargins(0, 0, 0, 0);
+    m_canvas = new GlCanvas(this);
+    box->addWidget(m_canvas);
+    m_canvas->setAccessibleName(tr("Playlists"));
+    m_canvas->setLayoutCallback([this](const QSizeF& s) { layoutGl(s); });
 
-    auto* header = new QHBoxLayout();
-    auto* title = new QLabel(tr("Playlists"), this);
-    title->setObjectName(QStringLiteral("appTitle"));
-    QFont titleFont = title->font();
-    titleFont.setBold(true);
-    titleFont.setPointSize(titleFont.pointSize() + 3);
-    title->setFont(titleFont);
-    header->addWidget(title);
-    header->addSpacing(14);
-    // Creation and add actions live here (they used to sit at the bottom of
-    // the sidebar / editor); same buttons, same handlers and shortcuts.
-    header->addWidget(createButton(m_newImageButton, tr("Image Playlist"), tr("New Image Playlist"),
-                                   tr("New image playlist (Ctrl+Alt+N)"), [this] { createPlaylist(false); }));
-    header->addWidget(createButton(m_newVideoButton, tr("Video Playlist"), tr("New Video Playlist"),
-                                   tr("New video playlist (Ctrl+Shift+N)"), [this] { createPlaylist(true); }));
-    header->addWidget(createButton(m_newMixedButton, tr("Mixed Playlist"), tr("New Mixed Playlist"),
-                                   tr("New mixed playlist - images and videos in one order (Ctrl+Alt+M)"),
-                                   [this] { createMixedPlaylist(); }));
-    header->addSpacing(10);
-    m_addButton = new IconButton(this); // text/tooltip follow the open playlist (updateUi)
-    m_addButton->setAccessibleName(tr("Add Media"));
-    connect(m_addButton, &QPushButton::clicked, this, &PlaylistDialog::onAddMedia);
-    header->addWidget(m_addButton);
-    applyThemedIcons();
-    header->addStretch();
-    // Icon-only (SVGs set in applyThemedIcons); the tooltip and accessible
-    // name carry the text.
-    m_importButton = new IconButton(this);
-    m_importButton->setAccessibleName(tr("Import"));
-    m_importButton->setToolTip(tr("Import: add the playlists from another Motiva library (.mtv) to yours"));
-    connect(m_importButton, &QPushButton::clicked, this, &PlaylistDialog::onImport);
-    header->addWidget(m_importButton);
-    m_exportButton = new IconButton(this);
-    m_exportButton->setAccessibleName(tr("Export"));
-    m_exportButton->setToolTip(tr("Export: save a copy of your playlist library as a .mtv file. Media files "
-                                  "are referenced, not copied."));
-    connect(m_exportButton, &QPushButton::clicked, this, &PlaylistDialog::onExport);
-    header->addWidget(m_exportButton);
-    root->addLayout(header);
+    // Panels first, so every control paints above them.
+    m_titlePanel = new GlPanel(m_canvas);
+    m_titlePanel->setBlock(GlPanel::Block::Accent);
+    m_titlePanel->setRadiusPx(16);
+    m_toolbarPanel = new GlPanel(m_canvas);
+    m_toolbarPanel->setRadiusPx(16);
+    m_sidebarPanel = new GlPanel(m_canvas);
+    m_sidebarPanel->setBlock(GlPanel::Block::Accent2);
+    m_editorPanel = new GlPanel(m_canvas);
+    m_editorPanel->setRadiusPx(20);
 
-    auto* rule = new QFrame(this);
-    rule->setObjectName(QStringLiteral("headerRule"));
-    rule->setFrameShape(QFrame::HLine);
-    rule->setFrameShadow(QFrame::Plain);
-    root->addWidget(rule);
-
-    auto* columns = new QHBoxLayout();
-    columns->setSpacing(18);
-    columns->addWidget(buildSidebar());
-    columns->addWidget(buildEditor(), 1);
-    root->addLayout(columns, 1);
-
-    auto* footer = new QHBoxLayout();
-    auto* libraryLabel = new QLabel(this);
-    libraryLabel->setObjectName(QStringLiteral("secondaryText"));
-    libraryLabel->setText(m_library->isPersistent()
-                              ? tr("Library: %1").arg(QFileInfo(m_library->libraryPath()).fileName())
-                              : tr("Library not saved this session"));
-    libraryLabel->setToolTip(QDir::toNativeSeparators(m_library->libraryPath()));
-    footer->addWidget(libraryLabel);
-    footer->addStretch();
-    m_applyButton = new QPushButton(tr("Set as Wallpaper"), this);
-    m_applyButton->setObjectName(QStringLiteral("primaryButton"));
-    m_applyButton->setMinimumHeight(38);
-    connect(m_applyButton, &QPushButton::clicked, this, [this] {
-        if (PlaylistModel* m = current()) {
-            emit applyToDesktopRequested(m->id(), selectedCategoryId());
-        }
+    m_titleLabel = new GlLabel(m_canvas);
+    m_titleLabel->setText(tr("Playlists"));
+    m_titleLabel->setPointSize(14);
+    m_titleLabel->setBold(true);
+    m_minButton = new GlButton(m_canvas, GlButton::Kind::Minimize);
+    m_minButton->setToolTip(tr("Minimize"));
+    connect(m_minButton, &GlButton::clicked, this, &QWidget::showMinimized);
+    m_maxButton = new GlButton(m_canvas, GlButton::Kind::Maximize);
+    connect(m_maxButton, &GlButton::clicked, this, [this] {
+        if (isMaximized()) showNormal(); else showMaximized();
     });
-    footer->addWidget(m_applyButton);
-    auto* closeButton = new QPushButton(tr("Close"), this);
-    connect(closeButton, &QPushButton::clicked, this, &QWidget::close);
-    footer->addWidget(closeButton);
-    root->addLayout(footer);
-}
+    m_closeButton = new GlButton(m_canvas, GlButton::Kind::Close);
+    m_closeButton->setToolTip(tr("Close"));
+    connect(m_closeButton, &GlButton::clicked, this, &QWidget::close);
 
-QWidget* PlaylistDialog::buildSidebar() {
-    auto* panel = new QWidget(this);
-    panel->setFixedWidth(250);
-    auto* col = new QVBoxLayout(panel);
-    col->setContentsMargins(0, 0, 0, 0);
-    col->setSpacing(10);
+    const auto makeButton = [this](GlButton::Kind kind, const QString& text, const QString& name, const QString& tip,
+                                   const std::function<void()>& onClick) {
+        auto* b = new GlButton(m_canvas, kind);
+        b->setText(text);
+        b->setAccessibleName(name);
+        b->setToolTip(tip);
+        connect(b, &GlButton::clicked, this, [onClick] { onClick(); });
+        return b;
+    };
+    const auto makeLabel = [this](const QString& text, qreal pt = 10.0, bool dim = false) {
+        auto* l = new GlLabel(m_canvas);
+        l->setText(text);
+        l->setPointSize(pt);
+        if (dim) l->setTone(GlLabel::Tone::Dim);
+        return l;
+    };
 
-    auto* label = new QLabel(tr("My Playlists"), panel);
-    label->setObjectName(QStringLiteral("sectionLabel"));
-    QFont f = label->font();
-    f.setBold(true);
-    label->setFont(f);
-    col->addWidget(label);
+    // Toolbar: creation and add actions (same handlers and shortcuts as before).
+    m_newImageButton = makeButton(GlButton::Kind::Secondary, tr("Image Playlist"), tr("New Image Playlist"),
+                                  tr("New image playlist (Ctrl+Alt+N)"), [this] { createPlaylist(false); });
+    m_newVideoButton = makeButton(GlButton::Kind::Secondary, tr("Video Playlist"), tr("New Video Playlist"),
+                                  tr("New video playlist (Ctrl+Shift+N)"), [this] { createPlaylist(true); });
+    m_newMixedButton = makeButton(GlButton::Kind::Secondary, tr("Mixed Playlist"), tr("New Mixed Playlist"),
+                                  tr("New mixed playlist - images and videos in one order (Ctrl+Alt+M)"),
+                                  [this] { createMixedPlaylist(); });
+    m_addButton = new GlButton(m_canvas, GlButton::Kind::Secondary); // text/tooltip follow the open playlist
+    m_addButton->setAccessibleName(tr("Add Media"));
+    connect(m_addButton, &GlButton::clicked, this, &PlaylistDialog::onAddMedia);
+    m_importButton = makeButton(GlButton::Kind::Icon, QString(), tr("Import"),
+                                tr("Import: add the playlists from another Motiva library (.mtv) to yours"),
+                                [this] { onImport(); });
+    m_exportButton = makeButton(GlButton::Kind::Icon, QString(), tr("Export"),
+                                tr("Export: save a copy of your playlist library as a .mtv file. Media files "
+                                   "are referenced, not copied."),
+                                [this] { onExport(); });
 
-    m_playlistList = new QListView(panel);
+    // Sidebar: My Playlists.
+    m_sidebarHeading = new GlLabel(m_canvas);
+    m_sidebarHeading->setText(tr("My Playlists"));
+    m_sidebarHeading->setCaps(true);
+    m_sidebarHeading->setBold(true);
+    m_sidebarHeading->setPointSize(8.5);
+    m_sidebarHeading->setTone(GlLabel::Tone::Accent);
+    m_playlistList = new GlItemView(m_canvas);
     m_playlistList->setModel(m_library->listModel());
-    m_playlistList->setItemDelegate(new PlaylistRowDelegate(m_playlistList));
-    m_playlistList->setUniformItemSizes(true);
-    m_playlistList->setMouseTracking(true);
-    m_playlistList->setFrameShape(QFrame::NoFrame);
-    m_playlistList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_playlistList->setDelegate(new PlaylistRowDelegate(m_playlistList));
+    m_playlistList->setMode(GlItemView::Mode::List, QSize(200, 58), 2);
+    m_playlistList->setFramed(false);
     m_playlistList->setAccessibleName(tr("My Playlists"));
-    m_playlistList->setStyleSheet(QStringLiteral("QListView { background: transparent; }"));
-    m_playlistList->setAccessibleDescription(tr("Right-click for Rename and Delete. F2 or double-click renames, "
-                                                "Delete or D deletes, Ctrl+Alt+N creates an image playlist, "
-                                                "Ctrl+Shift+N a video playlist."));
-    // Double-click and F2 (EditKeyPressed) open the inline name editor;
-    // Enter commits, Escape cancels (standard item-view editing).
-    m_playlistList->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
-    m_playlistList->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_playlistList, &QWidget::customContextMenuRequested, this, &PlaylistDialog::showPlaylistMenu);
-    m_playlistList->installEventFilter(this);
-    connect(m_playlistList->selectionModel(), &QItemSelectionModel::selectionChanged, this,
-            &PlaylistDialog::onSelectionInSidebar);
-    col->addWidget(m_playlistList, 1);
+    m_playlistList->setToolTip(QString());
+    m_playlistList->setKeyFilter([this](QKeyEvent* key) {
+        const bool plain = (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
+        if (plain && (key->key() == Qt::Key_Delete || key->key() == Qt::Key_D)) {
+            onDeletePlaylist(); // also keeps 'D' from being treated as a search key
+            return true;
+        }
+        if (plain && key->key() == Qt::Key_F2) {
+            startInlineRename();
+            return true;
+        }
+        if (key->key() == Qt::Key_Menu) {
+            return false;
+        }
+        return false;
+    });
+    connect(m_playlistList, &GlItemView::currentRowChanged, this, [this](int) { onSelectionInSidebar(); });
+    connect(m_playlistList, &GlItemView::doubleClicked, this, [this](int) { startInlineRename(); });
+    connect(m_playlistList, &GlItemView::contextMenuRequested, this,
+            [this](const QPointF&, const QPoint& global, int row) { showPlaylistMenu(global, row); });
+    m_renameEdit = new GlTextInput(m_canvas);
+    m_renameEdit->setConsumeEscape(true);
+    m_renameEdit->setVisible(false);
+    connect(m_renameEdit, &GlTextInput::editingFinished, this, [this] { finishInlineRename(true); });
+    connect(m_renameEdit, &GlTextInput::cancelled, this, [this] { finishInlineRename(false); });
+    connect(m_renameEdit, &GlTextInput::focusLost, this, [this] { finishInlineRename(true); });
 
-    return panel;
-}
-
-QWidget* PlaylistDialog::buildEditor() {
-    m_editorStack = new QStackedWidget(this);
-
-    m_emptyLabel = new QLabel(m_editorStack);
+    // Editor header.
+    m_emptyLabel = makeLabel(QString(), 11, true);
+    m_emptyLabel->setWordWrap(true);
     m_emptyLabel->setAlignment(Qt::AlignCenter);
-    m_emptyLabel->setObjectName(QStringLiteral("secondaryText"));
-    m_editorStack->addWidget(m_emptyLabel);
-
-    auto* editor = new QWidget(m_editorStack);
-    auto* col = new QVBoxLayout(editor);
-    col->setContentsMargins(0, 0, 0, 0);
-    col->setSpacing(10);
-
-    auto* head = new QHBoxLayout();
-    auto* nameBlock = new QVBoxLayout();
-    nameBlock->setSpacing(2);
-    m_nameLabel = new QLabel(editor);
-    QFont nf = m_nameLabel->font();
-    nf.setBold(true);
-    nf.setPointSize(nf.pointSize() + 2);
-    m_nameLabel->setFont(nf);
-    nameBlock->addWidget(m_nameLabel);
-    m_summaryLabel = new QLabel(editor);
-    m_summaryLabel->setObjectName(QStringLiteral("secondaryText"));
-    nameBlock->addWidget(m_summaryLabel);
-    head->addLayout(nameBlock, 1);
-    m_activeCheck = new QCheckBox(tr("Use this playlist"), editor);
-    QFont af = m_activeCheck->font();
-    af.setBold(true);
-    m_activeCheck->setFont(af);
+    m_nameLabel = makeLabel(QString(), 15);
+    m_nameLabel->setBold(true);
+    m_summaryLabel = makeLabel(QString(), 9.5, true);
+    m_activeCheck = new GlToggle(m_canvas);
+    m_activeCheck->setText(tr("Use this playlist"));
     m_activeCheck->setToolTip(tr("The active playlist - or the selected category of it - decides what is shown and "
                                  "changes it automatically. Only one source can be active. Turning it off keeps the current item."));
-    connect(m_activeCheck, &QCheckBox::toggled, this, [this](bool checked) {
+    connect(m_activeCheck, &GlToggle::toggled, this, [this](bool checked) {
         if (m_binding || !current()) {
             return;
         }
@@ -876,83 +751,53 @@ QWidget* PlaylistDialog::buildEditor() {
             showNotice(tr("Add at least one item that can be found on disk first."));
         }
     });
-    head->addWidget(m_activeCheck, 0, Qt::AlignVCenter);
-    col->addLayout(head);
 
-    // Virtual categories: saved filters of THIS playlist. "All" is built in.
-    auto* filterRow = new QHBoxLayout();
-    filterRow->setSpacing(8);
-    m_categoryLabel = new QLabel(editor);
-    m_categoryLabel->setFixedSize(24, 24);
-    m_categoryLabel->setAlignment(Qt::AlignCenter);
-    m_categoryLabel->setToolTip(tr("Categories"));
-    m_categoryLabel->setAccessibleName(tr("Categories"));
-    filterRow->addWidget(m_categoryLabel);
-    m_categoryPicker = new CategoryTreePicker(editor);
+    // Categories: saved filters of THIS playlist. "All" is built in.
+    m_categoryPicker = new GlTreeDropdown(m_canvas);
     m_categoryPicker->setAccessibleName(tr("Category"));
-    m_categoryPicker->setToolTip(tr("Categories of this playlist, shown as a tree. Right-click to edit, rename, "
-                                    "move or delete the selected one."));
-    m_categoryLabel->setBuddy(m_categoryPicker);
-    m_categoryPicker->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_categoryPicker, &QWidget::customContextMenuRequested, this,
-            [this](const QPoint& pos) { showCategoryMenu(m_categoryPicker->mapToGlobal(pos)); });
-    connect(m_categoryPicker, &CategoryTreePicker::currentCategoryChanged, this, [this] {
+    connect(m_categoryPicker, &GlTreeDropdown::contextMenuRequested, this,
+            [this](const QPoint& global) { showCategoryMenu(global); });
+    connect(m_categoryPicker, &GlTreeDropdown::currentCategoryChanged, this, [this] {
         applyItemFilter();
         updateUi();
     });
-    filterRow->addWidget(m_categoryPicker);
+    m_categoryMenuButton = makeButton(GlButton::Kind::Icon, QString(), tr("Category actions"),
+                                      tr("Edit, rename or delete this category"), [this] {
+        showCategoryMenu(m_canvas->mapToGlobal(QPoint(int(m_categoryMenuButton->rect().left()),
+                                                      int(m_categoryMenuButton->rect().bottom()))));
+    });
+    m_buildCategoryButton = makeButton(GlButton::Kind::Secondary, tr("Build Category"), tr("Build Category"),
+                                       tr("Save a filter for this playlist, e.g. file names containing \"anime\""),
+                                       [this] { onBuildCategory(0); });
     // Direct contents only, or the category plus everything below it.
-    m_includeSubCheck = new QCheckBox(tr("Include subcategories"), editor);
+    m_includeSubCheck = new GlToggle(m_canvas);
+    m_includeSubCheck->setText(tr("Include subcategories"));
     m_includeSubCheck->setToolTip(tr("On: a category shows (and plays) its own items plus those of all its "
                                      "subcategories. Off: only the items assigned to the category itself."));
     m_includeSubCheck->setChecked(m_library->includeSubcategories());
-    connect(m_includeSubCheck, &QCheckBox::toggled, this,
-            [this](bool on) { m_library->setIncludeSubcategories(on); });
-    filterRow->addWidget(m_includeSubCheck);
-    // Same actions as the right-click menu, reachable by keyboard too.
-    m_categoryMenuButton = new IconButton(QIcon(), QString(), editor); // three-dots SVG, set in applyThemedIcons()
-    m_categoryMenuButton->setAccessibleName(tr("Category actions"));
-    m_categoryMenuButton->setToolTip(tr("Edit, rename or delete this category"));
-    m_categoryMenuButton->setFixedWidth(40);
-    connect(m_categoryMenuButton, &QPushButton::clicked, this, [this] {
-        showCategoryMenu(m_categoryMenuButton->mapToGlobal(QPoint(0, m_categoryMenuButton->height())));
-    });
-    filterRow->addWidget(m_categoryMenuButton);
-    m_buildCategoryButton = new IconButton(QIcon(), tr("Build Category"), editor);
-    m_buildCategoryButton->setAccessibleName(tr("Build Category"));
-    auto* buildCategory = m_buildCategoryButton;
-    buildCategory->setToolTip(tr("Save a filter for this playlist, e.g. file names containing \"anime\""));
-    connect(buildCategory, &QPushButton::clicked, this, [this] { onBuildCategory(0); });
-    filterRow->addWidget(buildCategory);
-    filterRow->addStretch();
-    auto* arrangeLabel = new QLabel(tr("Arrange:"), editor);
-    filterRow->addWidget(arrangeLabel);
-    m_arrangeCombo = new QComboBox(editor);
+    connect(m_includeSubCheck, &GlToggle::toggled, this, [this](bool on) { m_library->setIncludeSubcategories(on); });
+
+    m_arrangeLabel = makeLabel(tr("Arrange"), 8.5, true);
+    m_arrangeLabel->setCaps(true);
+    m_arrangeLabel->setBold(true);
+    m_arrangeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_arrangeCombo = new GlDropdown(m_canvas);
+    m_arrangeCombo->setCompact(true);
     m_arrangeCombo->addItem(tr("None"), static_cast<int>(PlaylistView::Arrangement::None));
     m_arrangeCombo->addItem(tr("A – Z"), static_cast<int>(PlaylistView::Arrangement::AtoZ));
     m_arrangeCombo->addItem(tr("Z – A"), static_cast<int>(PlaylistView::Arrangement::ZtoA));
+    m_arrangeCombo->setCurrentIndex(0);
     m_arrangeCombo->setAccessibleName(tr("Arrange items"));
     m_arrangeCombo->setToolTip(tr("Only changes how the cards are shown here. None shows the playlist's own order - "
                                   "the order the wallpaper follows, which A – Z / Z – A never change."));
-    arrangeLabel->setBuddy(m_arrangeCombo);
-    connect(m_arrangeCombo, &QComboBox::currentIndexChanged, this, [this] {
-        m_view->setArrangement(static_cast<PlaylistView::Arrangement>(m_arrangeCombo->currentData().toInt()));
-        updateUi();
-    });
-    filterRow->addWidget(m_arrangeCombo);
-    m_itemSearch = new QLineEdit(editor);
-    m_itemSearch->setPlaceholderText(tr("Search this playlist…"));
-    m_searchAction = m_itemSearch->addAction(QIcon(), QLineEdit::LeadingPosition);
-    applyThemedIcons();
-    m_itemSearch->setClearButtonEnabled(true);
+    m_itemSearch = new GlTextInput(m_canvas);
+    m_itemSearch->setPlaceholder(tr("Search this playlist…"));
+    m_itemSearch->setClearable(true);
     m_itemSearch->setAccessibleName(tr("Search this playlist"));
-    m_itemSearch->setMinimumWidth(230);
-    filterRow->addWidget(m_itemSearch);
-    col->addLayout(filterRow);
     m_itemSearchTimer = new QTimer(this);
     m_itemSearchTimer->setSingleShot(true);
     m_itemSearchTimer->setInterval(150);
-    connect(m_itemSearch, &QLineEdit::textChanged, m_itemSearchTimer, qOverload<>(&QTimer::start));
+    connect(m_itemSearch, &GlTextInput::textChanged, m_itemSearchTimer, qOverload<>(&QTimer::start));
     connect(m_itemSearchTimer, &QTimer::timeout, this, [this] {
         applyItemFilter();
         updateUi();
@@ -965,12 +810,13 @@ QWidget* PlaylistDialog::buildEditor() {
         updateUi();
     });
 
-    m_view = new PlaylistView(editor);
-    m_view->setMinimumHeight(kCardHeight + 3 * kCardSpacing);
-    col->addWidget(m_view, 1);
-    m_showingLabel = new QLabel(editor);
-    m_showingLabel->setObjectName(QStringLiteral("secondaryText"));
-    col->addWidget(m_showingLabel);
+    m_view = new PlaylistView(m_canvas, this);
+    connect(m_arrangeCombo, &GlDropdown::currentIndexChanged, this, [this] {
+        m_view->setArrangement(static_cast<PlaylistView::Arrangement>(m_arrangeCombo->currentData().toInt()));
+        applyItemFilter(); // sorting resets the view's hidden rows
+        updateUi();
+    });
+    m_showingLabel = makeLabel(QString(), 9.5, true);
     connect(m_view, &PlaylistView::filesDropped, this, [this](const QStringList& files, int row) {
         if (current()) {
             addFilesTo(current()->id(), files, row);
@@ -990,8 +836,7 @@ QWidget* PlaylistDialog::buildEditor() {
         }
     });
     connect(m_view, &PlaylistView::removeRequested, this, [this](int) { onRemove(); });
-    connect(m_view, &QListView::doubleClicked, this, [this](const QModelIndex& idx) {
-        const int row = m_view->sourceRow(idx);
+    connect(m_view, &PlaylistView::itemDoubleClicked, this, [this](int row) {
         selectRow(row);
         if (current() && !current()->isAvailable(row)) {
             onFindFile(row);
@@ -999,55 +844,34 @@ QWidget* PlaylistDialog::buildEditor() {
             onShowNow();
         }
     });
+    connect(m_view, &PlaylistView::itemContextMenu, this,
+            [this](const QPoint& global, int row) { showItemMenu(global, row); });
+    connect(m_view, &PlaylistView::selectionChanged, this, &PlaylistDialog::updateUi);
 
-    m_hintLabel = new QLabel(tr("Right-click an item for more actions  •  Drag items to set the order (Arrange: None)  •  "
-                                "Double-click an item to show it now"),
-                             editor);
-    m_hintLabel->setObjectName(QStringLiteral("secondaryText"));
-    m_hintLabel->setWordWrap(true);
-    col->addWidget(m_hintLabel);
-
-    auto* actions = new QHBoxLayout();
-    actions->setSpacing(8);
-    m_showNowButton = new QPushButton(tr("Show Now"), editor);
-    m_showNowButton->setToolTip(tr("Make the selected item the current one (Enter)"));
-    connect(m_showNowButton, &QPushButton::clicked, this, &PlaylistDialog::onShowNow);
-    actions->addWidget(m_showNowButton);
-    m_flowButton = new QPushButton(tr("Wallpaper Flow…"), editor);
-    m_flowButton->setToolTip(tr("See and edit the order in which this playlist changes the wallpaper, as a diagram"));
-    connect(m_flowButton, &QPushButton::clicked, this, &PlaylistDialog::openFlow);
-    actions->addWidget(m_flowButton);
-    actions->addStretch();
-    m_clearButton = new QPushButton(tr("Clear"), editor);
-    m_clearButton->setToolTip(tr("Remove every item from this playlist. No files are deleted."));
-    connect(m_clearButton, &QPushButton::clicked, this, &PlaylistDialog::onClear);
-    actions->addWidget(m_clearButton);
-    col->addLayout(actions);
+    m_hintLabel = makeLabel(tr("Right-click an item for more actions  •  Drag items to set the order (Arrange: None)  •  "
+                               "Double-click an item to show it now"),
+                            9, true);
+    m_showNowButton = makeButton(GlButton::Kind::Secondary, tr("Show Now"), tr("Show Now"),
+                                 tr("Make the selected item the current one (Enter)"), [this] { onShowNow(); });
+    m_flowButton = makeButton(GlButton::Kind::Secondary, tr("Wallpaper Flow…"), tr("Wallpaper Flow"),
+                              tr("See and edit the order in which this playlist changes the wallpaper, as a diagram"),
+                              [this] { openFlow(); });
+    m_clearButton = makeButton(GlButton::Kind::Secondary, tr("Clear"), tr("Clear"),
+                               tr("Remove every item from this playlist. No files are deleted."), [this] { onClear(); });
 
     // Missing media: explains the state and offers Find File (search the
-    // drives) or removing the entry. Styled from the active theme in
-    // updateMissingBanner().
-    m_missingBanner = new QFrame(editor);
-    m_missingBanner->setObjectName(QStringLiteral("missingBanner"));
-    auto* bannerRow = new QHBoxLayout(m_missingBanner);
-    bannerRow->setContentsMargins(14, 10, 10, 10);
-    bannerRow->setSpacing(10);
-    auto* bannerText = new QVBoxLayout();
-    bannerText->setSpacing(2);
-    m_missingTitle = new QLabel(tr("File not found"), m_missingBanner);
-    QFont mf = m_missingTitle->font();
-    mf.setBold(true);
-    m_missingTitle->setFont(mf);
-    bannerText->addWidget(m_missingTitle);
-    m_missingText = new QLabel(m_missingBanner);
-    m_missingText->setObjectName(QStringLiteral("secondaryText"));
-    m_missingText->setWordWrap(true);
-    bannerText->addWidget(m_missingText);
-    bannerRow->addLayout(bannerText, 1);
-    m_findFileButton = new QPushButton(tr("Find File"), m_missingBanner);
-    m_findFileButton->setObjectName(QStringLiteral("primaryButton"));
-    m_findFileButton->setToolTip(tr("Search your drives for this file and repair its location"));
-    connect(m_findFileButton, &QPushButton::clicked, this, [this] {
+    // drives) or removing the entry.
+    m_missingBanner = new GlPanel(m_canvas);
+    m_missingBanner->setBlock(GlPanel::Block::Warning);
+    m_missingBanner->setRadiusPx(16);
+    m_missingBanner->setVisible(false);
+    m_missingTitle = makeLabel(tr("File not found"), 10.5);
+    m_missingTitle->setBold(true);
+    m_missingTitle->setVisible(false);
+    m_missingText = makeLabel(QString(), 9.5, true);
+    m_missingText->setVisible(false);
+    m_findFileButton = makeButton(GlButton::Kind::Secondary, tr("Find File"), tr("Find File"),
+                                  tr("Search your drives for this file and repair its location"), [this] {
         PlaylistModel* m = current();
         if (!m) {
             return;
@@ -1060,107 +884,315 @@ QWidget* PlaylistDialog::buildEditor() {
         }
         onFindFile(row);
     });
-    bannerRow->addWidget(m_findFileButton, 0, Qt::AlignVCenter);
-    // Several files missing: look for all of them in one pass instead of
-    // walking the drives once per file.
-    m_findAllButton = new QPushButton(tr("Find All at Once"), m_missingBanner);
-    m_findAllButton->setToolTip(tr("Search for every missing file of this playlist in a single pass over your drives"));
-    connect(m_findAllButton, &QPushButton::clicked, this, &PlaylistDialog::onFindAll);
-    m_findAllButton->setVisible(false);
-    bannerRow->addWidget(m_findAllButton, 0, Qt::AlignVCenter);
-    // Only shown when a valid backup copy of the selected missing file exists.
-    m_restoreBackupButton = new QPushButton(tr("Restore from Backup"), m_missingBanner);
-    m_restoreBackupButton->setToolTip(tr("Copy this file back from Motiva's backup. An existing file is never overwritten."));
-    connect(m_restoreBackupButton, &QPushButton::clicked, this, [this] { onRestoreFromBackup(selectedRow()); });
-    m_restoreBackupButton->setVisible(false);
-    bannerRow->addWidget(m_restoreBackupButton, 0, Qt::AlignVCenter);
-    m_missingRemoveButton = new QPushButton(tr("Remove"), m_missingBanner);
-    m_missingRemoveButton->setToolTip(tr("Remove this entry from the playlist. No file is deleted."));
-    connect(m_missingRemoveButton, &QPushButton::clicked, this, &PlaylistDialog::onRemove);
-    bannerRow->addWidget(m_missingRemoveButton, 0, Qt::AlignVCenter);
-    m_missingBanner->setVisible(false);
-    col->addWidget(m_missingBanner);
+    m_findAllButton = makeButton(GlButton::Kind::Secondary, tr("Find All at Once"), tr("Find All at Once"),
+                                 tr("Search for every missing file of this playlist in a single pass over your drives"),
+                                 [this] { onFindAll(); });
+    m_restoreBackupButton = makeButton(GlButton::Kind::Secondary, tr("Restore from Backup"), tr("Restore from Backup"),
+                                       tr("Copy this file back from Motiva's backup. An existing file is never overwritten."),
+                                       [this] { onRestoreFromBackup(selectedRow()); });
+    m_missingRemoveButton = makeButton(GlButton::Kind::Secondary, tr("Remove"), tr("Remove"),
+                                       tr("Remove this entry from the playlist. No file is deleted."), [this] { onRemove(); });
+    for (GlButton* b : {m_findFileButton, m_findAllButton, m_restoreBackupButton, m_missingRemoveButton}) {
+        b->setVisible(false);
+    }
 
-    connect(m_view, &QWidget::customContextMenuRequested, this, &PlaylistDialog::showItemMenu);
-
-    m_noticeLabel = new QLabel(editor);
-    m_noticeLabel->setObjectName(QStringLiteral("secondaryText"));
-    m_noticeLabel->setWordWrap(true);
+    m_noticeLabel = makeLabel(QString(), 9.5, true);
     m_noticeLabel->setVisible(false);
-    col->addWidget(m_noticeLabel);
 
     // Settings differ by kind: image playlists have change triggers; video
     // playlists advance when a video ends.
-    m_settingsStack = new QStackedWidget(editor);
-    auto* imageSettings = new QWidget(m_settingsStack);
-    auto* imageCol = new QVBoxLayout(imageSettings);
-    imageCol->setContentsMargins(0, 0, 0, 0);
-    imageCol->setSpacing(8);
-    auto* rotationLabel = new QLabel(tr("Change image automatically"), imageSettings);
-    m_rotationLabel = rotationLabel;
-    rotationLabel->setObjectName(QStringLiteral("sectionLabel"));
-    QFont rf = rotationLabel->font();
-    rf.setBold(true);
-    rotationLabel->setFont(rf);
-    imageCol->addWidget(rotationLabel);
-    auto* grid = new QGridLayout();
-    grid->setHorizontalSpacing(24);
-    grid->setVerticalSpacing(8);
-    m_unlockCheck = new QCheckBox(tr("After Lock → Unlock"), imageSettings);
+    m_rotationLabel = makeLabel(tr("Change image automatically"), 8.5);
+    m_rotationLabel->setCaps(true);
+    m_rotationLabel->setBold(true);
+    m_rotationLabel->setTone(GlLabel::Tone::Accent);
+    m_unlockCheck = new GlToggle(m_canvas);
+    m_unlockCheck->setText(tr("After Lock → Unlock"));
     m_unlockCheck->setToolTip(tr("Show the next image each time you unlock Windows after it was locked."));
-    grid->addWidget(m_unlockCheck, 0, 0);
-    m_startCheck = new QCheckBox(tr("After Windows restarts or you sign in"), imageSettings);
+    m_startCheck = new GlToggle(m_canvas);
+    m_startCheck->setText(tr("After Windows restarts or you sign in"));
     m_startCheck->setToolTip(tr("Show the next image when Motiva starts in a new Windows session. Restarting "
                                 "Explorer or Motiva itself does not count."));
-    grid->addWidget(m_startCheck, 0, 1);
-    auto* intervalRow = new QHBoxLayout();
-    m_intervalCheck = new QCheckBox(tr("Every"), imageSettings);
-    intervalRow->addWidget(m_intervalCheck);
-    m_intervalCombo = new QComboBox(imageSettings);
+    m_intervalCheck = new GlToggle(m_canvas);
+    m_intervalCheck->setText(tr("Every"));
+    m_intervalCombo = new GlDropdown(m_canvas);
+    m_intervalCombo->setCompact(true);
     m_intervalCombo->setAccessibleName(tr("Image change interval"));
     for (int m : {1, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440}) {
         m_intervalCombo->addItem(m < 60 ? countText(m, tr("%1 minute"), tr("%1 minutes"))
                                         : countText(m / 60, tr("%1 hour"), tr("%1 hours")),
                                  m);
     }
-    intervalRow->addWidget(m_intervalCombo);
-    intervalRow->addStretch();
-    grid->addLayout(intervalRow, 1, 0, 1, 2);
-    imageCol->addLayout(grid);
-    auto* imageNote = new QLabel(tr("Images change in playlist order and wrap around after the last. Automatic "
-                                    "changes only happen while this playlist is the active one."),
-                                 imageSettings);
-    imageNote->setObjectName(QStringLiteral("secondaryText"));
-    imageNote->setWordWrap(true);
-    imageCol->addWidget(imageNote);
-    for (QCheckBox* c : {m_unlockCheck, m_startCheck, m_intervalCheck}) {
-        connect(c, &QCheckBox::toggled, this, &PlaylistDialog::onRotationEdited);
+    m_intervalCombo->setCurrentIndex(0);
+    m_imageNote = makeLabel(tr("Images change in playlist order and wrap around after the last. Automatic "
+                               "changes only happen while this playlist is the active one."),
+                            9, true);
+    for (GlToggle* c : {m_unlockCheck, m_startCheck, m_intervalCheck}) {
+        connect(c, &GlToggle::toggled, this, &PlaylistDialog::onRotationEdited);
     }
-    connect(m_intervalCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &PlaylistDialog::onRotationEdited);
-    m_settingsStack->addWidget(imageSettings);
+    connect(m_intervalCombo, &GlDropdown::currentIndexChanged, this, &PlaylistDialog::onRotationEdited);
+    m_videoNote = makeLabel(tr("Videos play once each, in playlist order. After the last video the playlist "
+                               "starts again from the first when \"Loop video\" is on in Settings, and stops "
+                               "on the last video when it is off."),
+                            9.5, true);
+    m_videoNote->setWordWrap(true);
 
-    auto* videoSettings = new QWidget(m_settingsStack);
-    auto* videoCol = new QVBoxLayout(videoSettings);
-    videoCol->setContentsMargins(0, 0, 0, 0);
-    videoCol->setSpacing(8);
-    auto* videoLabel = new QLabel(tr("Playback"), videoSettings);
-    videoLabel->setObjectName(QStringLiteral("sectionLabel"));
-    videoLabel->setFont(rf);
-    videoCol->addWidget(videoLabel);
-    auto* videoNote = new QLabel(tr("Videos play once each, in playlist order. After the last video the playlist "
-                                    "starts again from the first when \"Loop video\" is on in Settings, and stops "
-                                    "on the last video when it is off."),
-                                 videoSettings);
-    videoNote->setObjectName(QStringLiteral("secondaryText"));
-    videoNote->setWordWrap(true);
-    videoCol->addWidget(videoNote);
-    videoCol->addStretch();
-    m_settingsStack->addWidget(videoSettings);
-    col->addWidget(m_settingsStack);
+    // Footer.
+    m_libraryLabel = makeLabel(m_library->isPersistent()
+                                   ? tr("Library: %1").arg(QFileInfo(m_library->libraryPath()).fileName())
+                                   : tr("Library not saved this session"),
+                               9, true);
+    m_libraryLabel->setToolTip(QDir::toNativeSeparators(m_library->libraryPath()));
+    m_applyButton = new GlButton(m_canvas, GlButton::Kind::Primary);
+    m_applyButton->setText(tr("Set as Wallpaper"));
+    connect(m_applyButton, &GlButton::clicked, this, [this] {
+        if (PlaylistModel* m = current()) {
+            emit applyToDesktopRequested(m->id(), selectedCategoryId());
+        }
+    });
+    m_footerClose = makeButton(GlButton::Kind::Secondary, tr("Close"), tr("Close"), QString(), [this] { close(); });
 
-    m_editorStack->addWidget(editor);
-    return m_editorStack;
+    applyThemedIcons();
+    updateWindowButtonsState();
+}
+
+void PlaylistDialog::updateWindowButtonsState() {
+    if (!m_maxButton) {
+        return;
+    }
+    m_maxButton->setKind(isMaximized() ? GlButton::Kind::Restore : GlButton::Kind::Maximize);
+    m_maxButton->setToolTip(isMaximized() ? tr("Restore") : tr("Maximize"));
+}
+
+// Positions everything. The card grid takes whatever vertical space the
+// fixed rows leave; rows that do not apply right now (banner, notice,
+// settings of the other playlist kind) take none.
+void PlaylistDialog::layoutGl(const QSizeF& size) {
+    if (!m_footerClose || !m_applyButton) {
+        return;
+    }
+    const qreal W = size.width(), H = size.height();
+    const qreal m = 12;
+    PlaylistModel* pl = current();
+
+    // Title strip.
+    const QRectF strip(m, m, W - 2 * m, 46);
+    m_titlePanel->setRect(strip);
+    m_titleLabel->setRect(QRectF(strip.left() + 20, strip.top() + 8, 220, 30));
+    const qreal bw = 36, bh = 30, by = strip.top() + 8;
+    qreal x = strip.right() - 10 - bw;
+    m_closeButton->setRect(QRectF(x, by, bw, bh));
+    x -= bw + 2;
+    m_maxButton->setRect(QRectF(x, by, bw, bh));
+    x -= bw + 2;
+    m_minButton->setRect(QRectF(x, by, bw, bh));
+
+    // Toolbar.
+    const QRectF tool(m, strip.bottom() + 8, W - 2 * m, 52);
+    m_toolbarPanel->setRect(tool);
+    qreal tx = tool.left() + 12;
+    const qreal ty = tool.top() + 10, th = 32;
+    const auto place = [&](GlButton* b, qreal w) {
+        b->setRect(QRectF(tx, ty, w, th));
+        tx += w + 8;
+    };
+    place(m_newImageButton, 148);
+    place(m_newVideoButton, 148);
+    place(m_newMixedButton, 148);
+    tx += 10;
+    place(m_addButton, 140);
+    m_exportButton->setRect(QRectF(tool.right() - 12 - 38, ty - 1, 38, 34));
+    m_importButton->setRect(QRectF(tool.right() - 12 - 38 - 8 - 38, ty - 1, 38, 34));
+
+    // Footer.
+    const QRectF footer(m, H - m - 52, W - 2 * m, 52);
+    m_footerClose->setRect(QRectF(footer.right() - 110, footer.top() + 8, 110, 38));
+    m_applyButton->setRect(QRectF(footer.right() - 110 - 12 - 280, footer.top() + 2, 280, 50));
+    m_libraryLabel->setRect(QRectF(footer.left() + 8, footer.top() + 12, std::max<qreal>(80, footer.width() - 430), 28));
+
+    // Body: sidebar + editor.
+    const qreal bodyTop = tool.bottom() + 8;
+    const qreal bodyBottom = footer.top() - 8;
+    const qreal sideW = 264;
+    const QRectF side(m, bodyTop, sideW, bodyBottom - bodyTop);
+    const QRectF ed(side.right() + 10, bodyTop, W - m - (side.right() + 10), bodyBottom - bodyTop);
+    m_sidebarPanel->setRect(side);
+    m_editorPanel->setRect(ed);
+    m_sidebarHeading->setRect(QRectF(side.left() + 20, side.top() + 18, side.width() - 40, 20));
+    m_playlistList->setRect(QRectF(side.left() + 8, side.top() + 44, side.width() - 16, side.height() - 52));
+    if (m_renameRow >= 0) {
+        const QRectF rr = m_playlistList->rowRect(m_renameRow);
+        if (!rr.isNull()) {
+            m_renameEdit->setRect(QRectF(rr.left() + 6, rr.top() + 4, rr.width() - 12, 36));
+            m_renameEdit->setClip(m_playlistList->rect());
+        }
+    }
+
+    // Editor content.
+    const bool has = pl != nullptr;
+    const QRectF inner = ed.adjusted(18, 16, -18, -14);
+    m_emptyLabel->setVisible(!has);
+    m_emptyLabel->setRect(inner);
+    const QList<GlItem*> editorItems = {m_nameLabel, m_summaryLabel, m_activeCheck, m_categoryPicker,
+                                        m_categoryMenuButton, m_buildCategoryButton, m_includeSubCheck, m_arrangeLabel,
+                                        m_arrangeCombo, m_itemSearch, m_view->item(), m_showingLabel, m_hintLabel,
+                                        m_showNowButton, m_flowButton, m_clearButton, m_rotationLabel, m_unlockCheck,
+                                        m_startCheck, m_intervalCheck, m_intervalCombo, m_imageNote, m_videoNote};
+    for (GlItem* it : editorItems) {
+        it->setVisible(has);
+    }
+    if (!has) {
+        for (GlItem* it : QList<GlItem*>{m_missingBanner, m_missingTitle, m_missingText, m_findFileButton, m_findAllButton,
+                                         m_restoreBackupButton, m_missingRemoveButton, m_noticeLabel}) {
+            it->setVisible(false);
+        }
+        return;
+    }
+
+    qreal y = inner.top();
+    // Header: name + summary left, "Use this playlist" right.
+    const qreal toggleW = std::min<qreal>(320, inner.width() * 0.42);
+    m_nameLabel->setRect(QRectF(inner.left(), y, inner.width() - toggleW - 10, 26));
+    m_summaryLabel->setRect(QRectF(inner.left(), y + 26, inner.width() - toggleW - 10, 20));
+    m_activeCheck->setRect(QRectF(inner.right() - toggleW, y + 2, toggleW, 44));
+    y += 56;
+    // Category row.
+    const qreal rowH = 38;
+    qreal cx = inner.left();
+    m_categoryPicker->setRect(QRectF(cx, y, 240, 34));
+    cx += 240 + 8;
+    m_categoryMenuButton->setRect(QRectF(cx, y - 1, 38, 36));
+    cx += 38 + 8;
+    m_buildCategoryButton->setRect(QRectF(cx, y, 156, 34));
+    cx += 156 + 12;
+    m_includeSubCheck->setRect(QRectF(cx, y - 5, std::max<qreal>(0, inner.right() - cx), 44));
+    m_includeSubCheck->setVisible(inner.right() - cx > 200);
+    y += rowH + 6;
+    // Search + arrange row.
+    const qreal arrangeW = 130;
+    m_arrangeCombo->setRect(QRectF(inner.right() - arrangeW, y, arrangeW, 34));
+    m_arrangeLabel->setRect(QRectF(inner.right() - arrangeW - 8 - 80, y, 80, 34));
+    m_itemSearch->setRect(QRectF(inner.left(), y, std::max<qreal>(120, inner.width() - arrangeW - 8 - 80 - 14), 34));
+    y += rowH + 6;
+
+    // Reserve space from the bottom first.
+    qreal bottom = inner.bottom();
+    const bool video = m_videoSettings;
+    const qreal settingsH = video ? 56 : 128;
+    // Settings block.
+    const qreal sTop = bottom - settingsH;
+    if (video) {
+        m_rotationLabel->setVisible(false);
+        for (GlItem* it : QList<GlItem*>{m_unlockCheck, m_startCheck, m_intervalCheck, m_intervalCombo, m_imageNote}) {
+            it->setVisible(false);
+        }
+        m_videoNote->setVisible(true);
+        m_videoNote->setRect(QRectF(inner.left(), sTop, inner.width(), settingsH));
+    } else {
+        m_videoNote->setVisible(false);
+        m_rotationLabel->setRect(QRectF(inner.left() + 4, sTop, inner.width(), 18));
+        const qreal half = inner.width() / 2;
+        m_unlockCheck->setRect(QRectF(inner.left(), sTop + 20, half - 6, 40));
+        m_startCheck->setRect(QRectF(inner.left() + half, sTop + 20, half, 40));
+        m_intervalCheck->setRect(QRectF(inner.left(), sTop + 60, 180, 40));
+        m_intervalCombo->setRect(QRectF(inner.left() + 188, sTop + 63, 200, 34));
+        m_imageNote->setRect(QRectF(inner.left() + 4, sTop + 102, inner.width() - 4, 22));
+    }
+    bottom = sTop - 8;
+    // Notice (inline feedback line).
+    const bool notice = !m_noticeLabel->text().isEmpty();
+    m_noticeLabel->setVisible(notice);
+    if (notice) {
+        m_noticeLabel->setRect(QRectF(inner.left() + 4, bottom - 20, inner.width() - 4, 20));
+        bottom -= 24;
+    }
+    // Missing banner.
+    const bool banner = m_missingBanner->isVisible();
+    if (banner) {
+        const QRectF br(inner.left(), bottom - 70, inner.width(), 70);
+        m_missingBanner->setRect(br);
+        // Buttons right-to-left.
+        qreal bx = br.right() - 12;
+        for (GlButton* b : {m_missingRemoveButton, m_restoreBackupButton, m_findAllButton, m_findFileButton}) {
+            if (!b->isVisible()) {
+                continue;
+            }
+            const qreal w = b == m_findFileButton ? 100 : b == m_findAllButton ? 150 : b == m_restoreBackupButton ? 170 : 90;
+            b->setRect(QRectF(bx - w, br.center().y() - 17, w, 34));
+            bx -= w + 8;
+        }
+        m_missingTitle->setRect(QRectF(br.left() + 20, br.top() + 12, bx - br.left() - 28, 22));
+        m_missingText->setRect(QRectF(br.left() + 20, br.top() + 36, bx - br.left() - 28, 22));
+        m_missingTitle->setVisible(true);
+        m_missingText->setVisible(true);
+        bottom -= 76;
+    } else {
+        m_missingTitle->setVisible(false);
+        m_missingText->setVisible(false);
+    }
+    // Action row.
+    m_showNowButton->setRect(QRectF(inner.left(), bottom - 36, 120, 34));
+    m_flowButton->setRect(QRectF(inner.left() + 128, bottom - 36, 170, 34));
+    m_clearButton->setRect(QRectF(inner.right() - 100, bottom - 36, 100, 34));
+    bottom -= 42;
+    // The hint line only when the grid keeps a comfortable height.
+    const bool showHint = (bottom - 20 - 22) - y > 300;
+    m_hintLabel->setVisible(showHint);
+    if (showHint) {
+        m_hintLabel->setRect(QRectF(inner.left() + 4, bottom - 18, inner.width() - 4, 18));
+        bottom -= 20;
+    }
+    m_showingLabel->setRect(QRectF(inner.left() + 4, bottom - 18, inner.width() - 4, 18));
+    bottom -= 22;
+    // The grid fills the rest.
+    m_view->item()->setRect(QRectF(inner.left(), y, inner.width(), std::max<qreal>(60, bottom - y)));
+}
+
+bool PlaylistDialog::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
+    if (eventType == "windows_generic_MSG" && m_titlePanel &&
+        GlUi::handleFrameHitTest(this, m_canvas, m_titlePanel->rect(), message, result)) {
+        return true;
+    }
+    return QWidget::nativeEvent(eventType, message, result);
+}
+
+void PlaylistDialog::dragEnterEvent(QDragEnterEvent* event) {
+    if (current() && !m_view->acceptedLocalFiles(event->mimeData()).isEmpty()) {
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+    } else {
+        event->ignore();
+    }
+}
+
+void PlaylistDialog::dragMoveEvent(QDragMoveEvent* event) {
+    const QPointF pos = event->position();
+    if (!current() || m_view->acceptedLocalFiles(event->mimeData()).isEmpty() || !m_view->item()->rect().contains(pos)) {
+        m_view->item()->setDropIndicator(-1);
+        event->ignore();
+        return;
+    }
+    m_view->item()->setDropIndicator(m_view->isArranged() ? -1 : m_view->item()->insertPositionAt(pos));
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+}
+
+void PlaylistDialog::dragLeaveEvent(QDragLeaveEvent* event) {
+    m_view->item()->setDropIndicator(-1);
+    QWidget::dragLeaveEvent(event);
+}
+
+void PlaylistDialog::dropEvent(QDropEvent* event) {
+    const QPointF pos = event->position();
+    const int insert = m_view->isArranged() ? -1 : m_view->item()->insertPositionAt(pos);
+    m_view->item()->setDropIndicator(-1);
+    const QStringList files = m_view->acceptedLocalFiles(event->mimeData());
+    if (files.isEmpty() || !current() || !m_view->item()->rect().contains(pos)) {
+        event->ignore();
+        return;
+    }
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+    addFilesTo(current()->id(), files, insert);
 }
 
 PlaylistModel* PlaylistDialog::current() const {
@@ -1186,9 +1218,7 @@ void PlaylistDialog::activateSelection() {
 void PlaylistDialog::selectPlaylist(qint64 id) {
     const int row = m_library->listModel()->rowOf(id);
     if (row >= 0) {
-        const QModelIndex idx = m_library->listModel()->index(row);
-        m_playlistList->setCurrentIndex(idx);
-        m_playlistList->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
+        m_playlistList->setCurrentRow(row); // emits -> onSelectionInSidebar when it changes
     } else if (m_library->playlistCount() > 0) {
         selectPlaylist(m_library->listModel()->idAt(0));
         return;
@@ -1197,17 +1227,17 @@ void PlaylistDialog::selectPlaylist(qint64 id) {
 }
 
 void PlaylistDialog::onSelectionInSidebar() {
-    const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
-    if (!sel.isEmpty()) {
-        m_library->setSelected(m_library->listModel()->idAt(sel.first().row()));
+    const int row = m_playlistList->currentRow();
+    if (row >= 0) {
+        m_library->setSelected(m_library->listModel()->idAt(row));
     }
     showNotice(QString());
     bindSelectedPlaylist();
 }
 
 void PlaylistDialog::bindSelectedPlaylist() {
-    const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
-    const qint64 id = sel.isEmpty() ? 0 : m_library->listModel()->idAt(sel.first().row());
+    const int listRow = m_playlistList->currentRow();
+    const qint64 id = listRow < 0 ? 0 : m_library->listModel()->idAt(listRow);
     PlaylistModel* model = m_library->playlist(id);
     if (model != m_view->playlist()) {
         m_view->setPlaylist(model);
@@ -1230,10 +1260,6 @@ void PlaylistDialog::bindSelectedPlaylist() {
             m_itemSearch->clear();
             m_itemSearch->blockSignals(false);
             reloadCategories(true); // every playlist opens on "All"
-        }
-        if (m_view->selectionModel()) {
-            connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this,
-                    &PlaylistDialog::updateUi, Qt::UniqueConnection);
         }
         if (model) {
             connect(model, &PlaylistModel::contentsChanged, this, &PlaylistDialog::updateUi, Qt::UniqueConnection);
@@ -1258,7 +1284,6 @@ void PlaylistDialog::bindSelectedPlaylist() {
     if (model) {
         model->refreshAvailability(); // a drive may have been reconnected/removed
     }
-    m_view->viewport()->update();
     updateUi();
 }
 
@@ -1358,14 +1383,7 @@ void PlaylistDialog::showEvent(QShowEvent* event) {
 }
 
 int PlaylistDialog::selectedRow() const {
-    if (!m_view->selectionModel()) {
-        return -1;
-    }
-    // The selection itself, not the view's "current index": accessibility
-    // clients (UI Automation SelectionItem.Select, i.e. screen readers)
-    // select an item without moving the current index.
-    const QModelIndexList selected = m_view->selectionModel()->selectedIndexes();
-    return selected.isEmpty() ? -1 : m_view->sourceRow(selected.first());
+    return m_view->selectedSourceRow();
 }
 
 void PlaylistDialog::selectRow(int row) {
@@ -1373,10 +1391,7 @@ void PlaylistDialog::selectRow(int row) {
     if (!m || row < 0 || row >= m->count()) {
         return;
     }
-    const QModelIndex idx = m_view->viewIndex(row);
-    m_view->setCurrentIndex(idx);
-    m_view->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
-    m_view->scrollTo(idx);
+    m_view->selectSourceRow(row);
     updateUi();
 }
 
@@ -1441,6 +1456,7 @@ void PlaylistDialog::onRestoreFromBackup(int row) {
 void PlaylistDialog::showNotice(const QString& text) {
     m_noticeLabel->setText(text);
     m_noticeLabel->setVisible(!text.isEmpty());
+    m_canvas->relayout();
 }
 
 void PlaylistDialog::announce(int kind, const QString& title, const QString& message, const QString& key,
@@ -1490,34 +1506,50 @@ void PlaylistDialog::onCreatePlaylist(int type) {
 }
 
 void PlaylistDialog::startInlineRename() {
-    const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
-    if (sel.isEmpty()) {
+    const int row = m_playlistList->currentRow();
+    if (row < 0) {
         return;
     }
-    m_playlistList->setCurrentIndex(sel.first());
-    m_playlistList->setFocus();
-    m_playlistList->edit(sel.first());
+    m_renameRow = row;
+    m_playlistList->scrollTo(row);
+    m_renameEdit->setVisible(true);
+    m_canvas->relayout();
+    m_renameEdit->setText(m_library->listModel()->index(row).data(Qt::DisplayRole).toString());
+    m_renameEdit->focusInput(true);
 }
 
-void PlaylistDialog::showPlaylistMenu(const QPoint& pos) {
-    QModelIndex idx = m_playlistList->indexAt(pos);
-    if (!idx.isValid()) {
-        // Keyboard (Menu key / Shift+F10): act on the selection.
-        const QModelIndexList sel = m_playlistList->selectionModel()->selectedIndexes();
-        if (sel.isEmpty()) {
+// Enter / focus loss commit (through PlaylistListModel::setData, the single
+// rename path); Escape cancels.
+void PlaylistDialog::finishInlineRename(bool commit) {
+    if (m_renameRow < 0) {
+        return;
+    }
+    const int row = m_renameRow;
+    m_renameRow = -1;
+    const QString text = m_renameEdit->text().trimmed();
+    m_renameEdit->setVisible(false);
+    m_playlistList->setCurrentRow(row, false);
+    m_canvas->setFocusedItem(m_playlistList);
+    if (commit && !text.isEmpty() && row < m_library->listModel()->rowCount()) {
+        m_library->listModel()->setData(m_library->listModel()->index(row), text, Qt::EditRole);
+    }
+    m_canvas->requestAnimation();
+}
+
+void PlaylistDialog::showPlaylistMenu(const QPoint& global, int row) {
+    if (row < 0) {
+        row = m_playlistList->currentRow(); // keyboard (Menu key): act on the selection
+        if (row < 0) {
             return;
         }
-        idx = sel.first();
     }
-    m_playlistList->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect);
-    m_playlistList->setCurrentIndex(idx);
+    m_playlistList->setCurrentRow(row, false);
     QMenu menu(this);
     QAction* rename = menu.addAction(tr("Rename"));
     rename->setShortcut(QKeySequence(Qt::Key_F2));
     QAction* del = menu.addAction(tr("Delete"));
     del->setShortcut(QKeySequence(QKeySequence::Delete));
-    QAction* chosen = menu.exec(m_playlistList->viewport()->mapToGlobal(
-        idx.isValid() && m_playlistList->indexAt(pos).isValid() ? pos : m_playlistList->visualRect(idx).center()));
+    QAction* chosen = menu.exec(global);
     if (chosen == rename) {
         startInlineRename();
     } else if (chosen == del) {
@@ -1525,32 +1557,17 @@ void PlaylistDialog::showPlaylistMenu(const QPoint& pos) {
     }
 }
 
-bool PlaylistDialog::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == m_playlistList && event->type() == QEvent::KeyPress) {
-        auto* key = static_cast<QKeyEvent*>(event);
-        const bool plain = (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
-        if (plain && (key->key() == Qt::Key_Delete || key->key() == Qt::Key_D)) {
-            onDeletePlaylist();
-            return true; // also keeps 'D' from triggering the list's type-ahead search
-        }
-    }
-    return QWidget::eventFilter(watched, event);
-}
-
-void PlaylistDialog::showItemMenu(const QPoint& pos) {
+void PlaylistDialog::showItemMenu(const QPoint& global, int sourceRow) {
     PlaylistModel* m = current();
     if (!m) {
         return;
     }
-    QModelIndex idx = m_view->indexAt(pos);
-    const bool fromMouse = idx.isValid();
-    int row = m_view->sourceRow(idx);
-    if (!idx.isValid()) {
+    int row = sourceRow;
+    if (row < 0) {
         row = selectedRow(); // Menu key / Shift+F10
         if (row < 0) {
             return;
         }
-        idx = m_view->viewIndex(row);
     }
     selectRow(row); // the menu always acts on the item it was opened for
     const bool available = m->isAvailable(row);
@@ -1617,8 +1634,7 @@ void PlaylistDialog::showItemMenu(const QPoint& pos) {
     remove->setShortcut(QKeySequence(QKeySequence::Delete));
     remove->setToolTip(tr("Remove from this playlist. The file itself is not deleted."));
 
-    const QPoint at = fromMouse ? pos : m_view->visualRect(idx).center();
-    QAction* chosen = menu.exec(m_view->viewport()->mapToGlobal(at));
+    QAction* chosen = menu.exec(global);
     if (!chosen) {
         return;
     }
@@ -1806,15 +1822,11 @@ void PlaylistDialog::updateMissingBanner(int row) {
     const int missing = m ? m->count() - m->availableCount() : 0;
     if (!m || missing == 0) {
         m_missingBanner->setVisible(false);
+        m_canvas->relayout();
         return;
     }
-    const Theme::ThemePalette& pal = Theme::themePalette(Theme::currentTheme());
-    m_missingBanner->setStyleSheet(QStringLiteral("QFrame#missingBanner { background: %1; border: 1px solid %2;"
-                                                  " border-left: 3px solid %2; border-radius: %3px; }")
-                                       .arg(pal.panelBg.name(), QLatin1String(Theme::kStatusWarning))
-                                       .arg(qMin(8, cardRadius())));
-    m_missingTitle->setStyleSheet(QStringLiteral("color: %1;").arg(QLatin1String(Theme::kStatusWarning)));
     const bool selectedMissing = row >= 0 && !m->isAvailable(row);
+    m_missingTitle->setColor(GlUi::Style::current().warn);
     if (selectedMissing) {
         const QString name = QFileInfo(m->pathAt(row)).fileName();
         m_missingTitle->setText(tr("File not found"));
@@ -1823,17 +1835,18 @@ void PlaylistDialog::updateMissingBanner(int row) {
         m_missingRemoveButton->setVisible(true);
     } else {
         m_missingTitle->setText(missing == 1 ? tr("1 file not found") : tr("%1 files not found").arg(missing));
-        m_missingText->setText(tr("Motiva can't find some of this playlist's media at its saved location. "
-                                  "Find File searches your drives for it."));
+        m_missingText->setText(tr("Motiva can't find some of this playlist's media. Find File searches your drives."));
         m_missingText->setToolTip(QString());
         m_missingRemoveButton->setVisible(false);
     }
+    m_findFileButton->setVisible(true);
     m_findFileButton->setEnabled(!m_recoveryRunning);
     m_findAllButton->setVisible(missing > 1);
     m_findAllButton->setEnabled(!m_recoveryRunning);
     m_restoreBackupButton->setVisible(selectedMissing && m_backup && m_backup->hasUsableBackup(m->mediaIdAt(row)));
     m_restoreBackupButton->setEnabled(!m_backup || !m_backup->isRestoring());
     m_missingBanner->setVisible(true);
+    m_canvas->relayout();
 }
 
 void PlaylistDialog::onDeletePlaylist() {
@@ -2082,7 +2095,6 @@ void PlaylistDialog::updateUi() {
     }
     const bool hasPlaylists = m_library->playlistCount() > 0;
     PlaylistModel* m = current();
-    m_editorStack->setCurrentIndex(m ? 1 : 0);
     m_emptyLabel->setText(hasPlaylists ? tr("Select a playlist on the left.")
                                        : tr("Create a playlist with \"Image Playlist\" or \"Video Playlist\" to get started.\n\n"
                                             "Image playlists change image on unlock, at Windows start or on a timer.\n"
@@ -2091,6 +2103,7 @@ void PlaylistDialog::updateUi() {
     if (!m) {
         m_applyButton->setEnabled(false);
         m_applyButton->setText(tr("Set as Wallpaper"));
+        m_canvas->relayout();
         return;
     }
 
@@ -2135,9 +2148,7 @@ void PlaylistDialog::updateUi() {
                             : shown == 0     ? tr("No items match - showing 0 of %1").arg(count)
                                              : tr("Showing %1 of %2 items").arg(shown).arg(count));
     m_categoryMenuButton->setEnabled(currentFilter() != nullptr);
-    // Categories belong to this playlist - say so.
-    m_categoryLabel->setToolTip(tr("Categories of \"%1\"").arg(m->name()));
-    m_categoryLabel->setAccessibleDescription(tr("Categories of the playlist \"%1\"").arg(m->name()));
+    m_categoryPicker->setAccessibleName(tr("Categories of \"%1\"").arg(m->name()));
     m_binding = true;
     m_activeCheck->setChecked(isSelectionActive());
     m_activeCheck->setText(currentFilter() ? tr("Use this category") : tr("Use this playlist"));
@@ -2147,7 +2158,7 @@ void PlaylistDialog::updateUi() {
     m_addButton->setToolTip(mixed ? tr("Add image and video files to the end of the playlist, in the order you choose")
                             : video ? tr("Add one or more video files to the end of the playlist")
                                     : tr("Add one or more image files to the end of the playlist"));
-    m_settingsStack->setCurrentIndex(video ? 1 : 0);
+    m_videoSettings = video;
     m_rotationLabel->setText(mixed ? tr("Change image automatically (videos play to their end, then move on)")
                                    : tr("Change image automatically"));
     m_intervalCombo->setEnabled(m_intervalCheck->isChecked());
@@ -2171,6 +2182,7 @@ void PlaylistDialog::updateUi() {
                                                    "The playlist's order is not changed.").arg(usable)
                                               : QString());
     m_applyButton->setEnabled(!onDesktop && usable > 0);
+    m_canvas->relayout();
 }
 
 // ------------------------------------------------------- shortcuts helpers
@@ -2184,6 +2196,9 @@ void PlaylistDialog::createMixedPlaylist() {
 }
 
 bool PlaylistDialog::isTextInputFocused() {
+    if (GlTextInput::anyFocused()) {
+        return true;
+    }
     QWidget* w = QApplication::focusWidget();
     if (!w) {
         return false;
@@ -2271,7 +2286,7 @@ void PlaylistDialog::openFlow() {
 
 void PlaylistDialog::applyItemFilter() {
     PlaylistModel* m = current();
-    if (!m || !m_view->model()) {
+    if (!m) {
         return;
     }
     const PlaylistFilterInfo* filter = currentFilter();
@@ -2288,9 +2303,8 @@ void PlaylistDialog::applyItemFilter() {
     }
     const int row = selectedRow();
     if (row >= 0 && m_view->isSourceRowHidden(row)) {
-        m_view->selectionModel()->clearSelection();
+        m_view->clearSelection();
     }
-    m_view->viewport()->update();
 }
 
 void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {

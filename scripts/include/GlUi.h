@@ -10,6 +10,11 @@
 #include <QPixmap>
 #include <QRectF>
 #include <QStringList>
+#include <QPersistentModelIndex>
+#include <QSet>
+#include <QVariant>
+#include <QVector>
+#include <QPoint>
 #include <QString>
 #include <functional>
 #include <memory>
@@ -23,6 +28,10 @@ class QSvgRenderer;
 class GlCanvas;
 class QWidget;
 class QKeyEvent;
+class QContextMenuEvent;
+class QAbstractItemModel;
+class QAbstractItemDelegate;
+struct PlaylistFilterInfo;
 class QWheelEvent;
 
 // Motiva's own GPU-drawn UI toolkit ("Colorful Modular x dark glass/neon").
@@ -107,6 +116,13 @@ public:
     virtual bool popupPress(const QPointF&) { return false; } // true = handled inside
     virtual void popupHover(const QPointF&) {}
     virtual bool popupKey(QKeyEvent*) { return false; }
+    // Extra pointer hooks for list/grid views and text fields.
+    virtual void hoverMoved(const QPointF&) {}        // pointer moved over this item (or left: far-away point)
+    virtual void mouseReleased(const QPointF&) {}
+    virtual void doubleClickAt(const QPointF&) {}
+    virtual void contextMenuAt(const QPointF&, const QPoint& /*global*/, bool /*fromKeyboard*/) {}
+    virtual bool wheelAt(int /*delta*/, const QPointF&) { return false; }
+    virtual void focusChanged(bool /*focused*/) {}
 
 protected:
     GlCanvas* canvas() const { return m_canvas; }
@@ -130,7 +146,7 @@ private:
 class GlPanel : public GlItem {
     Q_OBJECT
 public:
-    enum class Block { None, Accent, Accent2 };
+    enum class Block { None, Accent, Accent2, Warning };
     explicit GlPanel(GlCanvas* canvas);
     void setBlock(Block b) { m_block = b; update(); }
     void setRadiusPx(qreal r) { m_radius = r; update(); }
@@ -157,6 +173,7 @@ public:
     void setColor(const QColor& c); // switches to Tone::Custom
     void setAlignment(Qt::Alignment a);
     void setCaps(bool caps); // letter-spaced small caps look for section tags
+    void setWordWrap(bool wrap) { m_wrap = wrap; update(); }
 
     void paint(QPainter& p, const GlUi::Style& s) override;
 
@@ -166,6 +183,7 @@ private:
     qreal m_pt = 10.0;
     bool m_bold = false;
     bool m_caps = false;
+    bool m_wrap = false;
     Tone m_tone = Tone::Normal;
     QColor m_color;
     Qt::Alignment m_align = Qt::AlignLeft | Qt::AlignVCenter;
@@ -201,6 +219,8 @@ public:
     void setSelected(bool on) { m_selected = on; update(); }
     bool isSelected() const { return m_selected; }
     void setAlignLeft(bool on) { m_alignLeft = on; update(); }
+    // Default true: the icon is drawn as a monochrome glyph in the text color.
+    void setTintIcon(bool on) { m_tint = on; update(); }
 
     bool isInteractive() const override { return true; }
     void paint(QPainter& p, const GlUi::Style& s) override;
@@ -216,6 +236,7 @@ private:
     bool m_default = false;
     bool m_selected = false;
     bool m_alignLeft = false;
+    bool m_tint = true;
 };
 
 // Row controls. Each draws its own label on the left and the control on the
@@ -271,8 +292,12 @@ class GlDropdown : public GlItem {
 public:
     explicit GlDropdown(GlCanvas* canvas);
     void setText(const QString& t) { m_text = t; update(); }
-    void addItem(const QString& t) { m_items << t; update(); }
-    void addItems(const QStringList& l) { m_items << l; update(); }
+    void addItem(const QString& t, const QVariant& data = QVariant()) { m_items << t; m_data << data; update(); }
+    void addItems(const QStringList& l) { for (const QString& t : l) addItem(t); }
+    QVariant currentData() const { return (m_index >= 0 && m_index < m_data.size()) ? m_data[m_index] : QVariant(); }
+    int findData(const QVariant& d) const { return m_data.indexOf(d); }
+    // Compact: no row label, the field fills the whole rect (toolbar use).
+    void setCompact(bool c) { m_compact = c; update(); }
     void clear();
     int count() const { return m_items.size(); }
     int currentIndex() const { return m_index; }
@@ -295,6 +320,8 @@ private:
     void closePopup();
     QString m_text;
     QStringList m_items;
+    QVector<QVariant> m_data;
+    bool m_compact = false;
     int m_index = -1;
     int m_highlight = -1;
     bool m_open = false;
@@ -358,6 +385,180 @@ private:
     QSizeF m_lastSize;
 };
 
+// Single-line text field (search boxes, inline rename).
+class GlTextInput : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlTextInput(GlCanvas* canvas);
+    QString text() const { return m_text; }
+    void setText(const QString& t);
+    void clear() { setText(QString()); }
+    void setPlaceholder(const QString& t) { m_placeholder = t; update(); }
+    void setClearable(bool c) { m_clearable = c; update(); }
+    void setSelectAllOnFocus(bool on) { m_selectAll = on; }
+    void setConsumeEscape(bool on) { m_escConsumed = on; }
+    // Moves keyboard focus here (and selects everything when asked to).
+    void focusInput(bool selectAll = false);
+    bool isInteractive() const override { return true; }
+    bool advance(qreal dt) override;
+    void paint(QPainter& p, const GlUi::Style& s) override;
+    void mousePressAt(const QPointF& p) override;
+    void mouseDragTo(const QPointF& p) override;
+    bool keyPressed(QKeyEvent* e) override;
+    void focusChanged(bool focused) override;
+    // True while any GlTextInput of the focused canvas has the keyboard.
+    static bool anyFocused();
+signals:
+    void textChanged(const QString& text);
+    void editingFinished();   // Enter
+    void cancelled();         // Esc
+    void focusLost();
+
+private:
+    int posAt(qreal x) const;
+    QRectF textRect() const;
+    QRectF clearRect() const;
+    void edit(const QString& t, int cursor);
+    QString m_text, m_placeholder;
+    int m_cursor = 0, m_anchor = 0;
+    qreal m_scroll = 0;
+    bool m_clearable = false, m_selectAll = false, m_escConsumed = false;
+    qreal m_blinkBase = 0;
+};
+
+// A category selector shown as a tree (parents expand/collapse). Keeps the
+// semantics of the old CategoryTreePicker: ids, 0 = the built-in "All".
+class GlTreeDropdown : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlTreeDropdown(GlCanvas* canvas);
+    void setCategories(const QVector<PlaylistFilterInfo>& categories, const QString& allLabel);
+    qint64 currentCategoryId() const { return m_current; }
+    void setCurrentCategory(qint64 id);
+    QString pathOf(qint64 id) const;
+    bool isInteractive() const override { return true; }
+    void paint(QPainter& p, const GlUi::Style& s) override;
+    void paintOverlay(QPainter& p, const GlUi::Style& s) override;
+    void activate() override;
+    bool popupPress(const QPointF& pt) override;
+    void popupHover(const QPointF& pt) override;
+    bool popupKey(QKeyEvent* e) override;
+    bool keyPressed(QKeyEvent* e) override;
+    void contextMenuAt(const QPointF& pos, const QPoint& global, bool kb) override;
+signals:
+    void currentCategoryChanged(qint64 id);
+    void contextMenuRequested(const QPoint& global);
+
+private:
+    struct Node {
+        qint64 id;
+        QString name;
+        int depth;
+        bool hasChildren;
+    };
+    void rebuild();
+    QVector<Node> visibleNodes() const;
+    QRectF popupRect() const;
+    QRectF rowRect(int i) const;
+    int indexAt(const QPointF& pt) const;
+    void closePopup();
+    QVector<Node> m_nodes;             // all nodes in display order
+    QSet<qint64> m_collapsed;
+    QString m_allLabel;
+    QVector<qint64> m_ids;
+    QVector<qint64> m_parents;
+    QStringList m_names;
+    qint64 m_current = 0;
+    int m_highlight = 0;
+    bool m_open = false;
+};
+
+// Model-driven list / card grid painted through a QAbstractItemDelegate, so
+// existing delegates (cards, rows) keep working. Single selection, hover,
+// keyboard navigation, wheel + draggable scrollbar, hidden rows, in-canvas
+// drag-to-reorder and an external-drop insertion indicator.
+class GlItemView : public GlItem {
+    Q_OBJECT
+public:
+    enum class Mode { List, Grid };
+    explicit GlItemView(GlCanvas* canvas);
+    void setModel(QAbstractItemModel* model);
+    QAbstractItemModel* model() const { return m_model; }
+    void setDelegate(QAbstractItemDelegate* d) { m_delegate = d; update(); }
+    void setMode(Mode m, const QSize& cell, int spacing);
+    void setEmptyText(const QString& title, const QString& subtitle);
+    void setFramed(bool f) { m_framed = f; update(); }
+    void setReorderEnabled(bool on) { m_reorder = on; }
+    void setKeyFilter(std::function<bool(QKeyEvent*)> f) { m_keyFilter = std::move(f); }
+
+    int rowCount() const;
+    int currentRow() const { return m_current.isValid() ? m_current.row() : -1; }
+    QModelIndex currentIndex() const { return m_current; }
+    void setCurrentRow(int row, bool scroll = true);
+    void clearCurrent();
+    void setRowHidden(int row, bool hidden);
+    bool isRowHidden(int row) const { return m_hidden.contains(row); }
+    int rowAt(const QPointF& canvasPos) const;
+    QRectF rowRect(int row) const; // canvas coordinates; null rect when hidden
+    int insertPositionAt(const QPointF& canvasPos) const;
+    void setDropIndicator(int pos);
+    void scrollTo(int row);
+    void scrollBy(qreal dy);
+    QRectF viewport() const;
+
+    bool isInteractive() const override { return true; }
+    void paint(QPainter& p, const GlUi::Style& s) override;
+    void mousePressAt(const QPointF& p) override;
+    void mouseDragTo(const QPointF& p) override;
+    void mouseReleased(const QPointF& p) override;
+    void doubleClickAt(const QPointF& p) override;
+    void hoverMoved(const QPointF& p) override;
+    void contextMenuAt(const QPointF& p, const QPoint& global, bool kb) override;
+    bool wheelAt(int delta, const QPointF& p) override;
+    bool keyPressed(QKeyEvent* e) override;
+    bool advance(qreal dt) override;
+
+signals:
+    void currentRowChanged(int row);
+    void activated(int row);            // Enter
+    void doubleClicked(int row);
+    void contextMenuRequested(const QPointF& canvasPos, const QPoint& global, int row); // row -1 = empty area
+    void reorderRequested(int fromRow, int insertPos);
+
+private:
+    void rebuildVisible() const;
+    void clampScroll();
+    QSizeF contentSize() const;
+    int columns() const;
+    QRectF cellRect(int visibleIndex) const; // canvas coords
+    QRectF scrollTrack() const;
+    QRectF scrollThumb() const;
+    void navigate(int dRow, int dCol);
+
+    QAbstractItemModel* m_model = nullptr;
+    QAbstractItemDelegate* m_delegate = nullptr;
+    Mode m_mode = Mode::List;
+    QSize m_cell{200, 52};
+    int m_spacing = 4;
+    QString m_emptyTitle, m_emptySub;
+    bool m_framed = true, m_reorder = false;
+    QPersistentModelIndex m_current;
+    QSet<int> m_hidden;
+    mutable QVector<int> m_visible; // visible source rows, in order
+    mutable bool m_visibleDirty = true;
+    qreal m_scrollY = 0;
+    int m_hoverRow = -1;
+    int m_dropPos = -1;
+    // Gesture state.
+    int m_pressRow = -1;
+    QPointF m_pressPos, m_dragPos;
+    bool m_dragging = false;
+    bool m_sbDrag = false;
+    qreal m_sbGrab = 0;
+    qreal m_autoScroll = 0;
+    std::function<bool(QKeyEvent*)> m_keyFilter;
+};
+
 class GlCanvas : public QOpenGLWidget {
     Q_OBJECT
 public:
@@ -397,6 +598,9 @@ protected:
     void leaveEvent(QEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
+    void contextMenuEvent(QContextMenuEvent* e) override;
+    void mouseDoubleClickEvent(QMouseEvent* e) override;
+    bool event(QEvent* e) override;
     void changeEvent(QEvent* e) override;
     void focusInEvent(QFocusEvent* e) override;
     void focusOutEvent(QFocusEvent* e) override;

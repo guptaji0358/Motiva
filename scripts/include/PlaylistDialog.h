@@ -5,39 +5,42 @@
 
 #include <QWidget>
 #include <QByteArray>
-#include <QListView>
 #include <QStringList>
 #include "LibraryDatabase.h" // PlaylistFilterInfo
 
 class BackupManager;
-class IconButton;
 class QAction;
-class CategoryTreePicker;
 class QMenu;
-class QAction;
 class PlaylistLibrary;
 class PlaylistModel;
-class QLineEdit;
 class QTimer;
-class QCheckBox;
-class QComboBox;
-class QFrame;
-class QLabel;
-class QPushButton;
 class QSortFilterProxyModel;
-class QStackedWidget;
-class QWidget;
+class QMimeData;
 class SettingsManager;
+class GlCanvas;
+class GlItem;
+class GlItemView;
+class GlPanel;
+class GlLabel;
+class GlButton;
+class GlToggle;
+class GlDropdown;
+class GlTextInput;
+class GlTreeDropdown;
 
-// Card strip for one playlist (images or videos): cards in playlist order,
-// reorderable by dragging a card to a new position (drop indicator drawn
-// between cards), and a drop target for supported files from Explorer.
-// Keyboard: arrows select, Ctrl+Left/Right move the selected item, Enter
-// shows it now, Delete removes it.
-class PlaylistView : public QListView {
+// The cards of one playlist (images, videos or both), shown through a GL
+// card grid (GlItemView) in playlist order, reorderable by dragging a card,
+// and a drop target for supported files from Explorer (the window forwards
+// those drops here). Keyboard: arrows select, Ctrl+Left/Right move the
+// selected item, Enter shows it now, Delete removes it.
+//
+// This is an adapter: it owns the arrangement proxy and translates between
+// the grid's rows (what is shown) and PLAYLIST rows (what playback follows).
+class PlaylistView : public QObject {
     Q_OBJECT
 public:
-    explicit PlaylistView(QWidget* parent = nullptr);
+    PlaylistView(GlCanvas* canvas, QObject* parent = nullptr);
+    GlItemView* item() const { return m_item; }
     void setPlaylist(PlaylistModel* playlist);
     PlaylistModel* playlist() const { return m_playlist; }
 
@@ -52,45 +55,42 @@ public:
 
     // Everything below speaks in PLAYLIST rows (the model's rows), whatever
     // order the cards are currently shown in.
-    int sourceRow(const QModelIndex& viewIndex) const;
-    QModelIndex viewIndex(int row) const;
+    int sourceRow(int viewRow) const;
+    int viewRow(int sourceRow) const;
+    int selectedSourceRow() const;
+    void selectSourceRow(int row);
+    void clearSelection();
     void setSourceRowHidden(int row, bool hidden);
     bool isSourceRowHidden(int row) const;
     // Nearest playlist row in direction `step` (+1/-1) that is not hidden by
     // the playlist's category filter or search; -1 if none.
     int visibleNeighbour(int row, int step) const;
+    QStringList acceptedLocalFiles(const QMimeData* mime) const;
 
 signals:
     void filesDropped(const QStringList& paths, int insertRow);
     void moveRequested(int from, int to);
     void showNowRequested(int row);
     void removeRequested(int row);
-
-protected:
-    void startDrag(Qt::DropActions supportedActions) override;
-    void dragEnterEvent(QDragEnterEvent* event) override;
-    void dragMoveEvent(QDragMoveEvent* event) override;
-    void dragLeaveEvent(QDragLeaveEvent* event) override;
-    void dropEvent(QDropEvent* event) override;
-    void paintEvent(QPaintEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
-    void changeEvent(QEvent* event) override;
+    void itemDoubleClicked(int sourceRow);
+    void itemContextMenu(const QPoint& global, int sourceRow); // -1 = none
+    void selectionChanged();
 
 private:
-    int insertPositionAt(const QPoint& pos) const;
-    QStringList acceptedLocalFiles(const class QMimeData* mime) const;
+    bool handleKey(class QKeyEvent* event);
 
+    GlItemView* m_item = nullptr;
     PlaylistModel* m_playlist = nullptr;
     QSortFilterProxyModel* m_proxy = nullptr;
     Arrangement m_arrangement = Arrangement::None;
-    int m_dropIndicatorPos = -1;
 };
 
 // "Playlists" window: the user-facing side of PlaylistLibrary. Left: My
 // Playlists (create/rename/delete, which one is active). Right: the
 // selected playlist's items, actions and settings. A dedicated top-level
 // window (Qt::Window, owned by MainWindow, one instance that MainWindow
-// re-activates), not a modal dialog. Everything here edits the library; MainWindow reacts to
+// re-activates), not a modal dialog, drawn on the GL canvas like the main
+// window. Everything here edits the library; MainWindow reacts to
 // the library's signals to keep the actual wallpaper in sync, so this
 // window never touches the wallpaper pipeline itself.
 class PlaylistDialog : public QWidget {
@@ -140,23 +140,28 @@ protected:
     // themselves consume it first, so it only gets here when nothing else wants it.
     void keyPressEvent(QKeyEvent* event) override;
     void changeEvent(QEvent* event) override;
-    // Delete / D on the My Playlists list (only while the list itself has
-    // focus - an inline rename editor or any text field keeps its keys).
-    bool eventFilter(QObject* watched, QEvent* event) override;
+    // Borderless window: drag / resize through hit-testing (see GlUi).
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+    // Files dragged in from Explorer are dropped onto the card grid.
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     void applyThemedIcons(); // add/search SVGs for the active theme
     void buildUi();
-    QWidget* buildSidebar();
-    QWidget* buildEditor();
+    void layoutGl(const QSizeF& size);
+    void updateWindowButtonsState();
     void onCreatePlaylist(int type);
     // Inline rename of the selected playlist (double-click, F2, context
-    // menu). The editor commits through PlaylistListModel::setData ->
+    // menu). Commits through PlaylistListModel::setData ->
     // PlaylistLibrary::renamePlaylist - the single rename path.
     void startInlineRename();
+    void finishInlineRename(bool commit);
     void onDeletePlaylist();
-    void showPlaylistMenu(const QPoint& pos);
-    void showItemMenu(const QPoint& pos);
+    void showPlaylistMenu(const QPoint& global, int row);
+    void showItemMenu(const QPoint& global, int sourceRow);
     void openFlow();
     // "Find File" for a missing item (see MediaRecoveryDialog).
     void onFindFile(int row);
@@ -231,54 +236,69 @@ private:
     bool m_onDesktop = false;
     bool m_binding = false;
 
-    QListView* m_playlistList = nullptr;
+    // --- GL scene ---
+    GlCanvas* m_canvas = nullptr;
+    GlPanel* m_titlePanel = nullptr;
+    GlPanel* m_toolbarPanel = nullptr;
+    GlPanel* m_sidebarPanel = nullptr;
+    GlPanel* m_editorPanel = nullptr;
+    GlLabel* m_titleLabel = nullptr;
+    GlLabel* m_sidebarHeading = nullptr;
+    GlButton* m_minButton = nullptr;
+    GlButton* m_maxButton = nullptr;
+    GlButton* m_closeButton = nullptr;
+    GlItemView* m_playlistList = nullptr;
+    GlTextInput* m_renameEdit = nullptr;
+    int m_renameRow = -1;
 
-    QLabel* m_categoryLabel = nullptr;
-    CategoryTreePicker* m_categoryPicker = nullptr;
-    QCheckBox* m_includeSubCheck = nullptr;
-    QLabel* m_rotationLabel = nullptr;
-    IconButton* m_newMixedButton = nullptr;
-    IconButton* m_categoryMenuButton = nullptr;
-    IconButton* m_newImageButton = nullptr;
-    IconButton* m_newVideoButton = nullptr;
-    IconButton* m_importButton = nullptr;
-    IconButton* m_exportButton = nullptr;
-    IconButton* m_buildCategoryButton = nullptr;
-    QComboBox* m_arrangeCombo = nullptr;
-    QPushButton* m_flowButton = nullptr;
-    QLineEdit* m_itemSearch = nullptr;
+    GlTreeDropdown* m_categoryPicker = nullptr;
+    GlToggle* m_includeSubCheck = nullptr;
+    GlLabel* m_rotationLabel = nullptr;
+    GlButton* m_newMixedButton = nullptr;
+    GlButton* m_categoryMenuButton = nullptr;
+    GlButton* m_newImageButton = nullptr;
+    GlButton* m_newVideoButton = nullptr;
+    GlButton* m_importButton = nullptr;
+    GlButton* m_exportButton = nullptr;
+    GlButton* m_buildCategoryButton = nullptr;
+    GlLabel* m_arrangeLabel = nullptr;
+    GlDropdown* m_arrangeCombo = nullptr;
+    GlButton* m_flowButton = nullptr;
+    GlTextInput* m_itemSearch = nullptr;
     QTimer* m_itemSearchTimer = nullptr;
     QTimer* m_filterTimer = nullptr; // coalesces re-filtering after playlist changes
-    QLabel* m_showingLabel = nullptr;
+    GlLabel* m_showingLabel = nullptr;
     qint64 m_filtersPlaylistId = 0; // playlist whose categories are loaded
     QVector<PlaylistFilterInfo> m_filters;
 
-    QStackedWidget* m_editorStack = nullptr;
-    QLabel* m_emptyLabel = nullptr;
-    QLabel* m_nameLabel = nullptr;
-    QLabel* m_summaryLabel = nullptr;
-    QCheckBox* m_activeCheck = nullptr;
+    GlLabel* m_emptyLabel = nullptr;
+    GlLabel* m_nameLabel = nullptr;
+    GlLabel* m_summaryLabel = nullptr;
+    GlToggle* m_activeCheck = nullptr;
     PlaylistView* m_view = nullptr;
-    QLabel* m_hintLabel = nullptr;
-    QLabel* m_noticeLabel = nullptr;
-    IconButton* m_addButton = nullptr;
-    QAction* m_searchAction = nullptr;
-    QPushButton* m_showNowButton = nullptr;
-    QPushButton* m_clearButton = nullptr;
-    QFrame* m_missingBanner = nullptr;
-    QLabel* m_missingTitle = nullptr;
-    QLabel* m_missingText = nullptr;
-    QPushButton* m_findFileButton = nullptr;
-    QPushButton* m_findAllButton = nullptr;
-    QPushButton* m_missingRemoveButton = nullptr;
+    GlLabel* m_hintLabel = nullptr;
+    GlLabel* m_noticeLabel = nullptr;
+    GlButton* m_addButton = nullptr;
+    GlButton* m_showNowButton = nullptr;
+    GlButton* m_clearButton = nullptr;
+    GlPanel* m_missingBanner = nullptr;
+    GlLabel* m_missingTitle = nullptr;
+    GlLabel* m_missingText = nullptr;
+    GlButton* m_findFileButton = nullptr;
+    GlButton* m_findAllButton = nullptr;
+    GlButton* m_missingRemoveButton = nullptr;
     bool m_recoveryRunning = false;
     BackupManager* m_backup = nullptr;
-    QPushButton* m_restoreBackupButton = nullptr;
+    GlButton* m_restoreBackupButton = nullptr;
     void onRestoreFromBackup(int row);
-    QPushButton* m_applyButton = nullptr;
-    QStackedWidget* m_settingsStack = nullptr;
-    QCheckBox* m_unlockCheck = nullptr;
-    QCheckBox* m_startCheck = nullptr;
-    QCheckBox* m_intervalCheck = nullptr;
-    QComboBox* m_intervalCombo = nullptr;
+    GlLabel* m_libraryLabel = nullptr;
+    GlButton* m_applyButton = nullptr;
+    GlButton* m_footerClose = nullptr;
+    GlToggle* m_unlockCheck = nullptr;
+    GlToggle* m_startCheck = nullptr;
+    GlToggle* m_intervalCheck = nullptr;
+    GlDropdown* m_intervalCombo = nullptr;
+    GlLabel* m_imageNote = nullptr;
+    GlLabel* m_videoNote = nullptr;
+    bool m_videoSettings = false; // which settings block the open playlist shows
 };

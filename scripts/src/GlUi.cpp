@@ -2,6 +2,13 @@
 #include "Theme.h"
 
 #include <QFocusEvent>
+#include <QApplication>
+#include <QClipboard>
+#include <QContextMenuEvent>
+#include <QAbstractItemModel>
+#include <QAbstractItemDelegate>
+#include <QStyleOptionViewItem>
+#include "LibraryDatabase.h"
 #include <QWheelEvent>
 #include <QScreen>
 #include <QWindow>
@@ -252,7 +259,22 @@ GlPanel::GlPanel(GlCanvas* canvas) : GlItem(canvas) {}
 void GlPanel::paint(QPainter& p, const Style& s) {
     const qreal rad = m_radius * s.radius;
     GlUi::drawGlassCard(p, rect(), rad, s, 0.0);
-    if (m_block != Block::None) {
+    if (m_block == Block::Warning) {
+        p.save();
+        QColor w = s.warn;
+        w.setAlphaF(0.14);
+        p.setPen(Qt::NoPen);
+        p.setBrush(w);
+        p.drawRoundedRect(rect(), rad, rad);
+        w.setAlphaF(0.9);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(w, 1.4));
+        p.drawRoundedRect(rect().adjusted(0.7, 0.7, -0.7, -0.7), rad, rad);
+        p.setPen(Qt::NoPen);
+        p.setBrush(w);
+        p.drawRoundedRect(QRectF(rect().left() + 8, rect().top() + 14, 4, rect().height() - 28), 2, 2);
+        p.restore();
+    } else if (m_block != Block::None) {
         const QColor c = m_block == Block::Accent ? s.accent : s.accent2;
         QRectF tab(rect().left() + 14, rect().top() - 1, 34, 5);
         p.save();
@@ -324,6 +346,10 @@ void GlLabel::paint(QPainter& p, const Style& s) {
         c.setAlphaF(0.5);
     }
     p.setPen(c);
+    if (m_wrap) {
+        p.drawText(rect(), int(m_align) | Qt::TextWordWrap, m_text);
+        return;
+    }
     const QString shown = QFontMetricsF(f).elidedText(m_text, Qt::ElideMiddle, rect().width());
     p.drawText(rect(), int(m_align), shown);
 }
@@ -372,7 +398,8 @@ void GlButton::paint(QPainter& p, const Style& s) {
         if (m_icon.isNull()) {
             return;
         }
-        const QPixmap pm = GlUi::tintedGlyph(m_icon, box.size(), color, dpr);
+        const QPixmap pm = m_tint ? GlUi::tintedGlyph(m_icon, box.size(), color, dpr)
+                                  : m_icon.pixmap(box.size().toSize(), dpr);
         p.drawPixmap(box.topLeft(), pm);
     };
 
@@ -1031,11 +1058,17 @@ void GlCanvas::updateHover(const QPointF& pt) {
         }
     }
     if (hit != m_hover) {
-        if (m_hover) m_hover->m_hovered = false;
+        if (m_hover) {
+            m_hover->m_hovered = false;
+            m_hover->hoverMoved(QPointF(-1e9, -1e9));
+        }
         m_hover = hit;
         if (m_hover) m_hover->m_hovered = true;
         setCursor(hit && hit->isEnabled() ? Qt::PointingHandCursor : Qt::ArrowCursor);
         requestAnimation();
+    }
+    if (m_hover) {
+        m_hover->hoverMoved(pt);
     }
     QString tip;
     for (int i = m_items.size() - 1; i >= 0 && tip.isEmpty(); --i) {
@@ -1071,6 +1104,14 @@ void GlCanvas::wheelEvent(QWheelEvent* e) {
     if (m_popup) {
         return;
     }
+    for (int i = m_items.size() - 1; i >= 0; --i) {
+        GlItem* it = m_items[i];
+        if (it->isInteractive() && it->isHit(e->position()) && it->wheelAt(e->angleDelta().y(), e->position())) {
+            e->accept();
+            requestAnimation();
+            return;
+        }
+    }
     if (m_wheel) {
         m_wheel(e->angleDelta().y(), e->position());
         e->accept();
@@ -1102,7 +1143,7 @@ void GlCanvas::mousePressEvent(QMouseEvent* e) {
         m_press->m_pressed = true;
         m_press->mousePressAt(e->position());
         m_keyboardFocusVisible = false;
-        m_focus = m_press;
+        setFocusedItem(m_press);
         requestAnimation();
     }
 }
@@ -1116,6 +1157,9 @@ void GlCanvas::mouseReleaseEvent(QMouseEvent* e) {
     m_press = nullptr;
     updateHover(e->position());
     requestAnimation();
+    if (item) {
+        item->mouseReleased(e->position());
+    }
     if (item && item == m_hover && item->isEnabled()) {
         item->activate();
     }
@@ -1125,13 +1169,21 @@ void GlCanvas::leaveEvent(QEvent* e) {
     QOpenGLWidget::leaveEvent(e);
     if (m_hover) {
         m_hover->m_hovered = false;
+        m_hover->hoverMoved(QPointF(-1e9, -1e9));
         m_hover = nullptr;
         requestAnimation();
     }
 }
 
 void GlCanvas::setFocusedItem(GlItem* item) {
+    if (item == m_focus) {
+        requestAnimation();
+        return;
+    }
+    GlItem* old = m_focus;
     m_focus = item;
+    if (old) old->focusChanged(false);
+    if (item) item->focusChanged(true);
     requestAnimation();
 }
 
@@ -1147,7 +1199,7 @@ void GlCanvas::cycleFocus(bool forward) {
     }
     int idx = order.indexOf(m_focus);
     idx = idx < 0 ? (forward ? 0 : order.size() - 1) : (idx + (forward ? 1 : -1) + order.size()) % order.size();
-    m_focus = order[idx];
+    setFocusedItem(order[idx]);
     m_keyboardFocusVisible = true;
     requestAnimation();
 }
@@ -1369,6 +1421,7 @@ GlDropdown::GlDropdown(GlCanvas* canvas) : GlItem(canvas) {}
 
 void GlDropdown::clear() {
     m_items.clear();
+    m_data.clear();
     m_index = -1;
     update();
 }
@@ -1385,6 +1438,9 @@ void GlDropdown::setCurrentIndex(int i) {
 
 QRectF GlDropdown::fieldRect() const {
     const QRectF r = rect();
+    if (m_compact) {
+        return QRectF(r.left(), r.center().y() - 17, r.width(), 34);
+    }
     const qreal w = std::min<qreal>(280, r.width() * 0.58);
     return QRectF(r.right() - 14 - w, r.center().y() - 17, w, 34);
 }
@@ -1491,9 +1547,11 @@ void GlDropdown::paint(QPainter& p, const Style& s) {
     if (!isEnabled()) {
         p.setOpacity(0.5);
     }
-    p.setFont(GlUi::uiFont(10.5));
-    p.setPen(s.text);
-    p.drawText(QRectF(r.left() + 14, r.top(), r.width() * 0.4, r.height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
+    if (!m_compact) {
+        p.setFont(GlUi::uiFont(10.5));
+        p.setPen(s.text);
+        p.drawText(QRectF(r.left() + 14, r.top(), r.width() * 0.4, r.height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
+    }
     const QRectF f = fieldRect();
     const qreal rad = std::max(6.0, 14 * s.radius);
     QColor fill = s.glass;
@@ -1623,4 +1681,1060 @@ void GlScrollBar::paint(QPainter& p, const Style& s) {
     p.setBrush(c);
     p.drawRoundedRect(t, t.width() / 2, t.width() / 2);
     p.restore();
+}
+
+
+// ----------------------------------------------------- GlCanvas extras
+
+void GlCanvas::contextMenuEvent(QContextMenuEvent* e) {
+    if (m_popup) {
+        return;
+    }
+    if (e->reason() == QContextMenuEvent::Keyboard) {
+        if (m_focus && m_focus->isVisible()) {
+            m_focus->contextMenuAt(m_focus->rect().center(), mapToGlobal(m_focus->rect().center().toPoint()), true);
+        }
+        return;
+    }
+    const QPointF pt = e->pos();
+    for (int i = m_items.size() - 1; i >= 0; --i) {
+        GlItem* it = m_items[i];
+        if (it->isInteractive() && it->isHit(pt)) {
+            it->contextMenuAt(pt, e->globalPos(), false);
+            return;
+        }
+    }
+}
+
+void GlCanvas::mouseDoubleClickEvent(QMouseEvent* e) {
+    mousePressEvent(e); // a fast second click must still act like a click
+    if (m_popup) {
+        return;
+    }
+    if (m_hover && m_hover->isEnabled()) {
+        m_hover->doubleClickAt(e->position());
+    }
+}
+
+bool GlCanvas::event(QEvent* e) {
+    if (e->type() == QEvent::ShortcutOverride && qobject_cast<GlTextInput*>(m_focus)) {
+        e->accept(); // typing in a field beats window shortcuts
+        return true;
+    }
+    return QOpenGLWidget::event(e);
+}
+
+// ---------------------------------------------------------- GlTextInput
+
+GlTextInput::GlTextInput(GlCanvas* canvas) : GlItem(canvas) {}
+
+bool GlTextInput::anyFocused() {
+    auto* c = qobject_cast<GlCanvas*>(QApplication::focusWidget());
+    return c && qobject_cast<GlTextInput*>(c->focusedItem());
+}
+
+void GlTextInput::setText(const QString& t) {
+    if (t == m_text) {
+        return;
+    }
+    m_text = t;
+    m_cursor = m_anchor = int(t.size());
+    update();
+    emit textChanged(m_text);
+}
+
+void GlTextInput::focusInput(bool selectAll) {
+    canvas()->setFocusedItem(this);
+    canvas()->setFocus(Qt::OtherFocusReason);
+    if (selectAll) {
+        m_anchor = 0;
+        m_cursor = int(m_text.size());
+    }
+    m_blinkBase = canvas()->clock();
+    update();
+}
+
+void GlTextInput::focusChanged(bool focused) {
+    if (focused) {
+        if (m_selectAll) {
+            m_anchor = 0;
+            m_cursor = int(m_text.size());
+        }
+        m_blinkBase = canvas()->clock();
+    } else {
+        emit focusLost();
+    }
+}
+
+bool GlTextInput::advance(qreal dt) {
+    bool busy = GlItem::advance(dt);
+    return busy || (canvas()->focusedItem() == this && canvas()->hasFocus());
+}
+
+QRectF GlTextInput::textRect() const {
+    const QRectF r = rect();
+    return QRectF(r.left() + 14, r.top(), r.width() - 28 - (m_clearable && !m_text.isEmpty() ? 22 : 0), r.height());
+}
+
+QRectF GlTextInput::clearRect() const {
+    const QRectF r = rect();
+    return QRectF(r.right() - 30, r.center().y() - 10, 20, 20);
+}
+
+int GlTextInput::posAt(qreal x) const {
+    const QFontMetricsF fm(GlUi::uiFont(10.5));
+    const qreal rel = x - textRect().left() + m_scroll;
+    int best = 0;
+    qreal bestD = 1e9;
+    for (int i = 0; i <= m_text.size(); ++i) {
+        const qreal d = std::abs(fm.horizontalAdvance(m_text.left(i)) - rel);
+        if (d < bestD) {
+            bestD = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+void GlTextInput::mousePressAt(const QPointF& p) {
+    if (m_clearable && !m_text.isEmpty() && clearRect().adjusted(-4, -4, 4, 4).contains(p)) {
+        clear();
+        m_cursor = m_anchor = 0;
+        return;
+    }
+    m_cursor = m_anchor = posAt(p.x());
+    m_blinkBase = canvas()->clock();
+    update();
+}
+
+void GlTextInput::mouseDragTo(const QPointF& p) {
+    m_cursor = posAt(p.x());
+    update();
+}
+
+void GlTextInput::edit(const QString& t, int cursor) {
+    const bool changed = t != m_text;
+    m_text = t;
+    m_cursor = m_anchor = std::clamp(cursor, 0, int(m_text.size()));
+    m_blinkBase = canvas()->clock();
+    update();
+    if (changed) {
+        emit textChanged(m_text);
+    }
+}
+
+bool GlTextInput::keyPressed(QKeyEvent* e) {
+    const bool ctrl = e->modifiers() & Qt::ControlModifier;
+    const bool shift = e->modifiers() & Qt::ShiftModifier;
+    const int lo = std::min(m_cursor, m_anchor), hi = std::max(m_cursor, m_anchor);
+    const auto moveTo = [&](int pos) {
+        m_cursor = std::clamp(pos, 0, int(m_text.size()));
+        if (!shift) {
+            m_anchor = m_cursor;
+        }
+        m_blinkBase = canvas()->clock();
+        update();
+    };
+    switch (e->key()) {
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        emit editingFinished();
+        return true;
+    case Qt::Key_Escape:
+        emit cancelled();
+        return m_escConsumed;
+    case Qt::Key_Left:
+        moveTo(!shift && lo != hi ? lo : m_cursor - 1);
+        return true;
+    case Qt::Key_Right:
+        moveTo(!shift && lo != hi ? hi : m_cursor + 1);
+        return true;
+    case Qt::Key_Home:
+        moveTo(0);
+        return true;
+    case Qt::Key_End:
+        moveTo(int(m_text.size()));
+        return true;
+    case Qt::Key_Backspace:
+        if (lo != hi) edit(m_text.left(lo) + m_text.mid(hi), lo);
+        else if (m_cursor > 0) edit(m_text.left(m_cursor - 1) + m_text.mid(m_cursor), m_cursor - 1);
+        return true;
+    case Qt::Key_Delete:
+        if (lo != hi) edit(m_text.left(lo) + m_text.mid(hi), lo);
+        else if (m_cursor < m_text.size()) edit(m_text.left(m_cursor) + m_text.mid(m_cursor + 1), m_cursor);
+        return true;
+    case Qt::Key_Tab:
+    case Qt::Key_Backtab:
+    case Qt::Key_Up:
+    case Qt::Key_Down:
+        return false;
+    default:
+        break;
+    }
+    if (ctrl) {
+        if (e->key() == Qt::Key_A) {
+            m_anchor = 0;
+            m_cursor = int(m_text.size());
+            update();
+            return true;
+        }
+        if ((e->key() == Qt::Key_C || e->key() == Qt::Key_X) && lo != hi) {
+            QGuiApplication::clipboard()->setText(m_text.mid(lo, hi - lo));
+            if (e->key() == Qt::Key_X) edit(m_text.left(lo) + m_text.mid(hi), lo);
+            return true;
+        }
+        if (e->key() == Qt::Key_V) {
+            QString clip = QGuiApplication::clipboard()->text();
+            clip.replace(QLatin1Char('\n'), QLatin1Char(' ')).replace(QLatin1Char('\r'), QString());
+            edit(m_text.left(lo) + clip + m_text.mid(hi), lo + int(clip.size()));
+            return true;
+        }
+        if (!(e->modifiers() & Qt::AltModifier)) {
+            return false; // other Ctrl shortcuts are not text
+        }
+    }
+    const QString t = e->text();
+    if (!t.isEmpty() && t.at(0).isPrint()) {
+        edit(m_text.left(lo) + t + m_text.mid(hi), lo + int(t.size()));
+        return true;
+    }
+    return false;
+}
+
+void GlTextInput::paint(QPainter& p, const Style& s) {
+    const QRectF r = rect();
+    const bool focused = canvas()->focusedItem() == this && canvas()->hasFocus();
+    const qreal rad = std::max(6.0, 14 * s.radius);
+    p.save();
+    if (!isEnabled()) {
+        p.setOpacity(0.5);
+    }
+    QColor fill = s.glass;
+    fill.setAlphaF(std::min(1.0, fill.alphaF() + 0.08));
+    p.setPen(QPen(focused ? s.accent2 : s.glassEdge, focused ? 1.6 : 1.1));
+    p.setBrush(fill);
+    p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), rad, rad);
+    if (focused) {
+        glow(p, r, rad, s.accent2, 0.35);
+    }
+    const QFont f = GlUi::uiFont(10.5);
+    const QFontMetricsF fm(f);
+    p.setFont(f);
+    const QRectF tr = textRect();
+    // Keep the caret in view.
+    const qreal caretX = fm.horizontalAdvance(m_text.left(m_cursor));
+    if (caretX - m_scroll > tr.width() - 2) m_scroll = caretX - tr.width() + 2;
+    if (caretX - m_scroll < 0) m_scroll = caretX;
+    if (fm.horizontalAdvance(m_text) <= tr.width()) m_scroll = 0;
+    p.save();
+    p.setClipRect(tr);
+    if (m_text.isEmpty()) {
+        p.setPen(s.textDim);
+        p.drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, m_placeholder);
+    } else {
+        const int lo = std::min(m_cursor, m_anchor), hi = std::max(m_cursor, m_anchor);
+        if (focused && lo != hi) {
+            const qreal x0 = tr.left() - m_scroll + fm.horizontalAdvance(m_text.left(lo));
+            const qreal x1 = tr.left() - m_scroll + fm.horizontalAdvance(m_text.left(hi));
+            QColor sel = s.accent;
+            sel.setAlphaF(0.55);
+            p.setPen(Qt::NoPen);
+            p.setBrush(sel);
+            p.drawRect(QRectF(x0, r.center().y() - fm.height() / 2, x1 - x0, fm.height()));
+        }
+        p.setPen(s.text);
+        p.drawText(QRectF(tr.left() - m_scroll, tr.top(), 100000, tr.height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
+    }
+    if (focused && std::fmod(canvas()->clock() - m_blinkBase, 1.0) < 0.55) {
+        const qreal x = tr.left() - m_scroll + caretX;
+        p.setPen(QPen(s.text, 1.4));
+        p.drawLine(QPointF(x, r.center().y() - fm.height() / 2), QPointF(x, r.center().y() + fm.height() / 2));
+    }
+    p.restore();
+    if (m_clearable && !m_text.isEmpty()) {
+        const QRectF c = clearRect();
+        p.setPen(QPen(GlUi::mix(s.textDim, s.text, hoverAmount()), 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(c.center() + QPointF(-4, -4), c.center() + QPointF(4, 4));
+        p.drawLine(c.center() + QPointF(-4, 4), c.center() + QPointF(4, -4));
+    }
+    p.restore();
+}
+
+// -------------------------------------------------------- GlTreeDropdown
+
+GlTreeDropdown::GlTreeDropdown(GlCanvas* canvas) : GlItem(canvas) {
+    m_allLabel = QObject::tr("All");
+    rebuild();
+}
+
+void GlTreeDropdown::setCategories(const QVector<PlaylistFilterInfo>& categories, const QString& allLabel) {
+    m_allLabel = allLabel;
+    m_ids.clear();
+    m_parents.clear();
+    m_names.clear();
+    bool exists = m_current == 0;
+    QSet<qint64> ids;
+    for (const PlaylistFilterInfo& f : categories) {
+        m_ids << f.id;
+        m_parents << f.parentId;
+        m_names << f.name;
+        ids.insert(f.id);
+        exists = exists || f.id == m_current;
+    }
+    m_collapsed.intersect(ids);
+    m_current = exists ? m_current : 0;
+    rebuild();
+}
+
+void GlTreeDropdown::rebuild() {
+    m_nodes.clear();
+    m_nodes.push_back({0, m_allLabel, 0, false});
+    const QSet<qint64> known(m_ids.begin(), m_ids.end());
+    QVector<bool> placed(m_ids.size(), false);
+    // Depth-first so a parent is always followed by its subtree.
+    std::function<void(qint64, int)> addChildren = [&](qint64 parent, int depth) {
+        for (int i = 0; i < m_ids.size(); ++i) {
+            const bool isRoot = m_parents[i] <= 0 || !known.contains(m_parents[i]);
+            const bool match = parent == 0 ? isRoot : m_parents[i] == parent;
+            if (!match || placed[i] || m_ids[i] == parent) {
+                continue;
+            }
+            placed[i] = true;
+            bool hasChildren = false;
+            for (qint64 par : std::as_const(m_parents)) {
+                hasChildren = hasChildren || par == m_ids[i];
+            }
+            m_nodes.push_back({m_ids[i], m_names[i], depth, hasChildren});
+            addChildren(m_ids[i], depth + 1);
+        }
+    };
+    addChildren(0, 1);
+    QString leaf = m_allLabel;
+    for (int i = 0; i < m_ids.size(); ++i) {
+        if (m_ids[i] == m_current && m_current != 0) {
+            leaf = m_names[i];
+        }
+    }
+    setToolTip(QObject::tr("Selected category: %1").arg(pathOf(m_current)));
+    update();
+}
+
+QString GlTreeDropdown::pathOf(qint64 id) const {
+    if (id == 0) {
+        return m_allLabel;
+    }
+    QStringList parts;
+    QSet<qint64> seen;
+    while (id > 0 && !seen.contains(id)) {
+        seen.insert(id);
+        const int i = m_ids.indexOf(id);
+        if (i < 0) {
+            break;
+        }
+        parts.prepend(m_names[i]);
+        id = m_parents[i];
+    }
+    return parts.join(QStringLiteral("  >  "));
+}
+
+void GlTreeDropdown::setCurrentCategory(qint64 id) {
+    const qint64 next = (id == 0 || m_ids.contains(id)) ? id : 0;
+    if (next == m_current) {
+        return;
+    }
+    m_current = next;
+    rebuild();
+    emit currentCategoryChanged(m_current);
+}
+
+QVector<GlTreeDropdown::Node> GlTreeDropdown::visibleNodes() const {
+    QVector<Node> out;
+    int skipDepth = -1;
+    for (const Node& n : m_nodes) {
+        if (skipDepth >= 0 && n.depth > skipDepth) {
+            continue;
+        }
+        skipDepth = -1;
+        out.push_back(n);
+        if (n.hasChildren && m_collapsed.contains(n.id)) {
+            skipDepth = n.depth;
+        }
+    }
+    return out;
+}
+
+QRectF GlTreeDropdown::popupRect() const {
+    const QRectF f = rect();
+    const int rows = int(visibleNodes().size());
+    const qreal h = std::min<qreal>(340, rows * 32 + 10);
+    const qreal w = std::max<qreal>(f.width(), 260);
+    qreal top = f.bottom() + 4;
+    if (top + h > canvas()->height() - 8) {
+        top = std::max<qreal>(8, f.top() - 4 - h);
+    }
+    return QRectF(f.left(), top, w, h);
+}
+
+QRectF GlTreeDropdown::rowRect(int i) const {
+    const QRectF pr = popupRect();
+    return QRectF(pr.left() + 5, pr.top() + 5 + i * 32, pr.width() - 10, 32);
+}
+
+int GlTreeDropdown::indexAt(const QPointF& pt) const {
+    const int n = int(visibleNodes().size());
+    for (int i = 0; i < n; ++i) {
+        if (rowRect(i).contains(pt)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void GlTreeDropdown::closePopup() {
+    m_open = false;
+    if (canvas()->popup() == this) {
+        canvas()->setPopup(nullptr);
+    }
+}
+
+void GlTreeDropdown::activate() {
+    if (m_open) {
+        closePopup();
+        return;
+    }
+    m_open = true;
+    const QVector<Node> vis = visibleNodes();
+    m_highlight = 0;
+    for (int i = 0; i < vis.size(); ++i) {
+        if (vis[i].id == m_current) {
+            m_highlight = i;
+        }
+    }
+    canvas()->setPopup(this);
+}
+
+bool GlTreeDropdown::popupPress(const QPointF& pt) {
+    const QVector<Node> vis = visibleNodes();
+    const int i = indexAt(pt);
+    if (i >= 0) {
+        const Node& n = vis[i];
+        const qreal chevX = rowRect(i).left() + 8 + n.depth * 18;
+        if (n.hasChildren && pt.x() >= chevX - 6 && pt.x() <= chevX + 16) {
+            if (!m_collapsed.remove(n.id)) {
+                m_collapsed.insert(n.id);
+            }
+            update();
+            return true; // stay open
+        }
+        closePopup();
+        setCurrentCategory(n.id);
+        return true;
+    }
+    closePopup();
+    return rect().contains(pt);
+}
+
+void GlTreeDropdown::popupHover(const QPointF& pt) {
+    const int i = indexAt(pt);
+    if (i >= 0 && i != m_highlight) {
+        m_highlight = i;
+        update();
+    }
+}
+
+bool GlTreeDropdown::popupKey(QKeyEvent* e) {
+    const QVector<Node> vis = visibleNodes();
+    switch (e->key()) {
+    case Qt::Key_Escape:
+        closePopup();
+        return true;
+    case Qt::Key_Up:
+        m_highlight = std::max(0, m_highlight - 1);
+        break;
+    case Qt::Key_Down:
+        m_highlight = std::min(int(vis.size()) - 1, m_highlight + 1);
+        break;
+    case Qt::Key_Left:
+        if (m_highlight < vis.size() && vis[m_highlight].hasChildren) m_collapsed.insert(vis[m_highlight].id);
+        break;
+    case Qt::Key_Right:
+        if (m_highlight < vis.size()) m_collapsed.remove(vis[m_highlight].id);
+        break;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Space: {
+        const qint64 id = m_highlight < vis.size() ? vis[m_highlight].id : 0;
+        closePopup();
+        setCurrentCategory(id);
+        return true;
+    }
+    default:
+        break;
+    }
+    update();
+    return true;
+}
+
+bool GlTreeDropdown::keyPressed(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Down || e->key() == Qt::Key_F4) {
+        activate();
+        return true;
+    }
+    return false;
+}
+
+void GlTreeDropdown::contextMenuAt(const QPointF&, const QPoint& global, bool) {
+    emit contextMenuRequested(global);
+}
+
+void GlTreeDropdown::paint(QPainter& p, const Style& s) {
+    const QRectF f = rect();
+    const qreal h = hoverAmount();
+    const qreal rad = std::max(6.0, 14 * s.radius);
+    p.save();
+    if (!isEnabled()) {
+        p.setOpacity(0.5);
+    }
+    QColor fill = s.glass;
+    fill.setAlphaF(std::min(1.0, fill.alphaF() + 0.12 + 0.1 * h));
+    p.setPen(QPen(GlUi::mix(s.glassEdge, s.accent2, std::max(h, m_open ? 1.0 : 0.0)), 1.1));
+    p.setBrush(fill);
+    p.drawRoundedRect(f.adjusted(0.5, 0.5, -0.5, -0.5), rad, rad);
+    glow(p, f, rad, s.accent2, 0.4 * h);
+    QString leaf = m_allLabel;
+    for (int i = 0; i < m_ids.size(); ++i) {
+        if (m_ids[i] == m_current && m_current != 0) {
+            leaf = m_names[i];
+        }
+    }
+    p.setFont(GlUi::uiFont(10.5, true));
+    p.setPen(s.text);
+    p.drawText(f.adjusted(14, 0, -34, 0), Qt::AlignVCenter | Qt::AlignLeft,
+               QFontMetricsF(p.font()).elidedText(leaf, Qt::ElideRight, f.width() - 50));
+    p.setPen(QPen(GlUi::mix(s.textDim, s.accent2, h), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const QPointF c(f.right() - 18, f.center().y() + (m_open ? 1 : -1));
+    if (m_open) {
+        p.drawPolyline(QPolygonF({QPointF(c.x() - 5, c.y() + 2), QPointF(c.x(), c.y() - 3), QPointF(c.x() + 5, c.y() + 2)}));
+    } else {
+        p.drawPolyline(QPolygonF({QPointF(c.x() - 5, c.y() - 2), QPointF(c.x(), c.y() + 3), QPointF(c.x() + 5, c.y() - 2)}));
+    }
+    p.restore();
+    if (hasFocus()) {
+        p.save();
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(s.accent2, 2.0));
+        p.drawRoundedRect(f.adjusted(-2, -2, 2, 2), rad + 2, rad + 2);
+        p.restore();
+    }
+}
+
+void GlTreeDropdown::paintOverlay(QPainter& p, const Style& s) {
+    if (!m_open) {
+        return;
+    }
+    const QVector<Node> vis = visibleNodes();
+    const QRectF pr = popupRect();
+    const qreal rad = std::max(6.0, 14 * s.radius);
+    p.save();
+    p.setPen(Qt::NoPen);
+    for (int i = 0; i < 4; ++i) {
+        p.setBrush(QColor(0, 0, 0, 40 - i * 8));
+        p.drawRoundedRect(pr.translated(0, 3 + i * 2).adjusted(-i, -i, i, i), rad + i, rad + i);
+    }
+    p.setBrush(GlUi::mix(s.bgBase, s.bgTint, 0.5));
+    p.drawRoundedRect(pr, rad, rad);
+    p.setBrush(s.glass);
+    p.drawRoundedRect(pr, rad, rad);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(GlUi::mix(s.glassEdge, s.accent2, 0.7), 1.2));
+    p.drawRoundedRect(pr.adjusted(0.6, 0.6, -0.6, -0.6), rad, rad);
+    p.setClipRect(pr.adjusted(0, 4, 0, -4));
+    for (int i = 0; i < vis.size(); ++i) {
+        const Node& n = vis[i];
+        const QRectF row = rowRect(i);
+        if (i == m_highlight) {
+            QLinearGradient g(row.topLeft(), row.topRight());
+            QColor a = s.accent, b = s.accent2;
+            a.setAlphaF(0.55);
+            b.setAlphaF(0.35);
+            g.setColorAt(0, a);
+            g.setColorAt(1, b);
+            p.setPen(Qt::NoPen);
+            p.setBrush(g);
+            p.drawRoundedRect(row, std::max(4.0, 10 * s.radius), std::max(4.0, 10 * s.radius));
+        }
+        const qreal x = row.left() + 8 + n.depth * 18;
+        if (n.hasChildren) {
+            p.setPen(QPen(s.textDim, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            const QPointF c(x + 5, row.center().y());
+            if (m_collapsed.contains(n.id)) {
+                p.drawPolyline(QPolygonF({QPointF(c.x() - 2, c.y() - 4), QPointF(c.x() + 3, c.y()), QPointF(c.x() - 2, c.y() + 4)}));
+            } else {
+                p.drawPolyline(QPolygonF({QPointF(c.x() - 4, c.y() - 2), QPointF(c.x(), c.y() + 3), QPointF(c.x() + 4, c.y() - 2)}));
+            }
+        }
+        const bool cur = n.id == m_current;
+        p.setFont(GlUi::uiFont(10.5, cur));
+        p.setPen(cur ? s.accent2 : s.text);
+        p.drawText(QRectF(x + 20, row.top(), row.right() - x - 28, row.height()), Qt::AlignVCenter | Qt::AlignLeft,
+                   QFontMetricsF(p.font()).elidedText(n.name, Qt::ElideRight, row.right() - x - 30));
+    }
+    p.restore();
+}
+
+// ------------------------------------------------------------ GlItemView
+
+GlItemView::GlItemView(GlCanvas* canvas) : GlItem(canvas) {}
+
+void GlItemView::setModel(QAbstractItemModel* model) {
+    if (m_model) {
+        disconnect(m_model, nullptr, this, nullptr);
+    }
+    m_model = model;
+    m_hidden.clear();
+    m_current = QPersistentModelIndex();
+    m_scrollY = 0;
+    m_visibleDirty = true;
+    if (m_model) {
+        const auto structural = [this] {
+            m_hidden.clear(); // the owner re-applies its filter after structural changes
+            m_visibleDirty = true;
+            clampScroll();
+            update();
+        };
+        connect(m_model, &QAbstractItemModel::modelReset, this, structural);
+        connect(m_model, &QAbstractItemModel::layoutChanged, this, structural);
+        connect(m_model, &QAbstractItemModel::rowsInserted, this, structural);
+        connect(m_model, &QAbstractItemModel::rowsRemoved, this, structural);
+        connect(m_model, &QAbstractItemModel::rowsMoved, this, structural);
+        connect(m_model, &QAbstractItemModel::dataChanged, this, [this] { update(); });
+        connect(m_model, &QObject::destroyed, this, [this] {
+            m_model = nullptr;
+            m_visibleDirty = true;
+            update();
+        });
+    }
+    update();
+}
+
+void GlItemView::setMode(Mode m, const QSize& cell, int spacing) {
+    m_mode = m;
+    m_cell = cell;
+    m_spacing = spacing;
+    update();
+}
+
+void GlItemView::setEmptyText(const QString& title, const QString& subtitle) {
+    m_emptyTitle = title;
+    m_emptySub = subtitle;
+    update();
+}
+
+int GlItemView::rowCount() const {
+    return m_model ? m_model->rowCount() : 0;
+}
+
+void GlItemView::rebuildVisible() const {
+    m_visible.clear();
+    const int n = rowCount();
+    for (int r = 0; r < n; ++r) {
+        if (!m_hidden.contains(r)) {
+            m_visible.push_back(r);
+        }
+    }
+    m_visibleDirty = false;
+}
+
+QRectF GlItemView::viewport() const {
+    const qreal inset = m_framed ? 8 : 0;
+    return rect().adjusted(inset, inset, -inset - 12, -inset);
+}
+
+int GlItemView::columns() const {
+    if (m_mode == Mode::List) {
+        return 1;
+    }
+    return std::max(1, int((viewport().width() + m_spacing) / (m_cell.width() + m_spacing)));
+}
+
+QSizeF GlItemView::contentSize() const {
+    if (m_visibleDirty) rebuildVisible();
+    const int n = int(m_visible.size());
+    const int cols = columns();
+    const int rows = (n + cols - 1) / cols;
+    return QSizeF(viewport().width(), rows > 0 ? rows * (m_cell.height() + m_spacing) - m_spacing : 0);
+}
+
+void GlItemView::clampScroll() {
+    const qreal maxS = std::max<qreal>(0, contentSize().height() - viewport().height());
+    m_scrollY = std::clamp(m_scrollY, 0.0, maxS);
+}
+
+QRectF GlItemView::cellRect(int vi) const {
+    const QRectF vp = viewport();
+    const int cols = columns();
+    const int col = vi % cols, row = vi / cols;
+    if (m_mode == Mode::List) {
+        return QRectF(vp.left(), vp.top() + row * (m_cell.height() + m_spacing) - m_scrollY, vp.width(), m_cell.height());
+    }
+    const qreal gridW = cols * (m_cell.width() + m_spacing) - m_spacing;
+    const qreal x0 = vp.left() + std::max<qreal>(0, (vp.width() - gridW) / 2);
+    return QRectF(x0 + col * (m_cell.width() + m_spacing), vp.top() + row * (m_cell.height() + m_spacing) - m_scrollY,
+                  m_cell.width(), m_cell.height());
+}
+
+QRectF GlItemView::rowRect(int row) const {
+    if (m_visibleDirty) rebuildVisible();
+    const int vi = m_visible.indexOf(row);
+    return vi < 0 ? QRectF() : cellRect(vi);
+}
+
+int GlItemView::rowAt(const QPointF& p) const {
+    if (m_visibleDirty) rebuildVisible();
+    if (!viewport().contains(p)) {
+        return -1;
+    }
+    const int cols = columns();
+    const int n = int(m_visible.size());
+    const int firstRow = std::max(0, int((p.y() - viewport().top() + m_scrollY) / (m_cell.height() + m_spacing)));
+    for (int r = std::max(0, firstRow - 1); r <= firstRow + 1; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            const int vi = r * cols + c;
+            if (vi >= 0 && vi < n && cellRect(vi).contains(p)) {
+                return m_visible[vi];
+            }
+        }
+    }
+    return -1;
+}
+
+int GlItemView::insertPositionAt(const QPointF& p) const {
+    if (m_visibleDirty) rebuildVisible();
+    for (int vi = 0; vi < m_visible.size(); ++vi) {
+        const QRectF r = cellRect(vi);
+        if (p.y() < r.top() - m_spacing) {
+            return m_visible[vi];
+        }
+        if (p.y() <= r.bottom() + m_spacing && p.x() < r.center().x()) {
+            return m_visible[vi];
+        }
+    }
+    return rowCount();
+}
+
+void GlItemView::setDropIndicator(int pos) {
+    if (pos != m_dropPos) {
+        m_dropPos = pos;
+        update();
+    }
+}
+
+void GlItemView::setRowHidden(int row, bool hidden) {
+    if (hidden == m_hidden.contains(row)) {
+        return;
+    }
+    if (hidden) m_hidden.insert(row); else m_hidden.remove(row);
+    m_visibleDirty = true;
+    clampScroll();
+    update();
+}
+
+void GlItemView::setCurrentRow(int row, bool scroll) {
+    const QModelIndex idx = (m_model && row >= 0 && row < m_model->rowCount()) ? m_model->index(row, 0) : QModelIndex();
+    const int old = currentRow();
+    m_current = idx;
+    if (scroll && idx.isValid()) {
+        scrollTo(row);
+    }
+    update();
+    if (old != currentRow()) {
+        emit currentRowChanged(currentRow());
+    }
+}
+
+void GlItemView::clearCurrent() {
+    setCurrentRow(-1);
+}
+
+void GlItemView::scrollTo(int row) {
+    if (m_visibleDirty) rebuildVisible();
+    const int vi = m_visible.indexOf(row);
+    if (vi < 0) {
+        return;
+    }
+    const QRectF vp = viewport();
+    const QRectF c = cellRect(vi);
+    if (c.top() < vp.top()) {
+        m_scrollY -= vp.top() - c.top();
+    } else if (c.bottom() > vp.bottom()) {
+        m_scrollY += c.bottom() - vp.bottom();
+    }
+    clampScroll();
+    update();
+}
+
+void GlItemView::scrollBy(qreal dy) {
+    m_scrollY += dy;
+    clampScroll();
+    update();
+}
+
+QRectF GlItemView::scrollTrack() const {
+    const QRectF r = rect();
+    const qreal inset = m_framed ? 6 : 0;
+    return QRectF(r.right() - inset - 8, r.top() + inset, 8, r.height() - 2 * inset);
+}
+
+QRectF GlItemView::scrollThumb() const {
+    const QRectF t = scrollTrack();
+    const qreal ch = contentSize().height(), vh = viewport().height();
+    if (ch <= vh + 0.5) {
+        return QRectF();
+    }
+    const qreal th = std::max<qreal>(32, t.height() * vh / ch);
+    return QRectF(t.left(), t.top() + (t.height() - th) * (m_scrollY / (ch - vh)), t.width(), th);
+}
+
+void GlItemView::mousePressAt(const QPointF& p) {
+    m_dragging = false;
+    const QRectF thumb = scrollThumb();
+    if (!thumb.isNull() && scrollTrack().adjusted(-4, 0, 4, 0).contains(p)) {
+        m_sbDrag = true;
+        m_sbGrab = thumb.contains(p) ? p.y() - thumb.top() : thumb.height() / 2;
+        mouseDragTo(p);
+        return;
+    }
+    m_pressRow = rowAt(p);
+    m_pressPos = p;
+    if (m_pressRow >= 0) {
+        setCurrentRow(m_pressRow, false);
+    }
+}
+
+void GlItemView::mouseDragTo(const QPointF& p) {
+    if (m_sbDrag) {
+        const QRectF t = scrollTrack();
+        const qreal th = scrollThumb().height();
+        const qreal span = std::max<qreal>(1, t.height() - th);
+        const qreal f = std::clamp((p.y() - m_sbGrab - t.top()) / span, 0.0, 1.0);
+        m_scrollY = f * (contentSize().height() - viewport().height());
+        clampScroll();
+        update();
+        return;
+    }
+    if (m_pressRow < 0 || !m_reorder) {
+        return;
+    }
+    if (!m_dragging && QLineF(p, m_pressPos).length() > 8) {
+        m_dragging = true;
+    }
+    if (m_dragging) {
+        m_dragPos = p;
+        setDropIndicator(insertPositionAt(p));
+        const QRectF vp = viewport();
+        m_autoScroll = p.y() < vp.top() + 26 ? -320 : p.y() > vp.bottom() - 26 ? 320 : 0;
+        update();
+    }
+}
+
+void GlItemView::mouseReleased(const QPointF&) {
+    if (m_dragging && m_pressRow >= 0 && m_dropPos >= 0) {
+        const int from = m_pressRow, pos = m_dropPos;
+        m_dragging = false;
+        m_autoScroll = 0;
+        setDropIndicator(-1);
+        m_pressRow = -1;
+        emit reorderRequested(from, pos);
+    }
+    m_dragging = false;
+    m_autoScroll = 0;
+    m_sbDrag = false;
+    if (m_dropPos >= 0 && !m_dragging) {
+        setDropIndicator(-1);
+    }
+    m_pressRow = -1;
+    update();
+}
+
+void GlItemView::doubleClickAt(const QPointF& p) {
+    const int row = rowAt(p);
+    if (row >= 0) {
+        emit doubleClicked(row);
+    }
+}
+
+void GlItemView::hoverMoved(const QPointF& p) {
+    const int row = rowAt(p);
+    if (row != m_hoverRow) {
+        m_hoverRow = row;
+        update();
+    }
+}
+
+void GlItemView::contextMenuAt(const QPointF& p, const QPoint& global, bool kb) {
+    int row = kb ? currentRow() : rowAt(p);
+    if (row >= 0) {
+        setCurrentRow(row, false);
+    }
+    emit contextMenuRequested(kb && row >= 0 ? rowRect(row).center() : p, global, row);
+}
+
+bool GlItemView::wheelAt(int delta, const QPointF&) {
+    if (contentSize().height() <= viewport().height() + 0.5) {
+        return false;
+    }
+    scrollBy(-delta * 0.8);
+    return true;
+}
+
+bool GlItemView::advance(qreal dt) {
+    bool busy = GlItem::advance(dt);
+    if (m_dragging && m_autoScroll != 0) {
+        scrollBy(m_autoScroll * dt);
+        setDropIndicator(insertPositionAt(m_dragPos));
+        busy = true;
+    }
+    return busy || m_dragging;
+}
+
+void GlItemView::navigate(int dRow, int dCol) {
+    if (m_visibleDirty) rebuildVisible();
+    if (m_visible.isEmpty()) {
+        return;
+    }
+    const int cols = columns();
+    int vi = m_visible.indexOf(currentRow());
+    if (vi < 0) {
+        vi = 0;
+    } else {
+        vi = std::clamp(vi + dRow * cols + dCol, 0, int(m_visible.size()) - 1);
+    }
+    setCurrentRow(m_visible[vi], true);
+}
+
+bool GlItemView::keyPressed(QKeyEvent* e) {
+    if (m_keyFilter && m_keyFilter(e)) {
+        return true;
+    }
+    if (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) {
+        return false;
+    }
+    const int pageRows = std::max(1, int(viewport().height() / (m_cell.height() + m_spacing)));
+    switch (e->key()) {
+    case Qt::Key_Up: navigate(-1, 0); return true;
+    case Qt::Key_Down: navigate(1, 0); return true;
+    case Qt::Key_Left: if (m_mode == Mode::Grid) { navigate(0, -1); return true; } return false;
+    case Qt::Key_Right: if (m_mode == Mode::Grid) { navigate(0, 1); return true; } return false;
+    case Qt::Key_PageUp: navigate(-pageRows, 0); return true;
+    case Qt::Key_PageDown: navigate(pageRows, 0); return true;
+    case Qt::Key_Home: navigate(-100000, 0); return true;
+    case Qt::Key_End: navigate(100000, 0); return true;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        if (currentRow() >= 0) {
+            emit activated(currentRow());
+            return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+void GlItemView::paint(QPainter& p, const Style& s) {
+    const QRectF r = rect();
+    if (m_visibleDirty) rebuildVisible();
+    clampScroll();
+    p.save();
+    if (m_framed) {
+        const qreal rad = 16 * s.radius + 2;
+        p.setPen(QPen(s.glassEdge, 1.0));
+        p.setBrush(QColor(0, 0, 0, s.dark ? 46 : 14));
+        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), rad, rad);
+    }
+    const QRectF vp = viewport();
+    if (rowCount() == 0 && !m_emptyTitle.isEmpty()) {
+        p.setFont(GlUi::uiFont(13, true));
+        p.setPen(s.text);
+        p.drawText(r.adjusted(16, 0, -16, -30), Qt::AlignCenter | Qt::TextWordWrap, m_emptyTitle);
+        p.setFont(GlUi::uiFont(10));
+        p.setPen(s.textDim);
+        p.drawText(r.adjusted(16, 36, -16, 0), Qt::AlignCenter | Qt::TextWordWrap, m_emptySub);
+    }
+    if (m_delegate && m_model) {
+        p.save();
+        p.setClipRect(vp.adjusted(-6, -2, 6, 2).intersected(rect()));
+        const int cols = columns();
+        const int firstRow = std::max(0, int(m_scrollY / (m_cell.height() + m_spacing)));
+        const int lastRow = int((m_scrollY + vp.height()) / (m_cell.height() + m_spacing)) + 1;
+        const int viFrom = firstRow * cols, viTo = std::min(int(m_visible.size()), (lastRow + 1) * cols);
+        for (int vi = viFrom; vi < viTo; ++vi) {
+            const int row = m_visible[vi];
+            const QRectF cr = cellRect(vi);
+            if (!cr.intersects(vp)) {
+                continue;
+            }
+            QStyleOptionViewItem opt;
+            opt.rect = cr.toAlignedRect();
+            opt.font = GlUi::uiFont(10);
+            opt.state = QStyle::State_Enabled;
+            if (row == currentRow()) opt.state |= QStyle::State_Selected;
+            if (row == m_hoverRow) opt.state |= QStyle::State_MouseOver;
+            if (m_dragging && row == m_pressRow) {
+                p.setOpacity(0.45);
+            }
+            m_delegate->paint(&p, opt, m_model->index(row, 0));
+            p.setOpacity(1.0);
+        }
+        // Drop / reorder insertion bar.
+        if (m_dropPos >= 0 && !m_visible.isEmpty()) {
+            int vi = 0;
+            while (vi < m_visible.size() && m_visible[vi] < m_dropPos) {
+                ++vi;
+            }
+            QRectF bar;
+            if (vi < m_visible.size()) {
+                const QRectF c = cellRect(vi);
+                bar = m_mode == Mode::List ? QRectF(c.left(), c.top() - 2, c.width(), 3) : QRectF(c.left() - 2, c.top() + 6, 4, c.height() - 12);
+            } else {
+                const QRectF c = cellRect(int(m_visible.size()) - 1);
+                bar = m_mode == Mode::List ? QRectF(c.left(), c.bottom() - 1, c.width(), 3) : QRectF(c.right() - 2, c.top() + 6, 4, c.height() - 12);
+            }
+            QLinearGradient g(bar.topLeft(), bar.bottomLeft());
+            g.setColorAt(0, s.accent);
+            g.setColorAt(1, s.accent2);
+            glow(p, bar, 2, s.accent2, 0.9);
+            p.setPen(Qt::NoPen);
+            p.setBrush(g);
+            p.drawRoundedRect(bar, 2, 2);
+        }
+        // Card being dragged follows the pointer.
+        if (m_dragging && m_pressRow >= 0) {
+            QStyleOptionViewItem opt;
+            opt.rect = QRectF(m_dragPos.x() - m_cell.width() / 2.0, m_dragPos.y() - m_cell.height() / 2.0, m_cell.width(), m_cell.height()).toAlignedRect();
+            opt.font = GlUi::uiFont(10);
+            opt.state = QStyle::State_Enabled | QStyle::State_Selected;
+            p.setOpacity(0.8);
+            m_delegate->paint(&p, opt, m_model->index(m_pressRow, 0));
+            p.setOpacity(1.0);
+        }
+        p.restore();
+    }
+    // Scrollbar.
+    const QRectF thumb = scrollThumb();
+    if (!thumb.isNull()) {
+        QColor c = GlUi::mix(s.accent, s.accent2, 0.5);
+        c.setAlphaF(0.5 + 0.4 * (m_sbDrag ? 1.0 : hoverAmount()));
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawRoundedRect(thumb, 4, 4);
+    }
+    p.restore();
+    if (hasFocus()) {
+        p.save();
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(s.accent2, 2.0));
+        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 14 * s.radius + 2, 14 * s.radius + 2);
+        p.restore();
+    }
 }
