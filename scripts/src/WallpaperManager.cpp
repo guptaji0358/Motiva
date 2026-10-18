@@ -193,24 +193,32 @@ void WallpaperManager::onPowerBroadcast(void* lParam) {
     reevaluateBatteryPolicy();
 }
 
-void WallpaperManager::setShowVideoOnBattery(bool enabled) {
-    if (m_showVideoOnBattery == enabled) {
+void WallpaperManager::setPlayVideosOnBattery(bool enabled) {
+    if (m_playVideosOnBattery == enabled) {
         return;
     }
-    m_showVideoOnBattery = enabled;
+    m_playVideosOnBattery = enabled;
+    reevaluateBatteryPolicy();
+}
+
+void WallpaperManager::setPlayImagesOnBattery(bool enabled) {
+    if (m_playImagesOnBattery == enabled) {
+        return;
+    }
+    m_playImagesOnBattery = enabled;
     reevaluateBatteryPolicy();
 }
 
 bool WallpaperManager::batteryPolicyHidesCurrentMedia() const {
-    // Video and animated GIF/WebP: the existing "Show video on battery"
-    // setting decides. Still images: never displayed on battery, regardless
-    // of that setting. Either way this is only a temporary hide (the render
-    // windows are detached, not destroyed; m_active and the playlist stay
-    // untouched) and AC power restores it via resumeFromBattery().
+    // Still images follow "Play Images on Battery"; video and animated
+    // GIF/WebP follow "Play Videos on Battery". Either way this is only a
+    // temporary hide (the render windows are detached, not destroyed;
+    // m_active and the playlist stay untouched) and lifting the restriction
+    // restores it via resumeFromBattery().
     if (!m_onBattery) {
         return false;
     }
-    return m_player->isStaticImage() ? true : !m_showVideoOnBattery;
+    return m_player->isStaticImage() ? !m_playImagesOnBattery : !m_playVideosOnBattery;
 }
 
 void WallpaperManager::reevaluateBatteryPolicy() {
@@ -229,8 +237,9 @@ void WallpaperManager::suspendForBattery() {
     if (!m_active || m_batterySuspended || m_windows.empty()) {
         return;
     }
-    qInfo() << "[Battery] Hiding wallpaper -" << (m_player->isStaticImage() ? "images are not shown on battery."
-                                                                      : "on battery and \"Show video on battery\" is off.");
+    qInfo() << "[Battery] Hiding wallpaper -"
+            << (m_player->isStaticImage() ? "on battery and \"Play Images on Battery\" is off."
+                                          : "on battery and \"Play Videos on Battery\" is off.");
     for (auto& w : m_windows) {
         WindowsDesktopWallpaper::DetachFromDesktop(w->handle());
         w->hideNative();

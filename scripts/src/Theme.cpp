@@ -10,6 +10,9 @@ namespace Theme {
 
 namespace {
 AppTheme g_currentTheme = AppTheme::DarkAurora;
+ColorOverrides g_overrides[4];
+ThemePalette g_effective[4];
+bool g_effectiveValid[4] = {false, false, false, false};
 
 // --- Four independently-authored palettes ---------------------------
 // Each case below is a self-contained literal color set - none of them
@@ -683,7 +686,7 @@ void applyTheme(AppTheme theme) {
     qApp->setStyleSheet(appStyleSheet(theme));
 }
 
-const ThemePalette& themePalette(AppTheme theme) {
+const ThemePalette& basePalette(AppTheme theme) {
     switch (theme) {
     case AppTheme::DarkAurora:
         return darkAuroraPalette();
@@ -695,6 +698,35 @@ const ThemePalette& themePalette(AppTheme theme) {
         return lightOnyxPalette();
     }
     return darkAuroraPalette();
+}
+
+const ThemePalette& themePalette(AppTheme theme) {
+    const int i = static_cast<int>(theme);
+    if (i < 0 || i > 3) {
+        return basePalette(AppTheme::DarkAurora);
+    }
+    if (g_overrides[i].isEmpty()) {
+        return basePalette(theme);
+    }
+    if (!g_effectiveValid[i]) {
+        g_effective[i] = composePalette(basePalette(theme), g_overrides[i]);
+        g_effectiveValid[i] = true;
+    }
+    return g_effective[i];
+}
+
+ColorOverrides overrides(AppTheme theme) {
+    const int i = static_cast<int>(theme);
+    return (i >= 0 && i <= 3) ? g_overrides[i] : ColorOverrides();
+}
+
+void setOverrides(AppTheme theme, const ColorOverrides& o) {
+    const int i = static_cast<int>(theme);
+    if (i < 0 || i > 3) {
+        return;
+    }
+    g_overrides[i] = o;
+    g_effectiveValid[i] = false;
 }
 
 QString appStyleSheet(AppTheme theme) {

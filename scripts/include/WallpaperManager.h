@@ -81,14 +81,13 @@ public:
     // to this hwnd only when the AC/battery state actually changes.
     void registerPowerNotifications(HWND hwnd);
 
-    // Reflects SettingsManager::showVideoOnBattery() - kept in sync by
-    // SettingsDialog on every toggle (see its onShowVideoOnBatteryToggled).
-    // Re-evaluates immediately: if this flips to false while already on
-    // battery, the video hides right away; if it flips to true, an
-    // already-hidden video (from a previous false+battery combination)
-    // comes back immediately - matches Set as Wallpaper/Remove Wallpaper's
-    // own "acts immediately" convention, no restart needed.
-    void setShowVideoOnBattery(bool enabled);
+    // Reflect SettingsManager::playVideosOnBattery()/playImagesOnBattery() -
+    // kept in sync by SettingsDialog on every toggle. Each re-evaluates
+    // immediately: flipping to false while on battery hides current media of
+    // that kind right away; flipping to true brings it back - matches Set as
+    // Wallpaper/Remove Wallpaper's "acts immediately" convention.
+    void setPlayVideosOnBattery(bool enabled);
+    void setPlayImagesOnBattery(bool enabled);
     bool isBatterySuspended() const { return m_batterySuspended; }
 
 signals:
@@ -260,7 +259,8 @@ private:
     // Seeded from GetSystemPowerStatus in the constructor (AC if unknown);
     // WM_POWERBROADCAST notifications keep it current afterward.
     bool m_onBattery = false;
-    bool m_showVideoOnBattery = true;
+    bool m_playVideosOnBattery = true;
+    bool m_playImagesOnBattery = false;
     // True while the video is hidden specifically because of the battery
     // policy (as opposed to m_active being false because the user removed
     // the wallpaper, or it was never set). See suspendForBattery/

@@ -3,6 +3,8 @@
 #include <QString>
 #include <QColor>
 #include <QPixmap>
+#include <QHash>
+#include <QList>
 
 // Centralized Motiva visual design system - see the "Motiva Theme System"
 // task. A Theme is a single, complete, explicitly-defined visual identity
@@ -61,9 +63,54 @@ AppTheme currentTheme();
 // generated from the same literal ThemePalette - see themePalette().
 void applyTheme(AppTheme theme);
 
-// The literal, independently-authored color set for `theme` - see
-// Theme.cpp. Never computed from another theme at runtime.
+// The EFFECTIVE color set for `theme`: its original palette (below) with
+// the user's saved customizations (setOverrides) composed on top. With no
+// overrides this is exactly the original, independently-authored palette.
 const ThemePalette& themePalette(AppTheme theme);
+
+// The original, never-modified palette - what "Reset to original" returns to.
+const ThemePalette& basePalette(AppTheme theme);
+
+// --- User customization (Theme editor) ---
+// Overrides are sparse (key -> color) and kept per theme, so switching
+// themes never loses or mixes up anyone's customization. Setting them only
+// updates the in-memory effective palette; callers re-run applyTheme() to
+// repaint and SettingsManager persists them.
+using ColorOverrides = QHash<QString, QColor>;
+
+struct EditableColor {
+    QString key;       // stable persistence key
+    QString label;     // shown in the theme editor
+    QColor ThemePalette::* member;
+};
+const QList<EditableColor>& editableColors();
+
+ThemePalette composePalette(const ThemePalette& base, const ColorOverrides& overrides);
+ColorOverrides overrides(AppTheme theme);
+void setOverrides(AppTheme theme, const ColorOverrides& overrides);
+
+struct AccentPreset {
+    QString name;
+    QColor accent;
+};
+const QList<AccentPreset>& accentPresets(); // first entry = Electric Violet
+
+// WCAG contrast ratio (1..21).
+double contrastRatio(const QColor& a, const QColor& b);
+
+struct ContrastFix {
+    QString key;     // editable color to change
+    QString label;
+    QString reason;  // e.g. "Text on window background"
+    QColor from;
+    QColor to;
+    double before;
+    double after;
+};
+// Never mutates anything: returns the adjustments that would bring the
+// palette's key foreground/background pairs up to readable contrast, for
+// the caller to explain and preview.
+QList<ContrastFix> proposeContrastFixes(const ThemePalette& palette);
 
 // "Dark Aurora" etc - for the Settings Theme combo box, in the exact
 // order that combo lists them (matches AppTheme's own ordinal order).

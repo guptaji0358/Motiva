@@ -74,7 +74,8 @@ private:
     void onMuteToggled(bool checked);
     void onLoopToggled(bool checked);
     void onStartWithWindowsToggled(bool checked);
-    void onShowVideoOnBatteryToggled(bool checked);
+    void onPlayVideosOnBatteryToggled(bool checked);
+    void onPlayImagesOnBatteryToggled(bool checked);
     void onThemeChanged(int index);
     void onShowInWindowsSearchToggled(bool checked);
     void onExplorerIntegrationToggled(bool checked);
@@ -131,7 +132,8 @@ private:
     // Notifications: in-app, desktop, success, error, warning, background, playback.
     QCheckBox* m_notifyChecks[7] = {};
     QCheckBox* m_startWithWindowsCheck = nullptr;
-    QCheckBox* m_showVideoOnBatteryCheck = nullptr;
+    QCheckBox* m_playImagesOnBatteryCheck = nullptr;
+    QCheckBox* m_playVideosOnBatteryCheck = nullptr;
     QCheckBox* m_showInWindowsSearchCheck = nullptr;
     QCheckBox* m_explorerIntegrationCheck = nullptr;
     // Single "Theme" combo (Dark Aurora / Light Aurora / Dark Onyx /

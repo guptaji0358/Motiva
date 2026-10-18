@@ -97,6 +97,7 @@ int main(int argc, char* argv[]) {
         SettingsManager startupSettings;
         const Theme::AppTheme theme = startupSettings.theme();
         startupSettings.setTheme(theme); // persists the one-time legacy migration, if any
+        startupSettings.loadThemeOverrides();
         Theme::applyTheme(theme);
     }
     // One Motiva-styled tooltip for every existing toolTip (see MotivaToolTip.h).

@@ -3,6 +3,7 @@
 #include "SettingsManager.h"
 #include "DialogSizing.h"
 #include "Theme.h"
+#include "ThemeEditorDialog.h"
 #include "ThemeTransitionOverlay.h"
 #include "CleanupManager.h"
 #include "CleanupWindow.h"
@@ -193,12 +194,19 @@ void SettingsDialog::buildUi() {
     connect(m_startWithWindowsCheck, &QCheckBox::toggled, this, &SettingsDialog::onStartWithWindowsToggled);
     rightCol->addWidget(m_startWithWindowsCheck);
 
-    m_showVideoOnBatteryCheck = new QCheckBox(tr("Show video on battery"), this);
-    m_showVideoOnBatteryCheck->setToolTip(
-        tr("Keep the video wallpaper visible when running on battery power. Image wallpapers are never shown on "
-           "battery; they come back when AC power returns."));
-    connect(m_showVideoOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onShowVideoOnBatteryToggled);
-    rightCol->addWidget(m_showVideoOnBatteryCheck);
+    m_playImagesOnBatteryCheck = new QCheckBox(tr("Play Images on Battery"), this);
+    m_playImagesOnBatteryCheck->setToolTip(
+        tr("Keep image wallpapers visible (and let image playlists advance) while running on battery power. "
+           "When off, they are hidden on battery and come back when AC power returns."));
+    connect(m_playImagesOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onPlayImagesOnBatteryToggled);
+    rightCol->addWidget(m_playImagesOnBatteryCheck);
+
+    m_playVideosOnBatteryCheck = new QCheckBox(tr("Play Videos on Battery"), this);
+    m_playVideosOnBatteryCheck->setToolTip(
+        tr("Keep video wallpapers playing while running on battery power. When off, they are paused and hidden "
+           "on battery and come back when AC power returns."));
+    connect(m_playVideosOnBatteryCheck, &QCheckBox::toggled, this, &SettingsDialog::onPlayVideosOnBatteryToggled);
+    rightCol->addWidget(m_playVideosOnBatteryCheck);
 
     rightCol = makePage(1, tr("Appearance"));
     auto* themeForm = new QFormLayout();
@@ -221,6 +229,16 @@ void SettingsDialog::buildUi() {
             this, &SettingsDialog::onThemeChanged);
     themeForm->addRow(tr("Theme:"), m_themeCombo);
     rightCol->addLayout(themeForm);
+
+    auto* customizeThemeButton = new QPushButton(tr("Customize Theme..."), this);
+    customizeThemeButton->setToolTip(
+        tr("Edit the colors of the current theme, pick an accent preset, or check text contrast. "
+           "Each theme keeps its own customization, and the original palette can always be restored."));
+    connect(customizeThemeButton, &QPushButton::clicked, this, [this] {
+        ThemeEditorDialog editor(m_settings, this);
+        editor.exec();
+    });
+    rightCol->addWidget(customizeThemeButton, 0, Qt::AlignLeft);
 
     rightCol = makePage(4, tr("Integration"));
     auto* integrationSection = new QLabel(tr("Windows Integration"));
@@ -430,8 +448,10 @@ void SettingsDialog::restoreFromSettings() {
     m_muteCheck->setChecked(m_settings->muted());
     m_loopCheck->setChecked(m_settings->loop());
     m_startWithWindowsCheck->setChecked(m_settings->startWithWindows());
-    m_showVideoOnBatteryCheck->setChecked(m_settings->showVideoOnBattery());
-    m_manager->setShowVideoOnBattery(m_settings->showVideoOnBattery());
+    m_playImagesOnBatteryCheck->setChecked(m_settings->playImagesOnBattery());
+    m_manager->setPlayImagesOnBattery(m_settings->playImagesOnBattery());
+    m_playVideosOnBatteryCheck->setChecked(m_settings->playVideosOnBattery());
+    m_manager->setPlayVideosOnBattery(m_settings->playVideosOnBattery());
     m_showInWindowsSearchCheck->setChecked(m_settings->showInWindowsSearch());
     m_explorerIntegrationCheck->setChecked(m_settings->explorerIntegrationEnabled());
     const bool notifyValues[7] = {m_settings->notifyInApp(),      m_settings->notifyDesktop(),
@@ -532,13 +552,17 @@ void SettingsDialog::onStartWithWindowsToggled(bool checked) {
     m_settings->setStartWithWindows(checked);
 }
 
-void SettingsDialog::onShowVideoOnBatteryToggled(bool checked) {
-    m_settings->setShowVideoOnBattery(checked);
-    // Takes effect immediately (matches Set as Wallpaper/Remove
-    // Wallpaper's own convention) - WallpaperManager re-evaluates and
-    // hides/restores the video right away if the current power state
+void SettingsDialog::onPlayVideosOnBatteryToggled(bool checked) {
+    m_settings->setPlayVideosOnBattery(checked);
+    // Takes effect immediately - WallpaperManager re-evaluates and
+    // hides/restores the media right away if the current power state
     // means this toggle actually changes anything.
-    m_manager->setShowVideoOnBattery(checked);
+    m_manager->setPlayVideosOnBattery(checked);
+}
+
+void SettingsDialog::onPlayImagesOnBatteryToggled(bool checked) {
+    m_settings->setPlayImagesOnBattery(checked);
+    m_manager->setPlayImagesOnBattery(checked);
 }
 
 void SettingsDialog::onShowInWindowsSearchToggled(bool checked) {
@@ -603,10 +627,9 @@ void SettingsDialog::openCleanup() {
 
 void SettingsDialog::onPreferencesChangedExternally() {
     const Theme::AppTheme theme = m_settings->theme();
-    if (theme != Theme::currentTheme()) {
-        Theme::applyTheme(theme);
-        setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg").arg(Theme::iconVariant(theme))));
-    }
+    m_settings->loadThemeOverrides();
+    Theme::applyTheme(theme);
+    setWindowIcon(QIcon(QStringLiteral(":/settings-icon/%1/settings.svg").arg(Theme::iconVariant(theme))));
     restoreFromSettings();
 }
 

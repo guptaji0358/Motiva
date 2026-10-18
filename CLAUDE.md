@@ -2,6 +2,27 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-18, GPU-drawn main window + theme editor)
+
+**Main window is now GL-drawn** (`GlUi.{h,cpp}`): one `QOpenGLWidget` (`GlCanvas`)
+paints an animated GLSL background (falls back to a QPainter gradient if the
+shader fails) and light retained-mode items (`GlPanel/GlLabel/GlButton/GlPreview`)
+with QPainter on the same GL context; colors come from `Theme::themePalette`
+(so Theme-editor customizations apply; Onyx keeps sharp corners via
+`Style::radius`). `MainWindow` is borderless (`FramelessWindowHint`);
+`nativeEvent` answers WM_NCHITTEST (title strip = caption unless over a button,
+7px resize edges), `showEvent` asks DWM for rounded corners. `MainWindow::buildUi`
+/ `layoutGl` replaced the widget layout; backend logic unchanged. Settings and
+Playlist dialogs are still Qt Widgets. The preview frame is CPU-scaled to panel
+size before upload (never upload an 8K frame). Animation timer stops when the
+window is hidden/minimized. NOT done: screen-reader accessibility for GL items,
+reduced-motion setting, converting the remaining dialogs.
+**Deployment**: build now needs Qt6OpenGL.dll + Qt6OpenGLWidgets.dll (copied
+to `deployment/resources/Qt/`; check the installer/MSIX file list too).
+**Theme editor**: `ThemeCustomization.cpp` (sparse per-theme overrides,
+accent presets, WCAG contrast fixes), `ThemeEditorDialog`, persisted as JSON in
+`themeEditor/<Theme>/colors` via `SettingsManager::themeOverrides`.
+
 ## Current status (2026-10-11b, mixed playlists + nested categories)
 
 **Mixed playlists**: `PlaylistType::Mixed` ('mixed' was already allowed by the

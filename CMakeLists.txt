@@ -17,7 +17,7 @@ endif()
 
 # Sql: the playlist library (.mtv) uses Qt SQL's bundled SQLite driver
 # (qsqlite) - no separate SQLite dependency; windeployqt ships the plugin.
-find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia MultimediaWidgets Concurrent Svg Sql)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Multimedia MultimediaWidgets Concurrent Svg Sql)
 
 qt_standard_project_setup()
 
@@ -28,6 +28,11 @@ qt_standard_project_setup()
 # show up in IDE project trees; they compile via #include, not directly.
 set(IMPLEMENTATION_SOURCES
     scripts/src/Theme.cpp
+    scripts/src/ThemeCustomization.cpp
+    scripts/src/GlUi.cpp
+    scripts/include/GlUi.h
+    scripts/src/ThemeEditorDialog.cpp
+    scripts/include/ThemeEditorDialog.h
     scripts/include/Theme.h
     scripts/src/CategoryTreePicker.cpp
     scripts/include/CategoryTreePicker.h
@@ -103,6 +108,9 @@ qt_add_executable(Motiva WIN32 ${ENTRY_POINT_SOURCES} ${IMPLEMENTATION_SOURCES} 
 
 target_link_libraries(Motiva PRIVATE
     Qt6::Widgets
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+    dwmapi
     Qt6::Multimedia
     Qt6::MultimediaWidgets
     Qt6::Concurrent

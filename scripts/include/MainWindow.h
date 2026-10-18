@@ -20,7 +20,11 @@
 #include "IconButton.h"
 
 class QVideoWidget;
-class PreviewAspectHost;
+class GlCanvas;
+class GlButton;
+class GlLabel;
+class GlPanel;
+class GlPreview;
 class SettingsDialog;
 class PlaylistLibrary;
 class PlaylistRotation;
@@ -80,6 +84,11 @@ protected:
     // See Theme::iconVariant() and the icon-path functions in MainWindow.cpp.
     void changeEvent(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    // Borderless window: Windows still handles dragging, edge/corner
+    // resizing, snapping and double-click maximize through hit-testing
+    // (WM_NCHITTEST) against the GL canvas' title strip.
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+    void showEvent(QShowEvent* event) override;
     // Drag & drop entry points - accepts a local video file or a web
     // video URL dropped anywhere on the window, with the video preview
     // area as the visual target (see dragEnterEvent's hint text). Feeds
@@ -156,6 +165,8 @@ private slots:
 
 private:
     void buildUi();
+    void layoutGl(const QSizeF& size);
+    void updateWindowButtons();
     void buildTray();
     void restoreSettingsToUi();
     void updatePlayPauseLabel();
@@ -287,22 +298,28 @@ private:
     bool m_batterySuspended = false;
     bool m_dragHintActive = false;
     bool m_dragInvalidActive = false;
-    QStackedLayout* m_previewStack = nullptr;
-    QLabel* m_previewLabel = nullptr;
-    PreviewAspectHost* m_previewHost = nullptr; // sizes the preview panel to the media's aspect ratio
-    DropZoneWidget* m_dropZone = nullptr;
-    QLabel* m_fileNameLabel = nullptr;
-    QLabel* m_fileDetailsLabel = nullptr;
+    GlCanvas* m_canvas = nullptr;
+    GlPanel* m_titlePanel = nullptr;
+    GlPanel* m_dockPanel = nullptr;
+    GlLabel* m_logo = nullptr;
+    GlLabel* m_titleLabel = nullptr;
+    GlLabel* m_taglineLabel = nullptr;
+    GlPreview* m_preview = nullptr;
+    GlLabel* m_fileNameLabel = nullptr;
+    GlLabel* m_fileDetailsLabel = nullptr;
     QString m_lastVideoDetailsText;
-    QLabel* m_statusDot = nullptr;
-    QLabel* m_statusLabel = nullptr;
-    QToolButton* m_settingsButton = nullptr;
-    QToolButton* m_playlistButton = nullptr;
-    IconButton* m_openVideoButton = nullptr;
-    IconButton* m_removeVideoButton = nullptr;
-    IconButton* m_pasteLinkButton = nullptr;
-    IconButton* m_playPauseButton = nullptr;
-    IconButton* m_primaryButton = nullptr;
+    GlLabel* m_statusDot = nullptr;
+    GlLabel* m_statusLabel = nullptr;
+    GlButton* m_minButton = nullptr;
+    GlButton* m_maxButton = nullptr;
+    GlButton* m_closeButton = nullptr;
+    GlButton* m_settingsButton = nullptr;
+    GlButton* m_playlistButton = nullptr;
+    GlButton* m_openVideoButton = nullptr;
+    GlButton* m_removeVideoButton = nullptr;
+    GlButton* m_pasteLinkButton = nullptr;
+    GlButton* m_playPauseButton = nullptr;
+    GlButton* m_primaryButton = nullptr;
 
     QSystemTrayIcon* m_tray = nullptr;
     QAction* m_trayPlayAction = nullptr;

@@ -3,6 +3,7 @@
 #include <QAbstractNativeEventFilter>
 #include <QObject>
 #include <QTimer>
+#include <functional>
 #include <windows.h>
 
 class PlaylistLibrary;
@@ -47,6 +48,10 @@ public:
     // Call exactly once per process, at startup.
     bool consumeNewWindowsSession();
 
+    // While the predicate returns true (current image hidden by the battery
+    // policy) fire() does nothing, so images stop advancing.
+    void setSuspendedPredicate(std::function<bool()> predicate) { m_isSuspended = std::move(predicate); }
+
     // Advances the active playlist for `trigger` if it is an image playlist
     // with that trigger enabled. Returns whether the image changed.
     bool fire(Trigger trigger);
@@ -67,4 +72,5 @@ private:
     QTimer m_intervalTimer;
     HWND m_sessionHwnd = nullptr;
     bool m_lockObserved = false;
+    std::function<bool()> m_isSuspended;
 };

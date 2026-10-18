@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "GlUi.h"
 #include "SettingsDialog.h"
 #include "ThemeTransitionOverlay.h"
 #include "StartupDiagnostics.h"
@@ -47,6 +48,9 @@
 #include <QProcess>
 #include <QInputDialog>
 #include <QtConcurrent/QtConcurrentRun>
+#include <windows.h>
+#include <windowsx.h>
+#include <dwmapi.h>
 
 namespace {
 // Embedded via resources/app.qrc - loading via the Qt resource path keeps
@@ -469,11 +473,14 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     (void)winId();
     // Registers for the AC/battery power-source notification on this
     // now-guaranteed-to-exist HWND - see WallpaperManager::
-    // registerPowerNotifications and the "Show video on battery" setting.
+    // registerPowerNotifications and the "Play Images/Videos on Battery" settings.
     // Placed after the winId() force-create above for the same reason
     // that call exists: the native HWND must be real before anything can
     // register against it.
     m_manager->registerPowerNotifications(reinterpret_cast<HWND>(winId()));
+    // An image the battery policy is hiding must not advance (the playlist
+    // would otherwise cycle through images nobody can see).
+    m_rotation->setSuspendedPredicate([this] { return m_manager->isBatterySuspended(); });
     // Lock -> Unlock playlist trigger, on the same stable HWND.
     m_rotation->registerSessionNotifications(reinterpret_cast<HWND>(winId()));
 
@@ -629,212 +636,110 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::buildUi() {
-    auto* central = new QWidget(this);
-    auto* root = new QVBoxLayout(central);
-    root->setContentsMargins(20, 16, 20, 20);
-    root->setSpacing(12);
+    // Borderless: Motiva draws its own frame (GL canvas title strip with
+    // custom window controls). Dragging/resizing come from nativeEvent().
+    setWindowFlag(Qt::FramelessWindowHint, true);
+    resize(860, 680); // changing flags resets the size set in the constructor
 
-    // --- Header: app name + settings entry point ---
-    auto* header = new QHBoxLayout();
-    header->setSpacing(8);
-    auto* titleLabel = new QLabel(tr("Motiva"), central);
-    titleLabel->setObjectName(QStringLiteral("appTitle"));
-    QFont titleFont = titleLabel->font();
-    titleFont.setBold(true);
-    titleFont.setPointSize(titleFont.pointSize() + 4);
-    titleLabel->setFont(titleFont);
-    header->addWidget(titleLabel);
-    header->addStretch();
+    m_canvas = new GlCanvas(this);
+    setCentralWidget(m_canvas);
+    m_canvas->setAccessibleName(tr("Motiva"));
+    m_canvas->setLayoutCallback([this](const QSizeF& s) { layoutGl(s); });
 
-    m_settingsButton = new QToolButton(central);
-    m_settingsButton->setObjectName(QStringLiteral("settingsButton"));
-    m_settingsButton->setIcon(QIcon(settingsIconPath()));
-    m_settingsButton->setText(tr("Settings"));
-    m_settingsButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_settingsButton->setToolTip(tr("Open settings"));
-    m_settingsButton->setAutoRaise(true);
-    connect(m_settingsButton, &QToolButton::clicked, this, &MainWindow::openSettings);
+    // Items paint in creation order: strip, preview, dock, then controls.
+    m_titlePanel = new GlPanel(m_canvas);
+    m_titlePanel->setBlock(GlPanel::Block::Accent);
+    m_titlePanel->setRadiusPx(16);
+    m_logo = new GlLabel(m_canvas);
+    m_logo->setPixmap(QIcon(kAppIconResourcePath).pixmap(QSize(24, 24), devicePixelRatioF()));
+    m_titleLabel = new GlLabel(m_canvas);
+    m_titleLabel->setText(tr("Motiva"));
+    m_titleLabel->setPointSize(14);
+    m_titleLabel->setBold(true);
+    m_taglineLabel = new GlLabel(m_canvas);
+    m_taglineLabel->setText(tr("Live wallpapers"));
+    m_taglineLabel->setPointSize(7.5);
+    m_taglineLabel->setBold(true);
+    m_taglineLabel->setCaps(true);
+    m_taglineLabel->setTone(GlLabel::Tone::Dim);
 
-    // Same flat header-button styling as Settings (Theme's
-    // QToolButton#settingsButton rule), placed beside it.
-    m_playlistButton = new QToolButton(central);
-    m_playlistButton->setObjectName(QStringLiteral("settingsButton"));
+    m_playlistButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
     m_playlistButton->setIcon(QIcon(playlistIconPath()));
     m_playlistButton->setText(tr("Playlists"));
-    m_playlistButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_playlistButton->setToolTip(tr("Image and video playlists that change your wallpaper automatically"));
-    m_playlistButton->setAutoRaise(true);
-    connect(m_playlistButton, &QToolButton::clicked, this, &MainWindow::openPlaylist);
-    header->addWidget(m_playlistButton);
-    header->addWidget(m_settingsButton);
-    root->addLayout(header);
+    connect(m_playlistButton, &GlButton::clicked, this, &MainWindow::openPlaylist);
 
-    // A flat 1px rule (styled via Theme's QFrame#headerRule rule) instead
-    // of the platform's own 3D sunken groove - a single hairline separator
-    // reads as modern/native on Windows 11, a chiseled groove does not.
-    auto* headerRule = new QFrame(central);
-    headerRule->setObjectName(QStringLiteral("headerRule"));
-    headerRule->setFrameShape(QFrame::HLine);
-    headerRule->setFrameShadow(QFrame::Plain);
-    root->addWidget(headerRule);
+    m_settingsButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
+    m_settingsButton->setIcon(QIcon(settingsIconPath()));
+    m_settingsButton->setText(tr("Settings"));
+    m_settingsButton->setToolTip(tr("Open settings"));
+    connect(m_settingsButton, &GlButton::clicked, this, &MainWindow::openSettings);
 
-    // --- Video preview: the visual focus of the window ---
-    // A QStackedLayout switches between the two pages below, driven by
-    // refreshDropZoneVisual(): the animated drop-zone page whenever no
-    // video is loaded (or a drag is in progress, even over an already-
-    // loaded video), and the plain pixmap page once a video is actually
-    // playing - the animation never overlaps/covers real video content.
-    // previewContainer (the dark rounded panel) lives inside m_previewHost,
-    // which takes all the space the layout gives the preview and centres the
-    // panel at the media's aspect ratio (full area while no media is shown),
-    // so a wide window shows a panel that hugs the media, not empty side bands.
-    m_previewHost = new PreviewAspectHost(central);
-    m_previewHost->setMinimumHeight(220);
-    m_previewHost->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    auto* previewContainer = new QWidget(m_previewHost);
-    m_previewHost->setPanel(previewContainer);
-    previewContainer->setStyleSheet(kPreviewSurfaceStyle);
-    m_previewStack = new QStackedLayout(previewContainer);
-    m_previewStack->setContentsMargins(0, 0, 0, 0);
+    m_minButton = new GlButton(m_canvas, GlButton::Kind::Minimize);
+    m_minButton->setToolTip(tr("Minimize"));
+    connect(m_minButton, &GlButton::clicked, this, &QWidget::showMinimized);
+    m_maxButton = new GlButton(m_canvas, GlButton::Kind::Maximize);
+    m_maxButton->setToolTip(tr("Maximize"));
+    connect(m_maxButton, &GlButton::clicked, this, [this] {
+        if (isMaximized()) {
+            showNormal();
+        } else {
+            showMaximized();
+        }
+    });
+    m_closeButton = new GlButton(m_canvas, GlButton::Kind::Close);
+    m_closeButton->setToolTip(tr("Close to tray (playback keeps running)"));
+    connect(m_closeButton, &GlButton::clicked, this, &QWidget::close);
 
-    m_previewLabel = new QLabel(previewContainer);
-    m_previewLabel->setAlignment(Qt::AlignCenter);
-    // The pixmap is always pre-scaled to the label's current size (see
-    // renderPreviewFrame), so the label must not ask the layout for the
-    // pixmap's size - otherwise the window could never shrink below the
-    // last pixmap it showed. Resize/Show re-render it at the new size,
-    // which a still image (one frame, no later frame to self-heal) needs.
-    m_previewLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
-    m_previewLabel->installEventFilter(this);
-    m_previewStack->addWidget(m_previewLabel); // index kVideoPageIndex
-
-    auto* dropZoneWrapper = new QWidget(previewContainer);
-    auto* dropZoneLayout = new QVBoxLayout(dropZoneWrapper);
-    dropZoneLayout->setContentsMargins(24, 20, 24, 16);
-    dropZoneLayout->setSpacing(4);
-    m_dropZone = new DropZoneWidget(dropZoneWrapper);
-    dropZoneLayout->addWidget(m_dropZone, /*stretch=*/1);
-    auto* dropTitleLabel = new QLabel(tr("Drag & Drop Media"), dropZoneWrapper);
-    dropTitleLabel->setAlignment(Qt::AlignCenter);
-    QFont dropTitleFont = dropTitleLabel->font();
-    dropTitleFont.setBold(true);
-    dropTitleLabel->setFont(dropTitleFont);
-    dropTitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewTextStrong));
-    dropZoneLayout->addWidget(dropTitleLabel);
-    auto* dropSubtitleLabel = new QLabel(tr("Local video, GIF or image files"), dropZoneWrapper);
-    dropSubtitleLabel->setAlignment(Qt::AlignCenter);
-    dropSubtitleLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewText));
-    dropZoneLayout->addWidget(dropSubtitleLabel);
-
-    // Three clearly separate input methods, not one overloaded drop zone
-    // (see the "Fix Video Input UX" task): drag & drop above is scoped to
-    // local files (the subtitle says so explicitly); a web video goes
-    // through this dedicated button/dialog instead of relying on a
-    // browser's drag payload, which often carries a thumbnail image
-    // rather than the actual video - see extractDroppedVideoSource()'s
-    // comment on why that thumbnail is never mistaken for a video either
-    // way. Open Video (below the preview) remains the third, unchanged.
-    auto* orLabel = new QLabel(QStringLiteral("— %1 —").arg(tr("OR")), dropZoneWrapper);
-    orLabel->setAlignment(Qt::AlignCenter);
-    orLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::kPreviewTextFaint));
-    dropZoneLayout->addWidget(orLabel);
-
-    // On the fixed-dark preview surface (see kPreviewSurfaceStyle above),
-    // so this button gets its own light-on-dark styling rather than the
-    // app-wide light-surface QPushButton rule, which would be illegible
-    // here regardless of the OS theme.
-    m_pasteLinkButton = new IconButton(QIcon(kLinkIconResourcePath), tr("Paste Video URL"), dropZoneWrapper);
-    m_pasteLinkButton->setObjectName(QStringLiteral("pasteLinkButton"));
-    m_pasteLinkButton->setStateIcon(
-        QIcon(kLinkIconResourcePath), QIcon(kLinkIconHoverPath), QIcon(kLinkIconPressedPath));
-    m_pasteLinkButton->setStyleSheet(QStringLiteral(
-        "QPushButton#pasteLinkButton {"
-        "  background: rgba(255,255,255,0.06); color: %1;"
-        "  border: 1px solid rgba(255,255,255,0.14); border-radius: %2px; padding: 6px 14px; }"
-        "QPushButton#pasteLinkButton:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.22); }"
-        "QPushButton#pasteLinkButton:pressed { background: rgba(255,255,255,0.04); }")
-        .arg(Theme::kPreviewTextStrong).arg(Theme::kRadiusSmall));
+    // --- Media preview / animated drop zone ---
+    m_preview = new GlPreview(m_canvas);
+    // Three clearly separate input methods: drag & drop (local files), this
+    // button for a direct web video URL, and Open Media in the dock.
+    m_pasteLinkButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
+    m_pasteLinkButton->setIcon(QIcon(kLinkIconResourcePath));
+    m_pasteLinkButton->setText(tr("Paste Video URL"));
     m_pasteLinkButton->setToolTip(tr("Load a video from a direct URL (or press Ctrl+V anywhere in this window)"));
-    connect(m_pasteLinkButton, &QPushButton::clicked, this, &MainWindow::onPasteVideoLink);
-    dropZoneLayout->addWidget(m_pasteLinkButton, 0, Qt::AlignHCenter);
-    m_previewStack->addWidget(dropZoneWrapper); // index kDropZonePageIndex
+    connect(m_pasteLinkButton, &GlButton::clicked, this, &MainWindow::onPasteVideoLink);
 
-    root->addWidget(m_previewHost, /*stretch=*/1);
-
-    // --- Video info + secondary actions ---
-    auto* infoRow = new QHBoxLayout();
-    infoRow->setSpacing(8);
-    auto* infoTextLayout = new QVBoxLayout();
-    infoTextLayout->setSpacing(2);
-    m_fileNameLabel = new QLabel(tr("No file selected"), central);
-    QFont fileFont = m_fileNameLabel->font();
-    fileFont.setBold(true);
-    m_fileNameLabel->setFont(fileFont);
-    infoTextLayout->addWidget(m_fileNameLabel);
-    m_fileDetailsLabel = new QLabel(central);
-    m_fileDetailsLabel->setObjectName(QStringLiteral("fileDetailsLabel"));
+    // --- Dock: media info, secondary actions, status, the one primary action ---
+    m_dockPanel = new GlPanel(m_canvas);
+    m_dockPanel->setBlock(GlPanel::Block::Accent2);
+    m_fileNameLabel = new GlLabel(m_canvas);
+    m_fileNameLabel->setText(tr("No file selected"));
+    m_fileNameLabel->setPointSize(11);
+    m_fileNameLabel->setBold(true);
+    m_fileDetailsLabel = new GlLabel(m_canvas);
+    m_fileDetailsLabel->setPointSize(9);
+    m_fileDetailsLabel->setTone(GlLabel::Tone::Dim);
     m_fileDetailsLabel->setVisible(false);
-    infoTextLayout->addWidget(m_fileDetailsLabel);
-    infoRow->addLayout(infoTextLayout, /*stretch=*/1);
 
-    m_playPauseButton = new IconButton(QIcon(kPlayIconResourcePath), tr("Play"), central);
-    m_playPauseButton->setStateIcon(QIcon(kPlayIconResourcePath), QIcon(kPlayIconHoverPath));
-    m_playPauseButton->setToolTip(tr("Play or pause the preview"));
-    connect(m_playPauseButton, &QPushButton::clicked, this, &MainWindow::onPlayPause);
-    infoRow->addWidget(m_playPauseButton);
-
-    m_openVideoButton = new IconButton(QIcon(kOpenVideoIconResourcePath), tr("Open Media"), central);
-    m_openVideoButton->setToolTip(tr("Open a video, GIF or image file"));
-    m_openVideoButton->setStateIcon(
-        QIcon(kOpenVideoIconResourcePath), QIcon(kOpenVideoIconHoverPath), QIcon(kOpenVideoIconPressedPath));
-    connect(m_openVideoButton, &QPushButton::clicked, this, &MainWindow::onChooseVideo);
-    infoRow->addWidget(m_openVideoButton);
-
-    // "Remove Current Video" - unloads the loaded video from Motiva's own
-    // player/preview (NOT the desktop wallpaper - see onRemoveVideo()'s
-    // comment). Placed here next to Open Video/Paste URL rather than down
-    // with the primary Set/Remove Wallpaper button, and given its own
-    // objectName so it never inherits primaryButton's accent styling -
-    // keeps the two action groups visually distinct.
-    m_removeVideoButton = new IconButton(QIcon(kRemoveVideoIconResourcePath), tr("Remove Media"), central);
-    m_removeVideoButton->setObjectName(QStringLiteral("removeVideoButton"));
-    m_removeVideoButton->setStateIcon(
-        QIcon(kRemoveVideoIconResourcePath), QIcon(kRemoveVideoIconHoverPath),
-        QIcon(kRemoveVideoIconPressedPath), QIcon(kRemoveVideoIconDisabledPath));
+    m_removeVideoButton = new GlButton(m_canvas, GlButton::Kind::Icon);
+    m_removeVideoButton->setIcon(QIcon(kRemoveVideoIconResourcePath));
     m_removeVideoButton->setToolTip(tr("Unload the current media from Motiva's player/preview"));
     m_removeVideoButton->setEnabled(m_hasCurrentVideo);
-    connect(m_removeVideoButton, &QPushButton::clicked, this, &MainWindow::onRemoveVideo);
-    infoRow->addWidget(m_removeVideoButton);
+    connect(m_removeVideoButton, &GlButton::clicked, this, &MainWindow::onRemoveVideo);
 
-    root->addLayout(infoRow);
+    m_openVideoButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
+    m_openVideoButton->setIcon(QIcon(kOpenVideoIconResourcePath));
+    m_openVideoButton->setText(tr("Open Media"));
+    m_openVideoButton->setToolTip(tr("Open a video, GIF or image file"));
+    connect(m_openVideoButton, &GlButton::clicked, this, &MainWindow::onChooseVideo);
 
-    // --- Status ---
+    m_playPauseButton = new GlButton(m_canvas, GlButton::Kind::Icon);
+    m_playPauseButton->setIcon(QIcon(kPlayIconResourcePath));
+    m_playPauseButton->setToolTip(tr("Play or pause the preview"));
+    connect(m_playPauseButton, &GlButton::clicked, this, &MainWindow::onPlayPause);
+
     // The status dot is a real SVG mark (Assets/status/status-dot.svg),
-    // recolored per state in updateStatusUi(), not a "●" character.
-    auto* statusRow = new QHBoxLayout();
-    statusRow->setSpacing(8);
-    m_statusDot = new QLabel(central);
-    m_statusDot->setFixedSize(kStatusDotSize, kStatusDotSize);
-    m_statusDot->setAccessibleName(QString()); // decorative; the text label carries the state
-    statusRow->addWidget(m_statusDot, 0, Qt::AlignVCenter);
-    m_statusLabel = new QLabel(central);
-    statusRow->addWidget(m_statusLabel, 1);
-    root->addLayout(statusRow);
+    // recolored per state in updateStatusUi().
+    m_statusDot = new GlLabel(m_canvas);
+    m_statusLabel = new GlLabel(m_canvas);
+    m_statusLabel->setPointSize(10);
+    m_statusLabel->setBold(true);
 
-    // --- Primary action: the one obvious next step ---
-    // objectName "primaryButton" is what gives this its distinct accent
-    // styling (Theme::appStyleSheet's QPushButton#primaryButton rules) -
-    // the one clearly primary action, every other button on this window
-    // stays the default secondary button style.
-    m_primaryButton = new IconButton(central);
+    m_primaryButton = new GlButton(m_canvas, GlButton::Kind::Primary);
     m_primaryButton->setText(tr("Set as Wallpaper"));
-    m_primaryButton->setObjectName(QStringLiteral("primaryButton"));
-    m_primaryButton->setMinimumHeight(42);
-    m_primaryButton->setDefault(true);
-    connect(m_primaryButton, &QPushButton::clicked, this, &MainWindow::onPrimaryButtonClicked);
-    root->addWidget(m_primaryButton);
-
-    setCentralWidget(central);
+    connect(m_primaryButton, &GlButton::clicked, this, &MainWindow::onPrimaryButtonClicked);
 
     m_playlistDialog = new PlaylistDialog(m_library, this);
     m_playlistDialog->setBackupManager(m_backup);
@@ -860,6 +765,119 @@ void MainWindow::buildUi() {
     connect(m_settingsDialog, &SettingsDialog::themeTransitionFinished, this, [this] {
         m_themeTransitionOverlay->finishTransition();
     });
+    updateWindowButtons();
+}
+
+void MainWindow::layoutGl(const QSizeF& size) {
+    if (!m_canvas || !m_titlePanel || !m_primaryButton) {
+        return;
+    }
+    const qreal W = size.width(), H = size.height();
+    const qreal m = 12;       // outer margin
+    const qreal titleH = 46;
+    const qreal dockH = 172;
+
+    // Title strip (identity bar).
+    const QRectF strip(m, m, W - 2 * m, titleH);
+    m_titlePanel->setRect(strip);
+    m_logo->setRect(QRectF(strip.left() + 14, strip.top() + 11, 24, 24));
+    m_titleLabel->setRect(QRectF(strip.left() + 48, strip.top() + 5, 90, 24));
+    m_taglineLabel->setRect(QRectF(strip.left() + 48, strip.top() + 27, 130, 14));
+    const qreal bw = 36, bh = 30, by = strip.top() + (titleH - bh) / 2;
+    qreal x = strip.right() - 10 - bw;
+    m_closeButton->setRect(QRectF(x, by, bw, bh));
+    x -= bw + 2;
+    m_maxButton->setRect(QRectF(x, by, bw, bh));
+    x -= bw + 2;
+    m_minButton->setRect(QRectF(x, by, bw, bh));
+    x -= 14 + 112;
+    m_settingsButton->setRect(QRectF(x, strip.top() + 7, 112, 32));
+    x -= 8 + 118;
+    m_playlistButton->setRect(QRectF(x, strip.top() + 7, 118, 32));
+    const bool wide = strip.width() > 520;
+    m_playlistButton->setVisible(wide);
+    m_settingsButton->setVisible(wide);
+
+    // Dock.
+    const QRectF dock(m, H - m - dockH, W - 2 * m, dockH);
+    m_dockPanel->setRect(dock);
+
+    // Preview fills what is left.
+    const QRectF prev(m, strip.bottom() + 10, W - 2 * m, dock.top() - 10 - (strip.bottom() + 10));
+    m_preview->setRect(prev);
+    m_pasteLinkButton->setRect(m_preview->dropActionRect());
+    m_pasteLinkButton->setVisible(m_preview->showsDropZone());
+
+    // Dock contents.
+    const qreal pad = 22;
+    const qreal rowTop = dock.top() + 18;
+    qreal rx = dock.right() - pad;
+    m_playPauseButton->setRect(QRectF(rx - 40, rowTop + 3, 40, 40));
+    rx -= 40 + 8;
+    m_openVideoButton->setRect(QRectF(rx - 132, rowTop + 6, 132, 34));
+    rx -= 132 + 8;
+    m_removeVideoButton->setRect(QRectF(rx - 40, rowTop + 3, 40, 40));
+    rx -= 40 + 14;
+    const qreal textW = std::max<qreal>(40, rx - (dock.left() + pad));
+    m_fileNameLabel->setRect(QRectF(dock.left() + pad, rowTop, textW, 24));
+    m_fileDetailsLabel->setRect(QRectF(dock.left() + pad, rowTop + 24, textW, 20));
+    m_statusDot->setRect(QRectF(dock.left() + pad, rowTop + 56, 14, 14));
+    m_statusLabel->setRect(QRectF(dock.left() + pad + 22, rowTop + 52, dock.width() - 2 * pad - 22, 22));
+    m_primaryButton->setRect(QRectF(dock.left() + pad, dock.bottom() - pad - 52, dock.width() - 2 * pad, 52));
+
+    // The media panel hugs the media; re-fit the frame to the new size.
+    QTimer::singleShot(0, this, [this] { renderPreviewFrame(); });
+}
+
+void MainWindow::updateWindowButtons() {
+    if (!m_maxButton) {
+        return;
+    }
+    m_maxButton->setKind(isMaximized() ? GlButton::Kind::Restore : GlButton::Kind::Maximize);
+    m_maxButton->setToolTip(isMaximized() ? tr("Restore") : tr("Maximize"));
+}
+
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
+    if (eventType == "windows_generic_MSG") {
+        const MSG* msg = static_cast<const MSG*>(message);
+        if (msg->message == WM_NCHITTEST && m_canvas) {
+            RECT wr;
+            GetWindowRect(reinterpret_cast<HWND>(winId()), &wr);
+            const LONG px = GET_X_LPARAM(msg->lParam) - wr.left;
+            const LONG py = GET_Y_LPARAM(msg->lParam) - wr.top;
+            const qreal dpr = devicePixelRatioF();
+            const LONG w = wr.right - wr.left, h = wr.bottom - wr.top;
+            const LONG edge = LONG(std::lround(7 * dpr));
+            if (!isMaximized()) {
+                const bool l = px < edge, r = px >= w - edge, t = py < edge, b = py >= h - edge;
+                if (t && l) { *result = HTTOPLEFT; return true; }
+                if (t && r) { *result = HTTOPRIGHT; return true; }
+                if (b && l) { *result = HTBOTTOMLEFT; return true; }
+                if (b && r) { *result = HTBOTTOMRIGHT; return true; }
+                if (l) { *result = HTLEFT; return true; }
+                if (r) { *result = HTRIGHT; return true; }
+                if (t) { *result = HTTOP; return true; }
+                if (b) { *result = HTBOTTOM; return true; }
+            }
+            const QPointF local(px / dpr, py / dpr);
+            if (m_titlePanel && m_titlePanel->rect().contains(local) && !m_canvas->interactiveAt(local)) {
+                *result = HTCAPTION;
+                return true;
+            }
+            *result = HTCLIENT;
+            return true;
+        }
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+void MainWindow::showEvent(QShowEvent* event) {
+    QMainWindow::showEvent(event);
+    // Windows 11: round the borderless window's corners like a native one.
+    static const DWORD kCornerPref = 33; // DWMWA_WINDOW_CORNER_PREFERENCE
+    const int round = 2;                 // DWMWCP_ROUND
+    DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), kCornerPref, &round, sizeof(round));
+    updateWindowButtons();
 }
 
 void MainWindow::buildTray() {
@@ -1009,7 +1027,7 @@ void MainWindow::updateStatusUi() {
     m_statusLabel->setText(text);
     m_statusDot->setPixmap(Theme::tintedIcon(QStringLiteral(":/status/status-dot.svg"), QColor(QLatin1String(color)),
                                              kStatusDotSize));
-    m_statusLabel->setStyleSheet(QStringLiteral("color: %1; font-weight: 600; padding: 2px 0;").arg(color));
+    m_statusLabel->setColor(QColor(QLatin1String(color)));
 }
 
 void MainWindow::updatePrimaryButtonUi() {
@@ -1232,7 +1250,7 @@ void MainWindow::loadVideoSource(const QString& source, bool fromPlaylist) {
     // right away, even before the user clicks "Set as Wallpaper". Works
     // identically for a local path or a web URL - VideoPlayer::loadFile
     // already handles both via the same QMediaPlayer pipeline.
-    m_previewLabel->setText(QString());
+    m_preview->setLoadingText(QString());
     if (m_manager->player()->loadFile(source)) {
         m_manager->player()->play();
     }
@@ -1333,7 +1351,7 @@ constexpr int kDropZonePageIndex = 1;
 } // namespace
 
 void MainWindow::refreshDropZoneVisual() {
-    if (!m_previewStack || !m_dropZone) {
+    if (!m_preview) {
         return;
     }
     // The drop-zone page (animated visual) is shown whenever there's no
@@ -1345,25 +1363,26 @@ void MainWindow::refreshDropZoneVisual() {
     // A source is selected but its first frame hasn't been decoded yet (cold
     // start after Windows boots, slow disk, web video): the video page would
     // otherwise be an empty near-black panel, so say what is happening.
-    if (!showDropZone && m_previewLabel && m_previewLabel->pixmap().isNull()) {
-        m_previewLabel->setText(tr("Loading preview…"));
+    if (!showDropZone && !m_preview->hasImage()) {
+        m_preview->setLoadingText(tr("Loading preview…"));
     }
-    m_previewStack->setCurrentIndex(showDropZone ? kDropZonePageIndex : kVideoPageIndex);
-    if (showDropZone && m_previewHost) {
-        m_previewHost->setAspect(0.0); // the drop zone uses the whole preview area
+    m_preview->setShowDropZone(showDropZone);
+    if (showDropZone) {
+        m_preview->setAspect(0.0); // the drop zone uses the whole preview area
     }
 
-    DropZoneWidget::State state = DropZoneWidget::State::Idle;
+    GlPreview::DropState state = GlPreview::DropState::Idle;
     if (m_dragInvalidActive) {
-        state = DropZoneWidget::State::Invalid;
+        state = GlPreview::DropState::Invalid;
     } else if (m_dragHintActive) {
-        state = DropZoneWidget::State::DragOver;
+        state = GlPreview::DropState::DragOver;
     }
-    m_dropZone->setState(state);
+    m_preview->setDropState(state);
+    layoutGl(m_canvas->size()); // the Paste URL button follows the drop zone
 }
 
 void MainWindow::flashDropZoneInvalid() {
-    if (!m_dropZone) {
+    if (!m_preview) {
         return;
     }
     // Reuses m_dragInvalidActive/refreshDropZoneVisual rather than poking
@@ -1442,9 +1461,9 @@ void MainWindow::dropEvent(QDropEvent* event) {
     // applyVideoInfoUi) already switched to the video page since
     // m_selectedVideoPath is non-empty now; re-show the drop-zone page
     // just long enough for the burst, then hand back to the normal logic.
-    if (m_dropZone && m_previewStack) {
-        m_previewStack->setCurrentIndex(kDropZonePageIndex);
-        m_dropZone->setState(DropZoneWidget::State::Success);
+    if (m_preview) {
+        m_preview->setShowDropZone(true);
+        m_preview->setDropState(GlPreview::DropState::Success);
         QTimer::singleShot(650, this, [this] { refreshDropZoneVisual(); });
     }
 }
@@ -1521,8 +1540,8 @@ void MainWindow::onRemoveVideo() {
     updateRemoveVideoButtonUi();
     updatePlayPauseAvailability();
     applyVideoInfoUi();
-    m_previewLabel->clear();
-    m_previewLabel->setText(QString());
+    m_preview->clearImage();
+    m_preview->setLoadingText(QString());
     refreshDropZoneVisual();
 
     if (!wallpaperWasOurs) {
@@ -1619,36 +1638,37 @@ void MainWindow::onPreviewFrameReady() {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == m_previewLabel && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
-        renderPreviewFrame();
-    }
     return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::renderPreviewFrame() {
     auto frame = m_manager->player()->currentFrame();
-    if (!frame || frame->isNull() || m_selectedVideoPath.isEmpty()) {
+    if (!frame || frame->isNull() || m_selectedVideoPath.isEmpty() || !m_preview) {
         return;
     }
-    // Shape the panel to the media first, so the label below is already at
-    // its final size when the frame is scaled to it.
-    if (m_previewHost && frame->height() > 0 && m_previewStack->currentIndex() == kVideoPageIndex) {
-        m_previewHost->setAspect(double(frame->width()) / frame->height());
+    // Shape the panel to the media first, so the frame below is scaled to
+    // its final size.
+    if (frame->height() > 0 && !m_preview->showsDropZone()) {
+        m_preview->setAspect(double(frame->width()) / frame->height());
     }
-    // The pixmap scale+paint is the real per-frame cost, worth skipping
-    // while the window isn't actually visible (main window shown, not
-    // minimized to tray) - the decode pipeline itself keeps running
-    // regardless since it's shared with the desktop wallpaper. A frame
-    // skipped here is not lost for single-frame sources (static GIF,
-    // still image): the label's Show/Resize re-renders it (eventFilter).
-    if (!isVisible() || !m_previewLabel || m_previewLabel->width() <= 0 || m_previewLabel->height() <= 0) {
+    // Scaling is the real per-frame cost, worth skipping while the window
+    // isn't visible (tray) - the decode pipeline itself keeps running since
+    // it is shared with the desktop wallpaper. A single-frame source is
+    // re-rendered by layoutGl() on resize.
+    if (!isVisible() || isMinimized()) {
         return;
     }
-    // Scale the QImage first, then convert only the preview-sized result -
-    // converting a full-resolution (e.g. 8K) still image to a QPixmap on
-    // every resize would be needlessly expensive.
-    m_previewLabel->setPixmap(QPixmap::fromImage(
-        frame->scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    const QRectF cr = m_preview->contentRect();
+    if (cr.width() <= 4 || cr.height() <= 4) {
+        return;
+    }
+    const qreal dpr = devicePixelRatioF();
+    const QSize target(qMax(1, qRound((cr.width() - 2) * dpr)), qMax(1, qRound((cr.height() - 2) * dpr)));
+    // Scale on the CPU to the panel's pixel size so the GPU only ever
+    // uploads a preview-sized texture, never a full-resolution (8K) frame.
+    QImage scaled = frame->scaled(target, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    scaled.setDevicePixelRatio(dpr);
+    m_preview->setImage(scaled);
 }
 
 void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
@@ -1687,9 +1707,15 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
 void MainWindow::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange) {
+        updateWindowButtons();
+    }
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
         m_settingsButton->setIcon(QIcon(settingsIconPath()));
         m_playlistButton->setIcon(QIcon(playlistIconPath()));
+        if (m_canvas) {
+            m_canvas->requestAnimation();
+        }
         updatePrimaryButtonUi();
     }
 }
@@ -1980,7 +2006,7 @@ void MainWindow::releaseMediaForCleanup() {
     updateRemoveVideoButtonUi();
     updatePlayPauseAvailability();
     applyVideoInfoUi();
-    m_previewLabel->clear();
+    m_preview->clearImage();
     refreshDropZoneVisual();
     setUiState(WallpaperUiState::NoVideo);
 }

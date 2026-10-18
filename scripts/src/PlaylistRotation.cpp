@@ -101,6 +101,9 @@ bool PlaylistRotation::fire(Trigger trigger) {
     if (!active || active->currentIsVideo()) {
         return false; // a video advances on end-of-video, not on these triggers
     }
+    if (m_isSuspended && m_isSuspended()) {
+        return false; // hidden by the battery policy
+    }
     const RotationSettings r = active->rotation();
     const bool enabled = (trigger == Trigger::LockUnlock && r.onUnlock) ||
                          (trigger == Trigger::WindowsStart && r.onWindowsStart) ||

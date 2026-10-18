@@ -1,4 +1,6 @@
 #include "SettingsManager.h"
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "WindowsShellIntegration.h"
 #include "MainWindow.h"
 #include "VideoPlayer.h"
@@ -155,11 +157,24 @@ void SettingsManager::setWasWallpaperActive(bool active) {
     m_settings.setValue("app/wasWallpaperActive", active);
 }
 
-bool SettingsManager::showVideoOnBattery() const {
+// The old shared "Show video on battery" key (app/showVideoOnBattery) becomes
+// the videos key's fallback, so existing users keep their choice. Images were
+// never shown on battery before the split, hence the false default.
+bool SettingsManager::playVideosOnBattery() const {
+    if (m_settings.contains("app/playVideosOnBattery")) {
+        return m_settings.value("app/playVideosOnBattery").toBool();
+    }
     return m_settings.value("app/showVideoOnBattery", true).toBool();
 }
-void SettingsManager::setShowVideoOnBattery(bool enabled) {
-    m_settings.setValue("app/showVideoOnBattery", enabled);
+void SettingsManager::setPlayVideosOnBattery(bool enabled) {
+    m_settings.setValue("app/playVideosOnBattery", enabled);
+    m_settings.remove("app/showVideoOnBattery");
+}
+bool SettingsManager::playImagesOnBattery() const {
+    return m_settings.value("app/playImagesOnBattery", false).toBool();
+}
+void SettingsManager::setPlayImagesOnBattery(bool enabled) {
+    m_settings.setValue("app/playImagesOnBattery", enabled);
 }
 
 bool SettingsManager::notifyInApp() const {
@@ -283,6 +298,40 @@ void SettingsManager::setTheme(Theme::AppTheme theme) {
     m_settings.setValue("app/theme", Theme::themeSettingsKey(theme));
 }
 
+Theme::ColorOverrides SettingsManager::themeOverrides(Theme::AppTheme theme) const {
+    Theme::ColorOverrides out;
+    const QString key = QStringLiteral("themeEditor/%1/colors").arg(Theme::themeSettingsKey(theme));
+    const QJsonObject obj = QJsonDocument::fromJson(m_settings.value(key).toString().toUtf8()).object();
+    for (const Theme::EditableColor& e : Theme::editableColors()) {
+        const QColor c(obj.value(e.key).toString());
+        if (c.isValid()) {
+            out.insert(e.key, c);
+        }
+    }
+    return out;
+}
+
+void SettingsManager::setThemeOverrides(Theme::AppTheme theme, const Theme::ColorOverrides& overrides) {
+    const QString key = QStringLiteral("themeEditor/%1/colors").arg(Theme::themeSettingsKey(theme));
+    if (overrides.isEmpty()) {
+        m_settings.remove(key);
+    } else {
+        QJsonObject obj;
+        for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it) {
+            obj.insert(it.key(), it.value().name(QColor::HexRgb));
+        }
+        m_settings.setValue(key, QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    }
+    m_settings.sync();
+}
+
+void SettingsManager::loadThemeOverrides() const {
+    for (auto t : {Theme::AppTheme::DarkAurora, Theme::AppTheme::LightAurora, Theme::AppTheme::DarkOnyx,
+                   Theme::AppTheme::LightOnyx}) {
+        Theme::setOverrides(t, themeOverrides(t));
+    }
+}
+
 QStringList SettingsManager::playlistPaths() const {
     return m_settings.value("playlist/paths").toStringList();
 }
@@ -349,13 +398,15 @@ void SettingsManager::resetPreferences() {
     disableWindowsIntegration();
     for (const char* key : {"video/volume", "video/muted", "video/loop", "video/scalingMode",
                             "display/monitorSelection", "display/specificMonitorIndex", "app/startWithWindows",
-                            "app/showVideoOnBattery", "app/showInWindowsSearch", "app/explorerIntegrationEnabled",
+                            "app/showVideoOnBattery", "app/playVideosOnBattery", "app/playImagesOnBattery",
+                            "app/showInWindowsSearch", "app/explorerIntegrationEnabled",
                             "app/theme", "app/uiStyle", "app/appearance", "notifications/inApp",
                             "notifications/desktop", "notifications/success", "notifications/error",
                             "notifications/warning", "notifications/background", "notifications/playback",
                             "app/settingsLayout", "playlistWindow/geometry"}) {
         m_settings.remove(QLatin1String(key));
     }
+    m_settings.remove(QStringLiteral("themeEditor"));
     m_settings.sync();
 }
 

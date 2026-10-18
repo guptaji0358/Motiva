@@ -97,11 +97,14 @@ public:
     bool wasWallpaperActive() const;
     void setWasWallpaperActive(bool active);
 
-    // Default true: preserves existing behavior for existing users - only
-    // someone who explicitly turns this off gets the battery-saving
-    // behavior (see WallpaperManager's battery suspend/resume logic).
-    bool showVideoOnBattery() const;
-    void setShowVideoOnBattery(bool enabled);
+    // Battery policy per media type (see WallpaperManager's battery
+    // suspend/resume logic). Videos default true (migrated from the old
+    // shared app/showVideoOnBattery key when present); images default false,
+    // matching the former "images are never shown on battery" behavior.
+    bool playVideosOnBattery() const;
+    void setPlayVideosOnBattery(bool enabled);
+    bool playImagesOnBattery() const;
+    void setPlayImagesOnBattery(bool enabled);
 
     // The single selected Motiva Theme (see Theme::AppTheme) - replaces
     // the old two-axis Appearance x Visual Style settings. If neither
@@ -111,6 +114,14 @@ public:
     // via Theme::migrateLegacySettings() - see Theme.h.
     Theme::AppTheme theme() const;
     void setTheme(Theme::AppTheme theme);
+
+    // Per-theme color customizations from the Theme editor (sparse
+    // key -> color, stored as ONE JSON value per theme so a write is
+    // all-or-nothing). Absent/invalid data means "original palette".
+    Theme::ColorOverrides themeOverrides(Theme::AppTheme theme) const;
+    void setThemeOverrides(Theme::AppTheme theme, const Theme::ColorOverrides& overrides);
+    // Pushes every theme's saved customization into Theme (call before applyTheme).
+    void loadThemeOverrides() const;
 
     // --- Legacy (Motiva 1.1) single image playlist ---
     // Read once by PlaylistLibrary to migrate into the .mtv library, then
