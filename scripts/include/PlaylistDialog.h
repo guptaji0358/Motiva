@@ -10,7 +10,7 @@
 
 class BackupManager;
 class QAction;
-class QMenu;
+class GlMenu;
 class PlaylistLibrary;
 class PlaylistModel;
 class QTimer;
@@ -220,7 +220,7 @@ private:
     // Adds the categories below `parentId` to `menu` as a hierarchy (a category
     // with subcategories becomes a submenu whose first entry is the category
     // itself). `actions` maps every added action to its category id.
-    void addCategoryTree(QMenu* menu, qint64 parentId, const QSet<qint64>& excluded,
+    void addCategoryTree(GlMenu* menu, qint64 parentId, const QSet<qint64>& excluded,
                          QHash<QAction*, qint64>& actions,
                          const std::function<void(const PlaylistFilterInfo&, QAction*)>& decorate);
     void onEditCategory();

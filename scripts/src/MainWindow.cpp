@@ -1,3 +1,4 @@
+#include "GlPopups.h"
 #include "MainWindow.h"
 #include "GlUi.h"
 #include "SettingsDialog.h"
@@ -404,7 +405,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     if (!m_library->openNotice().isEmpty()) {
         QTimer::singleShot(0, this, [this] {
             if (isVisible()) {
-                QMessageBox::warning(this, tr("Motiva playlists"), m_library->openNotice());
+                GlMessageBox::warning(this, tr("Motiva playlists"), m_library->openNotice());
             } else if (m_tray) {
                 m_tray->showMessage(tr("Motiva playlists"), m_library->openNotice(), QSystemTrayIcon::Warning, 8000);
             }
@@ -856,10 +857,10 @@ void MainWindow::buildTray() {
     m_tray->setIcon(QIcon(kAppIconResourcePath));
     m_tray->setToolTip(tr("Motiva"));
 
-    auto* menu = new QMenu();
-    m_trayPlayAction = menu->addAction(QIcon(kPlayIconResourcePath), tr("Play"), this, [this] { m_manager->play(); updatePlayPauseLabel(); });
-    m_trayPauseAction = menu->addAction(QIcon(kPauseIconResourcePath), tr("Pause"), this, [this] { m_manager->pause(); updatePlayPauseLabel(); });
-    m_trayMuteAction = menu->addAction(QIcon(kVolumeMuteIconResourcePath), tr("Mute"));
+    m_trayMenu = new GlMenu(); // themed popup; shown from onTrayActivated(Context)
+    m_trayPlayAction = m_trayMenu->addAction(QIcon(kPlayIconResourcePath), tr("Play"), this, [this] { m_manager->play(); updatePlayPauseLabel(); });
+    m_trayPauseAction = m_trayMenu->addAction(QIcon(kPauseIconResourcePath), tr("Pause"), this, [this] { m_manager->pause(); updatePlayPauseLabel(); });
+    m_trayMuteAction = m_trayMenu->addAction(QIcon(kVolumeMuteIconResourcePath), tr("Mute"));
     m_trayMuteAction->setCheckable(true);
     connect(m_trayMuteAction, &QAction::toggled, this, [this](bool checked) {
         if (m_settingsDialog) {
@@ -867,15 +868,14 @@ void MainWindow::buildTray() {
         }
     });
 
-    menu->addSeparator();
-    menu->addAction(QIcon(settingsIconPath()), tr("Settings"), this, &MainWindow::openSettings);
-    menu->addAction(QIcon(playlistIconPath()), tr("Playlists"), this, &MainWindow::openPlaylist);
-    menu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Media"), this, &MainWindow::onChooseVideo);
-    menu->addAction(QIcon(removeWallpaperIconPath()), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
-    menu->addSeparator();
-    menu->addAction(tr("Exit"), this, &MainWindow::onExitRequested);
+    m_trayMenu->addSeparator();
+    m_trayMenu->addAction(QIcon(settingsIconPath()), tr("Settings"), this, &MainWindow::openSettings);
+    m_trayMenu->addAction(QIcon(playlistIconPath()), tr("Playlists"), this, &MainWindow::openPlaylist);
+    m_trayMenu->addAction(QIcon(kOpenVideoIconResourcePath), tr("Open Media"), this, &MainWindow::onChooseVideo);
+    m_trayMenu->addAction(QIcon(removeWallpaperIconPath()), tr("Remove Wallpaper"), this, &MainWindow::onRemoveWallpaper);
+    m_trayMenu->addSeparator();
+    m_trayMenu->addAction(tr("Exit"), this, &MainWindow::onExitRequested);
 
-    m_tray->setContextMenu(menu);
     connect(m_tray, &QSystemTrayIcon::activated, this, &MainWindow::onTrayActivated);
     m_tray->show();
 }
@@ -1085,72 +1085,28 @@ void MainWindow::onChooseVideo() {
 }
 
 void MainWindow::onPasteVideoLink() {
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Paste Video URL"));
-    auto* layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(20, 20, 20, 20);
-    layout->setSpacing(10);
-
-    auto* label = new QLabel(tr("Video URL"), &dialog);
-    QFont labelFont = label->font();
-    labelFont.setBold(true);
-    label->setFont(labelFont);
-    layout->addWidget(label);
-
-    auto* urlEdit = new QLineEdit(&dialog);
-    urlEdit->setPlaceholderText(tr("https://example.com/video.mp4"));
-    // A placeholder this long needs real room to be readable, not just
-    // whatever the dialog's overall minimum width happens to leave it -
-    // see the "Popup/Dialog Window Visibility and Sizing" task.
-    urlEdit->setMinimumWidth(320);
-    // Pre-fills from the clipboard as a convenience only - the field
-    // stays fully editable and nothing loads until the user explicitly
-    // presses "Load Video" below. Reuses the exact same MIME-inspection
-    // extractDroppedVideoSource() already uses for drag/drop and the
-    // Ctrl+V shortcut, so "what counts as a usable clipboard URL" is
-    // defined in exactly one place.
+    // Pre-fills from the clipboard as a convenience only - the field stays
+    // fully editable and nothing loads until the user explicitly presses
+    // "Load Video". Reuses the exact same MIME-inspection
+    // extractDroppedVideoSource() already uses for drag/drop and the Ctrl+V
+    // shortcut, so "what counts as a usable clipboard URL" is defined in
+    // exactly one place.
     const QString clipboardCandidate =
         extractDroppedVideoSource(QGuiApplication::clipboard()->mimeData(), nullptr);
-    if (!clipboardCandidate.isEmpty()) {
-        urlEdit->setText(clipboardCandidate);
-        urlEdit->selectAll();
-    }
-    layout->addWidget(urlEdit);
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
-    auto* loadButton = buttons->addButton(tr("Load Video"), QDialogButtonBox::AcceptRole);
-    loadButton->setDefault(true);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-
-    // A width-only minimum previously let this dialog's actual on-screen
-    // size come out smaller/more cramped than its content really needs on
-    // some font-metrics/DPI combinations, since nothing forced the layout
-    // to be measured before the dialog first appeared - see the "Popup/
-    // Dialog Window Visibility and Sizing" task. adjustSize() explicitly
-    // sizes the window from its layout's real sizeHint (label + a proper-
-    // width input field + button row) before it's ever shown, and the
-    // minimum size is then a floor under that, not a replacement for it -
-    // still freely resizable larger.
-    dialog.setMinimumSize(420, 160);
-    dialog.adjustSize();
-    // Modal - the drop-zone's own idle/float animation behind it is
-    // already paused for free (DropZoneWidget::hideEvent fires once this
-    // modal dialog occludes/deactivates the main window's rendering the
-    // same way any other overlapping window would), so no separate
-    // "pause the background animation" bookkeeping is needed here.
-    if (dialog.exec() != QDialog::Accepted) {
+    bool accepted = false;
+    const QString typed = GlMessageBox::getText(this, tr("Paste Video URL"), tr("Video URL"), clipboardCandidate,
+                                                tr("Load Video"), tr("https://example.com/video.mp4"), &accepted);
+    if (!accepted) {
         return;
     }
 
-    const QString entered = urlEdit->text().trimmed();
+    const QString entered = typed.trimmed();
     const QUrl candidate = QUrl::fromUserInput(entered);
     if (!isHttpUrl(candidate)) {
         // Covers both "hello world" (Test E) and a local filesystem path
         // like C:\Videos\video.mp4 - local files belong to the drag/drop
         // or Open Video workflow, never this URL field.
-        QMessageBox::warning(this, tr("Invalid URL"),
+        GlMessageBox::warning(this, tr("Invalid URL"),
             tr("Please enter a valid http:// or https:// video URL."));
         return;
     }
@@ -1159,7 +1115,7 @@ void MainWindow::onPasteVideoLink() {
         // that this app's media backend cannot actually play as-is - see
         // isWebVideoUrl()'s comment. Deliberately does not attempt to
         // scrape/resolve/download it.
-        QMessageBox::warning(
+        GlMessageBox::warning(
             this, tr("Unsupported Video URL"), tr("This URL is not a directly playable video source."));
         return;
     }
@@ -1441,11 +1397,11 @@ void MainWindow::dropEvent(QDropEvent* event) {
 
 void MainWindow::onSetWallpaper() {
     if (m_selectedVideoPath.isEmpty()) {
-        QMessageBox::information(this, tr("Choose media"), tr("Please open a video or image first."));
+        GlMessageBox::information(this, tr("Choose media"), tr("Please open a video or image first."));
         return;
     }
     if (!isUsableVideoSource(m_selectedVideoPath)) {
-        QMessageBox::warning(this, tr("Media not found"),
+        GlMessageBox::warning(this, tr("Media not found"),
             tr("The wallpaper file could not be found.\n\nPlease choose another video or image."));
         return;
     }
@@ -1643,6 +1599,10 @@ void MainWindow::renderPreviewFrame() {
 }
 
 void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
+    if (reason == QSystemTrayIcon::Context) {
+        m_trayMenu->popup(QCursor::pos());
+        return;
+    }
     if (reason == QSystemTrayIcon::DoubleClick || reason == QSystemTrayIcon::Trigger) {
         if (isVisible()) {
             hide();
@@ -1782,7 +1742,7 @@ void MainWindow::createPlaylistFromExplorer(const QString& path, bool video) {
     activateWindow();
     const QString fallback = video ? tr("Videos") : tr("Images");
     bool accepted = false;
-    QString name = QInputDialog::getText(this, tr("New Playlist"),
+    QString name = GlMessageBox::getText(this, tr("New Playlist"),
                                          video ? tr("Name of the new video playlist:")
                                                : tr("Name of the new image playlist:"),
                                          QLineEdit::Normal, fallback, &accepted)
@@ -1809,7 +1769,7 @@ void MainWindow::showExplorerPlaylistError(const QString& message) {
     showNormal();
     raise();
     activateWindow();
-    QMessageBox::warning(this, tr("Add to playlist"), message);
+    GlMessageBox::warning(this, tr("Add to playlist"), message);
 }
 
 void MainWindow::syncExplorerPlaylistMenu(bool force) {
@@ -2000,7 +1960,7 @@ void MainWindow::restartAfterFactoryReset() {
     // Same executable and inherited environment as this process, so a
     // deployed install still finds its DLLs.
     if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--after-reset")})) {
-        QMessageBox::information(this, tr("Motiva"),
+        GlMessageBox::information(this, tr("Motiva"),
                                  tr("Motiva has been reset. Please start Motiva again."));
     }
     qApp->quit();

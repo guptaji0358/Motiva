@@ -1,13 +1,12 @@
 #pragma once
 
-#include <QDialog>
-#include <QList>
+#include "GlWindow.h"
 #include "Theme.h"
 
-class QPushButton;
-class QComboBox;
-class QLabel;
+#include <QList>
+
 class SettingsManager;
+class GlSwatchButton;
 
 // Visual editor for the ACTIVE theme's colors. Changes preview live on the
 // whole app but are only saved by Apply; Revert (or closing and choosing
@@ -15,28 +14,28 @@ class SettingsManager;
 // customization back to the theme's built-in palette (still needs Apply to
 // be saved). Customizations are stored per theme, so switching themes
 // never loses them (see SettingsManager::themeOverrides).
-class ThemeEditorDialog : public QDialog {
+class ThemeEditorDialog : public GlWindow {
     Q_OBJECT
 public:
     ThemeEditorDialog(SettingsManager* settings, QWidget* parent = nullptr);
+    void layoutContent(const QRectF& content, const QRectF& footer) override;
 
 protected:
     void reject() override;
 
-private slots:
+private:
+    struct Row {
+        QString key;
+        GlLabel* label = nullptr;
+        GlSwatchButton* swatch = nullptr;
+        GlButton* reset = nullptr;
+    };
+
     void onApply();
     void onRevert();
     void onResetToOriginal();
     void onCheckContrast();
     void onPresetChosen(int index);
-
-private:
-    struct Row {
-        QString key;
-        QPushButton* swatch = nullptr;
-        QPushButton* reset = nullptr;
-    };
-
     void pickColor(const QString& key);
     void setPendingColor(const QString& key, const QColor& color);
     void setPending(const Theme::ColorOverrides& pending);
@@ -49,8 +48,14 @@ private:
     Theme::ColorOverrides m_committed;
     Theme::ColorOverrides m_pending;
     QList<Row> m_rows;
-    QComboBox* m_presetCombo = nullptr;
-    QPushButton* m_applyButton = nullptr;
-    QPushButton* m_revertButton = nullptr;
-    QLabel* m_stateLabel = nullptr;
+    GlLabel* m_heading = nullptr;
+    GlLabel* m_presetLabel = nullptr;
+    GlDropdown* m_presetCombo = nullptr;
+    GlLabel* m_stateLabel = nullptr;
+    GlButton* m_contrastButton = nullptr;
+    GlButton* m_resetAllButton = nullptr;
+    GlButton* m_applyButton = nullptr;
+    GlButton* m_revertButton = nullptr;
+    GlButton* m_closeButton = nullptr;
+    bool m_presetSync = false;
 };

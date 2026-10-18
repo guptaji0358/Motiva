@@ -1,119 +1,170 @@
 #include "ThemeEditorDialog.h"
-#include "SettingsManager.h"
+#include "GlColor.h"
+#include "GlPopups.h"
 #include "NotificationManager.h"
+#include "SettingsManager.h"
 
 #include <QApplication>
-#include <QColorDialog>
-#include <QComboBox>
-#include <QDialogButtonBox>
-#include <QFormLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QListWidget>
-#include <QMessageBox>
-#include <QPixmap>
-#include <QPushButton>
-#include <QScrollArea>
-#include <QVBoxLayout>
 
 namespace {
-QIcon swatchIcon(const QColor& c) {
-    QPixmap pm(28, 16);
-    pm.fill(c);
-    return QIcon(pm);
-}
-QString textOn(const QColor& bg) {
-    return Theme::contrastRatio(Qt::white, bg) >= Theme::contrastRatio(Qt::black, bg) ? QStringLiteral("#ffffff")
-                                                                                       : QStringLiteral("#000000");
-}
+// Modal list of proposed contrast fixes; "Preview fixes" only previews.
+class ContrastFixDialog : public GlWindow {
+public:
+    ContrastFixDialog(const QList<Theme::ContrastFix>& fixes, QWidget* parent)
+        : GlWindow(QObject::tr("Suggested contrast fixes"), QObject::tr("Readability"), parent, false), m_fixes(fixes) {
+        setModal(true);
+        GlCanvas* c = canvas();
+        m_intro = new GlLabel(c);
+        m_intro->setText(QObject::tr("These colors are hard to read. Previewing applies the adjustments to the live "
+                                     "preview only; your saved colors stay unchanged until you press Apply in the editor."));
+        m_intro->setWordWrap(true);
+        m_intro->setPointSize(10);
+        m_intro->setTone(GlLabel::Tone::Dim);
+        m_intro->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        for (const Theme::ContrastFix& f : fixes) {
+            Entry e;
+            e.from = new GlSwatchButton(c);
+            e.from->setColor(f.from);
+            e.from->setEnabled(false);
+            e.to = new GlSwatchButton(c);
+            e.to->setColor(f.to);
+            e.to->setEnabled(false);
+            e.text = new GlLabel(c);
+            e.text->setText(QObject::tr("%1 - %2\n%3:1 -> %4:1")
+                                .arg(f.label, f.reason)
+                                .arg(f.before, 0, 'f', 1)
+                                .arg(f.after, 0, 'f', 1));
+            e.text->setWordWrap(true);
+            e.text->setPointSize(10);
+            e.text->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            m_entries << e;
+        }
+        m_apply = new GlButton(c, GlButton::Kind::Primary);
+        m_apply->setText(QObject::tr("Preview fixes"));
+        m_cancel = new GlButton(c, GlButton::Kind::Secondary);
+        m_cancel->setText(QObject::tr("Cancel"));
+        QObject::connect(m_apply, &GlButton::clicked, this, &QDialog::accept);
+        QObject::connect(m_cancel, &GlButton::clicked, this, &QDialog::reject);
+        resize(620, std::min<int>(720, 240 + int(fixes.size()) * 62));
+        setMinimumSize(560, 320);
+    }
+    void layoutContent(const QRectF& content, const QRectF& footer) override {
+        const qreal ih = m_intro->heightForWidth(content.width()) + 6;
+        m_intro->setRect(QRectF(content.left(), content.top(), content.width(), ih));
+        qreal y = content.top() + ih + 12;
+        for (Entry& e : m_entries) {
+            e.from->setRect(QRectF(content.left(), y, 96, 40));
+            e.to->setRect(QRectF(content.left() + 104, y, 96, 40));
+            e.text->setRect(QRectF(content.left() + 214, y - 4, content.width() - 214, 48));
+            y += 56;
+        }
+        layoutFooter({m_cancel, m_apply}, footer, 140);
+    }
+
+private:
+    struct Entry {
+        GlSwatchButton* from;
+        GlSwatchButton* to;
+        GlLabel* text;
+    };
+    QList<Theme::ContrastFix> m_fixes;
+    QList<Entry> m_entries;
+    GlLabel* m_intro;
+    GlButton* m_apply;
+    GlButton* m_cancel;
+};
 } // namespace
 
 ThemeEditorDialog::ThemeEditorDialog(SettingsManager* settings, QWidget* parent)
-    : QDialog(parent), m_settings(settings), m_theme(Theme::currentTheme()) {
-    setWindowTitle(tr("Customize Theme"));
+    : GlWindow(tr("Customize Theme"), tr("Colors"), parent, false), m_settings(settings), m_theme(Theme::currentTheme()) {
+    setModal(true);
     m_committed = m_settings->themeOverrides(m_theme);
     m_pending = m_committed;
+    GlCanvas* c = canvas();
 
-    auto* root = new QVBoxLayout(this);
-    root->setSpacing(10);
+    m_heading = new GlLabel(c);
+    m_heading->setText(tr("Customizing %1. Changes preview live; nothing is saved until you press Apply.")
+                           .arg(Theme::themeName(m_theme)));
+    m_heading->setWordWrap(true);
+    m_heading->setPointSize(10);
+    m_heading->setTone(GlLabel::Tone::Dim);
+    m_heading->setAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    auto* heading = new QLabel(tr("Customizing <b>%1</b>. Changes preview live; nothing is saved until you press Apply.")
-                                   .arg(Theme::themeName(m_theme)));
-    heading->setWordWrap(true);
-    root->addWidget(heading);
-
-    auto* presetRow = new QHBoxLayout();
-    presetRow->addWidget(new QLabel(tr("Accent preset:")));
-    m_presetCombo = new QComboBox(this);
+    m_presetLabel = new GlLabel(c);
+    m_presetLabel->setText(tr("Accent preset"));
+    m_presetLabel->setPointSize(10.5);
+    m_presetCombo = new GlDropdown(c);
+    m_presetCombo->setCompact(true);
     m_presetCombo->addItem(tr("Choose..."));
     for (const Theme::AccentPreset& p : Theme::accentPresets()) {
-        m_presetCombo->addItem(swatchIcon(p.accent), p.name);
+        m_presetCombo->addItem(p.name);
     }
-    connect(m_presetCombo, QOverload<int>::of(&QComboBox::activated), this, &ThemeEditorDialog::onPresetChosen);
-    presetRow->addWidget(m_presetCombo, 1);
-    root->addLayout(presetRow);
+    m_presetCombo->setCurrentIndex(0);
+    connect(m_presetCombo, &GlDropdown::currentIndexChanged, this, &ThemeEditorDialog::onPresetChosen);
 
-    auto* form = new QFormLayout();
-    form->setSpacing(6);
     for (const Theme::EditableColor& e : Theme::editableColors()) {
         Row row;
         row.key = e.key;
-        row.swatch = new QPushButton(this);
-        row.swatch->setMinimumWidth(130);
+        row.label = new GlLabel(c);
+        row.label->setText(e.label);
+        row.label->setPointSize(10.5);
+        row.swatch = new GlSwatchButton(c);
         row.swatch->setAccessibleName(tr("%1 color").arg(e.label));
         row.swatch->setToolTip(tr("Click to choose a color for: %1").arg(e.label));
-        connect(row.swatch, &QPushButton::clicked, this, [this, key = e.key] { pickColor(key); });
-        row.reset = new QPushButton(tr("Original"), this);
+        connect(row.swatch, &GlSwatchButton::clicked, this, [this, key = e.key] { pickColor(key); });
+        row.reset = new GlButton(c, GlButton::Kind::Secondary);
+        row.reset->setText(tr("Original"));
         row.reset->setToolTip(tr("Return this color to the theme's original value"));
-        connect(row.reset, &QPushButton::clicked, this, [this, key = e.key] {
+        connect(row.reset, &GlButton::clicked, this, [this, key = e.key] {
             Theme::ColorOverrides o = m_pending;
             o.remove(key);
             setPending(o);
         });
-        auto* h = new QHBoxLayout();
-        h->addWidget(row.swatch, 1);
-        h->addWidget(row.reset);
-        form->addRow(e.label + QLatin1Char(':'), h);
         m_rows << row;
     }
-    auto* scrollBody = new QWidget(this);
-    scrollBody->setLayout(form);
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setWidget(scrollBody);
-    root->addWidget(scroll, 1);
+    m_stateLabel = new GlLabel(c);
+    m_stateLabel->setPointSize(9.5);
+    m_stateLabel->setTone(GlLabel::Tone::Dim);
+    m_contrastButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_contrastButton->setText(tr("Check contrast..."));
+    connect(m_contrastButton, &GlButton::clicked, this, &ThemeEditorDialog::onCheckContrast);
+    m_resetAllButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_resetAllButton->setText(tr("Reset to original palette"));
+    connect(m_resetAllButton, &GlButton::clicked, this, &ThemeEditorDialog::onResetToOriginal);
+    m_revertButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_revertButton->setText(tr("Revert"));
+    connect(m_revertButton, &GlButton::clicked, this, &ThemeEditorDialog::onRevert);
+    m_applyButton = new GlButton(c, GlButton::Kind::Primary);
+    m_applyButton->setText(tr("Apply"));
+    connect(m_applyButton, &GlButton::clicked, this, &ThemeEditorDialog::onApply);
+    m_closeButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_closeButton->setText(tr("Close"));
+    connect(m_closeButton, &GlButton::clicked, this, &ThemeEditorDialog::reject);
 
-    m_stateLabel = new QLabel(this);
-    m_stateLabel->setWordWrap(true);
-    root->addWidget(m_stateLabel);
-
-    auto* tools = new QHBoxLayout();
-    auto* contrast = new QPushButton(tr("Check contrast..."), this);
-    connect(contrast, &QPushButton::clicked, this, &ThemeEditorDialog::onCheckContrast);
-    auto* reset = new QPushButton(tr("Reset to original palette"), this);
-    connect(reset, &QPushButton::clicked, this, &ThemeEditorDialog::onResetToOriginal);
-    tools->addWidget(contrast);
-    tools->addWidget(reset);
-    tools->addStretch(1);
-    root->addLayout(tools);
-
-    auto* buttons = new QHBoxLayout();
-    buttons->addStretch(1);
-    m_revertButton = new QPushButton(tr("Revert"), this);
-    connect(m_revertButton, &QPushButton::clicked, this, &ThemeEditorDialog::onRevert);
-    m_applyButton = new QPushButton(tr("Apply"), this);
-    m_applyButton->setDefault(true);
-    connect(m_applyButton, &QPushButton::clicked, this, &ThemeEditorDialog::onApply);
-    auto* close = new QPushButton(tr("Close"), this);
-    connect(close, &QPushButton::clicked, this, &ThemeEditorDialog::reject);
-    buttons->addWidget(m_revertButton);
-    buttons->addWidget(m_applyButton);
-    buttons->addWidget(close);
-    root->addLayout(buttons);
-
-    resize(460, 620);
+    resize(600, 800);
+    setMinimumSize(560, 720);
     refreshRows();
+}
+
+void ThemeEditorDialog::layoutContent(const QRectF& content, const QRectF& footer) {
+    const qreal hh = m_heading->heightForWidth(content.width()) + 6;
+    m_heading->setRect(QRectF(content.left(), content.top(), content.width(), hh));
+    qreal y = content.top() + hh + 10;
+    m_presetLabel->setRect(QRectF(content.left(), y, 160, 36));
+    m_presetCombo->setRect(QRectF(content.left() + 170, y, content.width() - 170, 36));
+    y += 48;
+    for (Row& r : m_rows) {
+        r.label->setRect(QRectF(content.left(), y, 190, 34));
+        r.swatch->setRect(QRectF(content.left() + 200, y, content.width() - 200 - 100, 34));
+        r.reset->setRect(QRectF(content.right() - 90, y, 90, 34));
+        y += 39;
+    }
+    y += 4;
+    m_stateLabel->setRect(QRectF(content.left(), y, content.width(), 22));
+    y += 28;
+    m_contrastButton->setRect(QRectF(content.left(), y, 190, 38));
+    m_resetAllButton->setRect(QRectF(content.left() + 200, y, 240, 38));
+    layoutFooter({m_revertButton, m_applyButton, m_closeButton}, footer, 110);
 }
 
 bool ThemeEditorDialog::isDirty() const {
@@ -127,14 +178,8 @@ void ThemeEditorDialog::refreshRows() {
             if (e.key != r.key) {
                 continue;
             }
-            const QColor c = p.*(e.member);
-            // Swatch colors are fixed inline so the sample always shows the
-            // color itself regardless of the app stylesheet.
-            r.swatch->setStyleSheet(QStringLiteral("QPushButton{background:%1;color:%2;border:1px solid #808080;"
-                                                   "border-radius:4px;padding:5px 8px;}"
-                                                   "QPushButton:focus{border:2px solid %2;}")
-                                        .arg(c.name(), textOn(c)));
-            r.swatch->setText(c.name().toUpper() + (m_pending.contains(r.key) ? tr("  (custom)") : QString()));
+            r.swatch->setColor(p.*(e.member));
+            r.swatch->setCustom(m_pending.contains(r.key));
             r.reset->setEnabled(m_pending.contains(r.key));
         }
     }
@@ -143,6 +188,7 @@ void ThemeEditorDialog::refreshRows() {
     m_stateLabel->setText(isDirty() ? tr("Unsaved changes are previewed on the whole app.")
                           : m_committed.isEmpty() ? tr("Using the original %1 palette.").arg(Theme::themeName(m_theme))
                                                   : tr("Saved customization is active."));
+    canvas()->relayout();
 }
 
 void ThemeEditorDialog::previewPending() {
@@ -164,19 +210,21 @@ void ThemeEditorDialog::setPendingColor(const QString& key, const QColor& color)
 
 void ThemeEditorDialog::pickColor(const QString& key) {
     QColor current;
+    QString label;
     for (const Theme::EditableColor& e : Theme::editableColors()) {
         if (e.key == key) {
             current = Theme::themePalette(m_theme).*(e.member);
+            label = e.label;
         }
     }
-    const QColor c = QColorDialog::getColor(current, this, tr("Choose color"));
+    const QColor c = GlColorDialog::getColor(current, this, tr("Color: %1").arg(label));
     if (c.isValid()) {
         setPendingColor(key, c);
     }
 }
 
 void ThemeEditorDialog::onPresetChosen(int index) {
-    if (index <= 0 || index > Theme::accentPresets().size()) {
+    if (m_presetSync || index <= 0 || index > Theme::accentPresets().size()) {
         return;
     }
     // A preset only sets the main accent; hover/pressed/text-on-accent
@@ -187,7 +235,9 @@ void ThemeEditorDialog::onPresetChosen(int index) {
     o.remove(QStringLiteral("selectionText"));
     o.insert(QStringLiteral("accent"), Theme::accentPresets().at(index - 1).accent);
     setPending(o);
+    m_presetSync = true;
     m_presetCombo->setCurrentIndex(0);
+    m_presetSync = false;
 }
 
 void ThemeEditorDialog::onResetToOriginal() {
@@ -217,34 +267,11 @@ void ThemeEditorDialog::onApply() {
 void ThemeEditorDialog::onCheckContrast() {
     const QList<Theme::ContrastFix> fixes = Theme::proposeContrastFixes(Theme::themePalette(m_theme));
     if (fixes.isEmpty()) {
-        QMessageBox::information(this, tr("Contrast"),
-                                 tr("All key text and accent colors already meet readable contrast."));
+        GlMessageBox::information(this, tr("Contrast"),
+                                  tr("All key text and accent colors already meet readable contrast."));
         return;
     }
-    QDialog dlg(this);
-    dlg.setWindowTitle(tr("Suggested contrast fixes"));
-    auto* l = new QVBoxLayout(&dlg);
-    auto* intro = new QLabel(tr("These colors are hard to read. Previewing applies the adjustments to the live "
-                                "preview only; your saved colors stay unchanged until you press Apply in the editor."));
-    intro->setWordWrap(true);
-    l->addWidget(intro);
-    auto* list = new QListWidget(&dlg);
-    for (const Theme::ContrastFix& f : fixes) {
-        list->addItem(new QListWidgetItem(swatchIcon(f.to),
-                                          tr("%1 - %2\n%3:1 -> %4:1   (%5 -> %6)")
-                                              .arg(f.label, f.reason)
-                                              .arg(f.before, 0, 'f', 1)
-                                              .arg(f.after, 0, 'f', 1)
-                                              .arg(f.from.name().toUpper(), f.to.name().toUpper())));
-    }
-    l->addWidget(list);
-    auto* box = new QDialogButtonBox(&dlg);
-    box->addButton(tr("Preview fixes"), QDialogButtonBox::AcceptRole);
-    box->addButton(QDialogButtonBox::Cancel);
-    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    l->addWidget(box);
-    dlg.resize(440, 340);
+    ContrastFixDialog dlg(fixes, this);
     if (dlg.exec() != QDialog::Accepted) {
         return;
     }
@@ -257,11 +284,13 @@ void ThemeEditorDialog::onCheckContrast() {
 
 void ThemeEditorDialog::reject() {
     if (isDirty()) {
-        QMessageBox box(QMessageBox::Question, tr("Unsaved theme changes"),
-                        tr("Save your color changes before closing?"), QMessageBox::NoButton, this);
+        GlMessageBox box(QMessageBox::Question, tr("Unsaved theme changes"),
+                         tr("Save your color changes before closing?"), QMessageBox::NoButton, this);
         auto* save = box.addButton(tr("Apply"), QMessageBox::AcceptRole);
         auto* discard = box.addButton(tr("Discard"), QMessageBox::DestructiveRole);
-        box.addButton(tr("Keep editing"), QMessageBox::RejectRole);
+        auto* keep = box.addButton(tr("Keep editing"), QMessageBox::RejectRole);
+        box.setDefaultButton(save);
+        box.setEscapeButton(keep);
         box.exec();
         if (box.clickedButton() == save) {
             onApply();
@@ -271,5 +300,5 @@ void ThemeEditorDialog::reject() {
             return;
         }
     }
-    QDialog::reject();
+    GlWindow::reject();
 }

@@ -3,17 +3,11 @@
 #include "PlaylistModel.h"
 #include "DialogSizing.h"
 #include "Theme.h"
-#include "IconButton.h"
+#include "GlUi.h"
 
-#include <QComboBox>
 #include <QFileInfo>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QLineEdit>
-#include <QListWidget>
-#include <QPushButton>
+#include <QStringListModel>
 #include <QTimer>
-#include <QVBoxLayout>
 
 namespace {
 // The metadata a rule can test - all of it stored per media record.
@@ -46,128 +40,93 @@ const QList<FieldSpec>& fields() {
 }
 } // namespace
 
-void CategoryFilterDialog::applyRemoveIcon(IconButton* button) {
+void CategoryFilterDialog::applyIcons() {
     const QString v = Theme::iconVariant(Theme::currentTheme());
-    auto icon = [&v](const char* name) {
-        return QIcon(QStringLiteral(":/category/%1/%2.svg").arg(v, QLatin1String(name)));
-    };
-    button->setStateIcon(icon("remove-condition"), icon("remove-condition-hover"), QIcon(),
-                         icon("remove-condition-disabled"));
+    if (m_addRuleButton) {
+        m_addRuleButton->setIcon(QIcon(QStringLiteral(":/playlist/%1/add.svg").arg(v)));
+    }
+    for (RuleRow& r : m_rules) {
+        r.remove->setIcon(QIcon(QStringLiteral(":/category/%1/remove-condition.svg").arg(v)));
+    }
 }
-
-namespace {
-void applyAddIcon(IconButton* button) {
-    const QString v = Theme::iconVariant(Theme::currentTheme());
-    auto icon = [&v](const char* name) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(name))); };
-    button->setStateIcon(icon("add"), QIcon(), QIcon(), icon("add-disabled"));
-}
-} // namespace
 
 void CategoryFilterDialog::changeEvent(QEvent* event) {
-    QDialog::changeEvent(event);
+    GlWindow::changeEvent(event);
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) {
-        if (auto* add = findChild<IconButton*>(QStringLiteral("addConditionButton"))) {
-            applyAddIcon(add);
-        }
-        const auto buttons = findChildren<IconButton*>(QStringLiteral("removeConditionButton"));
-        for (IconButton* b : buttons) {
-            applyRemoveIcon(b);
-        }
+        applyIcons();
     }
 }
 
 CategoryFilterDialog::CategoryFilterDialog(PlaylistLibrary* library, PlaylistModel* playlist,
                                            const PlaylistFilterInfo* existing, QWidget* parent)
-    : QDialog(parent), m_library(library), m_playlist(playlist), m_filterId(existing ? existing->id : 0) {
-    setWindowTitle(existing ? tr("Edit Category") : tr("Build Category"));
+    : GlWindow(existing ? tr("Edit Category") : tr("Build Category"), tr("Saved filter"), parent), m_library(library),
+      m_playlist(playlist), m_filterId(existing ? existing->id : 0) {
+    setModal(true);
+    GlCanvas* c = canvas();
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 18, 20, 18);
-    root->setSpacing(8);
-    auto* title = new QLabel(existing ? tr("Edit Category") : tr("Build Virtual Category"), this);
-    title->setObjectName(QStringLiteral("appTitle"));
-    QFont tf = title->font();
-    tf.setBold(true);
-    tf.setPointSize(tf.pointSize() + 3);
-    title->setFont(tf);
-    root->addWidget(title);
-    auto* intro = new QLabel(tr("A category is a saved filter for \"%1\". It shows the playlist's items that match - "
-                                "nothing is copied, and items added later that match appear automatically.")
-                                 .arg(playlist->name()),
-                             this);
-    intro->setObjectName(QStringLiteral("secondaryText"));
-    intro->setWordWrap(true);
-    root->addWidget(intro);
-    root->addSpacing(4);
+    m_intro = new GlLabel(c);
+    m_intro->setText(tr("A category is a saved filter for \"%1\". It shows the playlist's items that match - "
+                        "nothing is copied, and items added later that match appear automatically.")
+                         .arg(playlist->name()));
+    m_intro->setWordWrap(true);
+    m_intro->setPointSize(10);
+    m_intro->setTone(GlLabel::Tone::Dim);
+    m_intro->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_nameLabel = new GlLabel(c);
+    m_nameLabel->setText(tr("Name"));
+    m_nameLabel->setTone(GlLabel::Tone::Dim);
+    m_nameEdit = new GlTextInput(c);
+    m_nameEdit->setPlaceholder(tr("e.g. Anime, Games, Nature"));
+    m_nameEdit->setAccessibleName(tr("Category name"));
 
-    root->addWidget(new QLabel(tr("Name:"), this));
-    m_nameEdit = new QLineEdit(this);
-    m_nameEdit->setPlaceholderText(tr("e.g. Anime, Games, Nature"));
-    m_nameEdit->setMaxLength(80);
-    root->addWidget(m_nameEdit);
-    root->addSpacing(4);
-
-    auto* filterHead = new QHBoxLayout();
-    auto* filterLabel = new QLabel(tr("Filter"), this);
-    filterLabel->setObjectName(QStringLiteral("sectionLabel"));
-    QFont bf = filterLabel->font();
-    bf.setBold(true);
-    filterLabel->setFont(bf);
-    filterHead->addWidget(filterLabel, 1);
-    filterHead->addWidget(new QLabel(tr("Show items matching"), this));
-    m_matchCombo = new QComboBox(this);
+    m_filterHeading = new GlLabel(c);
+    m_filterHeading->setText(tr("Filter"));
+    m_filterHeading->setCaps(true);
+    m_filterHeading->setBold(true);
+    m_filterHeading->setPointSize(8.5);
+    m_filterHeading->setTone(GlLabel::Tone::Accent);
+    m_matchLabel = new GlLabel(c);
+    m_matchLabel->setText(tr("Show items matching"));
+    m_matchLabel->setTone(GlLabel::Tone::Dim);
+    m_matchLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_matchCombo = new GlDropdown(c);
+    m_matchCombo->setCompact(true);
     m_matchCombo->addItem(tr("all conditions"), true);
     m_matchCombo->addItem(tr("any condition"), false);
+    m_matchCombo->setCurrentIndex(0);
     m_matchCombo->setAccessibleName(tr("Show items matching"));
-    filterHead->addWidget(m_matchCombo);
-    root->addLayout(filterHead);
 
-    m_rulesLayout = new QVBoxLayout();
-    m_rulesLayout->setSpacing(6);
-    root->addLayout(m_rulesLayout);
-    auto* addRuleButton = new IconButton(QIcon(), tr("Add Condition"), this);
-    addRuleButton->setObjectName(QStringLiteral("addConditionButton"));
-    applyAddIcon(addRuleButton);
-    connect(addRuleButton, &QPushButton::clicked, this, [this] { addRule(); });
-    auto* addRow = new QHBoxLayout();
-    addRow->addWidget(addRuleButton);
-    addRow->addStretch();
-    root->addLayout(addRow);
+    m_addRuleButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_addRuleButton->setText(tr("Add Condition"));
+    connect(m_addRuleButton, &GlButton::clicked, this, [this] { addRule(); });
 
-    m_previewLabel = new QLabel(this);
-    m_previewLabel->setObjectName(QStringLiteral("sectionLabel"));
-    m_previewLabel->setFont(bf);
-    root->addWidget(m_previewLabel);
-    m_previewList = new QListWidget(this);
-    m_previewList->setSelectionMode(QAbstractItemView::NoSelection);
-    m_previewList->setFocusPolicy(Qt::NoFocus);
+    m_previewLabel = new GlLabel(c);
+    m_previewLabel->setBold(true);
+    m_previewLabel->setPointSize(10.5);
+    m_previewModel = new QStringListModel(this);
+    m_previewList = new GlItemView(c);
+    m_previewList->setModel(m_previewModel);
+    m_previewList->setDelegate(new GlTextDelegate(m_previewList));
+    m_previewList->setMode(GlItemView::Mode::List, QSize(200, 30), 0);
     m_previewList->setAccessibleName(tr("Preview of matching items"));
-    root->addWidget(m_previewList, 1);
 
-    m_errorLabel = new QLabel(this);
-    m_errorLabel->setStyleSheet(QStringLiteral("color: %1;").arg(QLatin1String(Theme::kStatusError)));
-    m_errorLabel->setWordWrap(true);
-    root->addWidget(m_errorLabel);
-
-    auto* buttons = new QHBoxLayout();
-    buttons->addStretch();
-    auto* cancel = new QPushButton(tr("Cancel"), this);
-    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
-    buttons->addWidget(cancel);
-    m_okButton = new QPushButton(existing ? tr("Save") : tr("Create"), this);
-    m_okButton->setObjectName(QStringLiteral("primaryButton"));
-    m_okButton->setDefault(true);
-    connect(m_okButton, &QPushButton::clicked, this, &CategoryFilterDialog::accept);
-    buttons->addWidget(m_okButton);
-    root->addLayout(buttons);
+    m_errorLabel = new GlLabel(c);
+    m_errorLabel->setColor(QColor(QLatin1String(Theme::kStatusError)));
+    m_errorLabel->setPointSize(10);
+    m_cancelButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_cancelButton->setText(tr("Cancel"));
+    connect(m_cancelButton, &GlButton::clicked, this, &QDialog::reject);
+    m_okButton = new GlButton(c, GlButton::Kind::Primary);
+    m_okButton->setText(existing ? tr("Save") : tr("Create"));
+    connect(m_okButton, &GlButton::clicked, this, &CategoryFilterDialog::accept);
 
     // Preview re-queries (SQL over stored metadata) a moment after edits.
     m_previewTimer = new QTimer(this);
     m_previewTimer->setSingleShot(true);
     m_previewTimer->setInterval(150);
     connect(m_previewTimer, &QTimer::timeout, this, &CategoryFilterDialog::updatePreview);
-    connect(m_nameEdit, &QLineEdit::textChanged, m_previewTimer, qOverload<>(&QTimer::start));
-    connect(m_matchCombo, &QComboBox::currentIndexChanged, m_previewTimer, qOverload<>(&QTimer::start));
+    connect(m_nameEdit, &GlTextInput::textChanged, m_previewTimer, qOverload<>(&QTimer::start));
+    connect(m_matchCombo, &GlDropdown::currentIndexChanged, m_previewTimer, qOverload<>(&QTimer::start));
 
     if (existing) {
         m_nameEdit->setText(existing->name);
@@ -179,73 +138,127 @@ CategoryFilterDialog::CategoryFilterDialog(PlaylistLibrary* library, PlaylistMod
     if (m_rules.isEmpty()) {
         addRule({QStringLiteral("name"), QStringLiteral("contains"), QString()});
     }
+    applyIcons();
     updatePreview();
-    m_nameEdit->setFocus();
-    DialogSizing::applyComfortableSize(this, QSize(600, 600));
+    resize(860, 800);
+    setMinimumSize(740, 620);
+    m_nameEdit->focusInput();
 }
 
 void CategoryFilterDialog::addRule(const FilterRule& rule) {
+    GlCanvas* c = canvas();
     RuleRow r;
-    r.row = new QWidget(this);
-    auto* layout = new QHBoxLayout(r.row);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-    r.field = new QComboBox(r.row);
+    r.field = new GlDropdown(c);
+    r.field->setCompact(true);
     for (const FieldSpec& f : fields()) {
         r.field->addItem(tr(f.label), QString::fromLatin1(f.key));
     }
     r.field->setAccessibleName(tr("Condition field"));
-    r.op = new QComboBox(r.row);
+    r.op = new GlDropdown(c);
+    r.op->setCompact(true);
     r.op->setAccessibleName(tr("Condition"));
-    r.value = new QLineEdit(r.row);
+    r.value = new GlTextInput(c);
     r.value->setAccessibleName(tr("Condition value"));
     r.value->setText(rule.value);
-    auto* remove = new IconButton(r.row);
-    remove->setObjectName(QStringLiteral("removeConditionButton"));
-    applyRemoveIcon(remove);
-    remove->setToolTip(tr("Remove this condition"));
-    remove->setAccessibleName(tr("Remove condition"));
-    remove->setFixedWidth(40);
-    layout->addWidget(r.field);
-    layout->addWidget(r.op);
-    layout->addWidget(r.value, 1);
-    layout->addWidget(remove);
-    m_rulesLayout->addWidget(r.row);
+    r.remove = new GlButton(c, GlButton::Kind::Icon);
+    r.remove->setToolTip(tr("Remove this condition"));
+    r.remove->setAccessibleName(tr("Remove condition"));
     m_rules << r;
 
     const int fieldIndex = qMax(0, r.field->findData(rule.field.isEmpty() ? QStringLiteral("name") : rule.field));
     r.field->setCurrentIndex(fieldIndex);
     fillOperators(m_rules.last(), rule.op);
-    QWidget* rowWidget = r.row;
-    connect(r.field, &QComboBox::currentIndexChanged, this, [this, rowWidget] {
+    GlDropdown* fieldBox = r.field;
+    connect(r.field, &GlDropdown::currentIndexChanged, this, [this, fieldBox] {
         for (RuleRow& row : m_rules) {
-            if (row.row == rowWidget) {
+            if (row.field == fieldBox) {
                 fillOperators(row, QString());
             }
         }
         m_previewTimer->start();
     });
-    connect(r.op, &QComboBox::currentIndexChanged, m_previewTimer, qOverload<>(&QTimer::start));
-    connect(r.value, &QLineEdit::textChanged, m_previewTimer, qOverload<>(&QTimer::start));
-    connect(remove, &QPushButton::clicked, this, [this, rowWidget] {
-        if (m_rules.size() <= 1) {
-            for (RuleRow& row : m_rules) {
-                row.value->clear(); // keep one (empty) condition row
-            }
-            return;
-        }
-        for (int i = 0; i < m_rules.size(); ++i) {
-            if (m_rules[i].row == rowWidget) {
-                m_rules.takeAt(i).row->deleteLater();
-                break;
-            }
-        }
-        m_previewTimer->start();
-    });
+    connect(r.op, &GlDropdown::currentIndexChanged, m_previewTimer, qOverload<>(&QTimer::start));
+    connect(r.value, &GlTextInput::textChanged, m_previewTimer, qOverload<>(&QTimer::start));
+    GlButton* removeButton = r.remove;
+    connect(removeButton, &GlButton::clicked, this, [this, removeButton] { removeRule(removeButton); });
+    applyIcons();
     if (!rule.field.isEmpty()) {
         m_previewTimer->start();
     }
-    r.value->setFocus();
+    r.value->focusInput();
+    canvas()->relayout();
+}
+
+void CategoryFilterDialog::removeRule(GlButton* which) {
+    if (m_rules.size() <= 1) {
+        for (RuleRow& row : m_rules) {
+            row.value->clear(); // keep one (empty) condition row
+        }
+        return;
+    }
+    for (int i = 0; i < m_rules.size(); ++i) {
+        if (m_rules[i].remove == which) {
+            RuleRow row = m_rules.takeAt(i);
+            canvas()->setFocusedItem(nullptr);
+            row.field->deleteLater();
+            row.op->deleteLater();
+            row.value->deleteLater();
+            row.remove->deleteLater();
+            break;
+        }
+    }
+    m_previewTimer->start();
+    canvas()->relayout();
+}
+
+void CategoryFilterDialog::layoutContent(const QRectF& content, const QRectF& footer) {
+    const qreal ih = m_intro->heightForWidth(content.width()) + 6;
+    m_intro->setRect(QRectF(content.left(), content.top(), content.width(), ih));
+    qreal y = content.top() + ih + 10;
+    m_nameLabel->setRect(QRectF(content.left(), y, 70, 38));
+    m_nameEdit->setRect(QRectF(content.left() + 76, y, content.width() - 76, 38));
+    y += 54;
+    m_filterHeading->setRect(QRectF(content.left(), y, 160, 34));
+    m_matchCombo->setRect(QRectF(content.right() - 190, y, 190, 34));
+    m_matchLabel->setRect(QRectF(content.right() - 190 - 8 - 200, y, 200, 34));
+    y += 44;
+    for (RuleRow& r : m_rules) {
+        r.field->setRect(QRectF(content.left(), y, 190, 34));
+        r.op->setRect(QRectF(content.left() + 198, y, 170, 34));
+        r.value->setRect(QRectF(content.left() + 376, y, content.width() - 376 - 48, 34));
+        r.remove->setRect(QRectF(content.right() - 40, y - 1, 40, 36));
+        y += 42;
+    }
+    m_addRuleButton->setRect(QRectF(content.left(), y, 170, 36));
+    y += 48;
+    m_previewLabel->setRect(QRectF(content.left(), y, content.width(), 24));
+    y += 28;
+    const qreal errH = 26;
+    m_previewList->setRect(QRectF(content.left(), y, content.width(), std::max<qreal>(80, content.bottom() - errH - 6 - y)));
+    m_errorLabel->setRect(QRectF(content.left(), content.bottom() - errH, content.width(), errH));
+    layoutFooter({m_cancelButton, m_okButton}, footer, 130);
+}
+
+void CategoryFilterDialog::updatePreview() {
+    const QString error = validationError();
+    const FilterDefinition def = definition();
+    const int total = m_playlist->count();
+    QStringList names;
+    if (def.isEmpty()) {
+        m_previewLabel->setText(tr("Preview: add a condition to see which items match"));
+    } else {
+        const QSet<qint64> ids = m_library->matchingItems(m_playlist->id(), &def, QString());
+        m_previewLabel->setText(tr("Preview: %1 of %2 items match").arg(ids.size()).arg(total));
+        for (int row = 0; row < total; ++row) {
+            if (ids.contains(m_playlist->itemIdAt(row))) {
+                names << QFileInfo(m_playlist->pathAt(row)).fileName();
+            }
+        }
+    }
+    m_previewModel->setStringList(names);
+    // Only show an error once the user has typed something to be told about.
+    m_errorLabel->setText(m_nameEdit->text().trimmed().isEmpty() && def.isEmpty() ? QString() : error);
+    m_okButton->setEnabled(error.isEmpty());
 }
 
 void CategoryFilterDialog::fillOperators(RuleRow& row, const QString& selectOp) {
@@ -257,7 +270,7 @@ void CategoryFilterDialog::fillOperators(RuleRow& row, const QString& selectOp) 
             for (const auto& op : f.ops) {
                 row.op->addItem(tr(op.second), QString::fromLatin1(op.first));
             }
-            row.value->setPlaceholderText(tr(f.placeholder));
+            row.value->setPlaceholder(tr(f.placeholder));
         }
     }
     const int opIndex = row.op->findData(selectOp);
@@ -303,27 +316,6 @@ QString CategoryFilterDialog::validationError() const {
     return QString();
 }
 
-void CategoryFilterDialog::updatePreview() {
-    const QString error = validationError();
-    const FilterDefinition def = definition();
-    const int total = m_playlist->count();
-    m_previewList->clear();
-    if (def.isEmpty()) {
-        m_previewLabel->setText(tr("Preview: add a condition to see which items match"));
-    } else {
-        const QSet<qint64> ids = m_library->matchingItems(m_playlist->id(), &def, QString());
-        m_previewLabel->setText(tr("Preview: %1 of %2 items match").arg(ids.size()).arg(total));
-        for (int row = 0; row < total; ++row) {
-            if (ids.contains(m_playlist->itemIdAt(row))) {
-                m_previewList->addItem(QFileInfo(m_playlist->pathAt(row)).fileName());
-            }
-        }
-    }
-    // Only show an error once the user has typed something to be told about.
-    m_errorLabel->setText(m_nameEdit->text().trimmed().isEmpty() && def.isEmpty() ? QString() : error);
-    m_okButton->setEnabled(error.isEmpty());
-}
-
 void CategoryFilterDialog::accept() {
     if (!validationError().isEmpty()) {
         updatePreview();
@@ -340,5 +332,5 @@ void CategoryFilterDialog::accept() {
             return; // errorOccurred already explained it
         }
     }
-    QDialog::accept();
+    GlWindow::accept();
 }

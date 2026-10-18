@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "GlWindow.h"
 #include <QGraphicsView>
 #include <QHash>
 #include <QPointF>
@@ -87,7 +87,7 @@ private:
 // The diagram shows a scope: the whole playlist ("All") or one category's
 // items. Reordering a category only permutes the playlist positions that the
 // category's items already occupy, so other items keep their places.
-class FlowDialog : public QDialog {
+class FlowDialog : public GlWindow {
     Q_OBJECT
 public:
     using ScopeProvider = std::function<QSet<qint64>()>;
@@ -97,6 +97,7 @@ public:
 
     // Re-reads the scope and playlist (after media was added elsewhere).
     void refresh();
+    void layoutContent(const QRectF& content, const QRectF& footer) override;
     // The category this diagram's scope is (0 = the whole playlist); used when
     // "Show now" has to activate the playlist, so it activates this same scope.
     void setScopeCategoryId(qint64 categoryId) { m_scopeCategoryId = categoryId; }
@@ -160,26 +161,30 @@ private:
 
     FlowView* m_view = nullptr;
     QGraphicsScene* m_scene = nullptr;
-    QLabel* m_title = nullptr;
-    QLabel* m_summary = nullptr;
-    QLabel* m_status = nullptr;
-    IconButton* m_addButton = nullptr;
-    QToolButton* m_arrangeButton = nullptr;
-    QCheckBox* m_autoOrganize = nullptr;
+    GlLabel* m_summary = nullptr;
+    GlLabel* m_status = nullptr;
+    GlLabel* m_savedNote = nullptr;
+    GlButton* m_addButton = nullptr;
+    GlButton* m_arrangeButton = nullptr;
+    GlToggle* m_autoOrganize = nullptr;
     int m_columns = 6; // grid columns of the default/auto layout; rows are automatic
-    IconButton* m_zoomInButton = nullptr;
-    IconButton* m_zoomOutButton = nullptr;
-    QLabel* m_zoomLabel = nullptr;
-    QComboBox* m_columnsCombo = nullptr;
-    QLabel* m_rowsLabel = nullptr;
-    QPushButton* m_gridResetButton = nullptr;
+    GlButton* m_zoomInButton = nullptr;
+    GlButton* m_zoomOutButton = nullptr;
+    GlButton* m_fitButton = nullptr;
+    GlButton* m_closeButton = nullptr;
+    GlLabel* m_zoomLabel = nullptr;
+    GlLabel* m_gridLabel = nullptr;
+    GlLabel* m_columnsLabel = nullptr;
+    GlDropdown* m_columnsCombo = nullptr;
+    GlLabel* m_rowsLabel = nullptr;
+    GlButton* m_gridResetButton = nullptr;
     QAction* m_zoomInAction = nullptr;
     QAction* m_zoomOutAction = nullptr;
     QAction* m_zoomResetAction = nullptr;
-    IconButton* m_earlierButton = nullptr;
-    IconButton* m_laterButton = nullptr;
-    QPushButton* m_removeButton = nullptr;
-    QPushButton* m_undoButton = nullptr;
-    QPushButton* m_redoButton = nullptr;
+    GlButton* m_earlierButton = nullptr;
+    GlButton* m_laterButton = nullptr;
+    GlButton* m_removeButton = nullptr;
+    GlButton* m_undoButton = nullptr;
+    GlButton* m_redoButton = nullptr;
     QTimer* m_rebuildTimer = nullptr;
 };

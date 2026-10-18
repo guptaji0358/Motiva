@@ -1,7 +1,10 @@
+#include "GlPopups.h"
 #include "BackupWindow.h"
 #include "BackupManager.h"
 
 #include "DialogSizing.h"
+#include "GlUi.h"
+#include "Theme.h"
 #include <QCheckBox>
 #include <QDesktopServices>
 #include <QDir>
@@ -29,7 +32,7 @@ QString BackupWindow::sizeText(qint64 bytes) {
 bool BackupWindow::confirmAndEnable(BackupManager* manager, QWidget* parent) {
     const BackupManager::EnablePreview preview = manager->previewEnable();
     if (!preview.problem.isEmpty()) {
-        QMessageBox::warning(parent, tr("Media Backup"), preview.problem);
+        GlMessageBox::warning(parent, tr("Media Backup"), preview.problem);
         return false;
     }
     QString text = tr("Turn on local backup of your media?");
@@ -49,10 +52,10 @@ bool BackupWindow::confirmAndEnable(BackupManager* manager, QWidget* parent) {
         info += tr("\n\nWarning: only %1 is free on that drive, so not everything may fit.").arg(sizeText(preview.freeBytes));
         icon = QMessageBox::Warning;
     }
-    QMessageBox box(icon, tr("Media Backup"), text, QMessageBox::NoButton, parent);
+    GlMessageBox box(icon, tr("Media Backup"), text, QMessageBox::NoButton, parent);
     box.setInformativeText(info);
-    QPushButton* cancel = box.addButton(QMessageBox::Cancel);
-    QPushButton* enable = box.addButton(tr("Turn On Backup"), QMessageBox::AcceptRole);
+    auto* cancel = box.addButton(QMessageBox::Cancel);
+    auto* enable = box.addButton(tr("Turn On Backup"), QMessageBox::AcceptRole);
     box.setDefaultButton(cancel);
     box.setEscapeButton(cancel);
     box.exec();
@@ -65,7 +68,7 @@ bool BackupWindow::confirmAndEnable(BackupManager* manager, QWidget* parent) {
 
 bool BackupWindow::confirmAndDisable(BackupManager* manager, QWidget* parent) {
     if (manager->state() == BackupManager::State::Running) {
-        const auto answer = QMessageBox::question(
+        const auto answer = GlMessageBox::question(
             parent, tr("Media Backup"),
             tr("A backup is running. Turn backup off and stop it?\n\nCopies already made are kept; files not yet "
                "copied are simply skipped."),
@@ -78,31 +81,21 @@ bool BackupWindow::confirmAndDisable(BackupManager* manager, QWidget* parent) {
     return true;
 }
 
-BackupWindow::BackupWindow(BackupManager* manager, QWidget* parent) : QDialog(parent), m_manager(manager) {
-    setWindowTitle(tr("Media Backup"));
+BackupWindow::BackupWindow(BackupManager* manager, QWidget* parent)
+    : GlWindow(tr("Media Backup"), tr("Local copies of your media"), parent), m_manager(manager) {
     setModal(false);
+    GlCanvas* c = canvas();
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(24, 20, 24, 18);
-    root->setSpacing(10);
+    m_intro = new GlLabel(c);
+    m_intro->setText(explanationText());
+    m_intro->setWordWrap(true);
+    m_intro->setPointSize(10);
+    m_intro->setTone(GlLabel::Tone::Dim);
+    m_intro->setAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    auto* title = new QLabel(tr("Media Backup"), this);
-    title->setObjectName(QStringLiteral("appTitle"));
-    QFont tf = title->font();
-    tf.setBold(true);
-    tf.setPointSize(tf.pointSize() + 3);
-    title->setFont(tf);
-    root->addWidget(title);
-    auto* intro = new QLabel(explanationText(), this);
-    intro->setObjectName(QStringLiteral("secondaryText"));
-    intro->setWordWrap(true);
-    root->addWidget(intro);
-
-    m_enableCheck = new QCheckBox(tr("Back up my media"), this);
-    QFont bf = m_enableCheck->font();
-    bf.setBold(true);
-    m_enableCheck->setFont(bf);
-    connect(m_enableCheck, &QCheckBox::toggled, this, [this](bool on) {
+    m_enableCheck = new GlToggle(c);
+    m_enableCheck->setText(tr("Back up my media"));
+    connect(m_enableCheck, &GlToggle::toggled, this, [this](bool on) {
         const bool ok = on ? confirmAndEnable(m_manager, this) : confirmAndDisable(m_manager, this);
         if (!ok) {
             m_enableCheck->blockSignals(true);
@@ -111,82 +104,86 @@ BackupWindow::BackupWindow(BackupManager* manager, QWidget* parent) : QDialog(pa
         }
         refresh();
     });
-    root->addWidget(m_enableCheck);
 
-    m_status = new QLabel(this);
+    m_status = new GlLabel(c);
     m_status->setWordWrap(true);
-    root->addWidget(m_status);
-    m_progress = new QProgressBar(this);
-    m_progress->setTextVisible(true);
-    root->addWidget(m_progress);
-    auto* progressRow = new QHBoxLayout();
-    m_progressDetail = new QLabel(this);
-    m_progressDetail->setObjectName(QStringLiteral("secondaryText"));
-    progressRow->addWidget(m_progressDetail, 1);
-    m_cancelButton = new QPushButton(tr("Cancel"), this);
+    m_status->setPointSize(10.5);
+    m_status->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_progress = new GlProgressBar(c);
+    m_progressDetail = new GlLabel(c);
+    m_progressDetail->setPointSize(9.5);
+    m_progressDetail->setTone(GlLabel::Tone::Dim);
+    m_cancelButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_cancelButton->setText(tr("Cancel"));
     m_cancelButton->setToolTip(tr("Stop after the current file. Finished copies are kept."));
-    connect(m_cancelButton, &QPushButton::clicked, m_manager, &BackupManager::cancel);
-    progressRow->addWidget(m_cancelButton);
-    root->addLayout(progressRow);
-    m_problem = new QLabel(this);
+    connect(m_cancelButton, &GlButton::clicked, m_manager, &BackupManager::cancel);
+    m_problem = new GlLabel(c);
     m_problem->setWordWrap(true);
-    m_problem->setStyleSheet(QStringLiteral("color: #d64545;"));
-    root->addWidget(m_problem);
+    m_problem->setColor(QColor(QLatin1String(Theme::kStatusError)));
+    m_problem->setAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    auto* detailsLabel = new QLabel(tr("Backup storage"), this);
-    detailsLabel->setObjectName(QStringLiteral("sectionLabel"));
-    detailsLabel->setFont(bf);
-    root->addWidget(detailsLabel);
-    auto* grid = new QGridLayout();
-    grid->setColumnStretch(1, 1);
-    grid->setHorizontalSpacing(16);
-    grid->setVerticalSpacing(6);
-    auto addRow = [&](int row, const QString& label, QLabel** value) {
-        auto* l = new QLabel(label, this);
-        l->setObjectName(QStringLiteral("secondaryText"));
-        grid->addWidget(l, row, 0, Qt::AlignTop);
-        *value = new QLabel(this);
-        (*value)->setWordWrap(true);
-        (*value)->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        grid->addWidget(*value, row, 1);
+    m_storageHeading = new GlLabel(c);
+    m_storageHeading->setText(tr("Backup storage"));
+    m_storageHeading->setCaps(true);
+    m_storageHeading->setBold(true);
+    m_storageHeading->setPointSize(8.5);
+    m_storageHeading->setTone(GlLabel::Tone::Accent);
+
+    m_stack.addWrapped(m_intro, 14);
+    m_stack.add(m_enableCheck, 46, 6);
+    m_stack.addWrapped(m_status, 8, 22);
+    m_stack.add(m_progress, 26, 4);
+    m_stack.addPair(m_progressDetail, -130, m_cancelButton, 34, 8);
+    m_stack.addWrapped(m_problem, 8, 0);
+    m_stack.addSpace(6);
+    m_stack.add(m_storageHeading, 26, 4);
+    const auto addRow = [&](const QString& label, GlLabel** value) {
+        auto* l = new GlLabel(c);
+        l->setText(label);
+        l->setPointSize(10);
+        l->setTone(GlLabel::Tone::Dim);
+        *value = new GlLabel(c);
+        (*value)->setPointSize(10);
+        m_stack.addPair(l, 150, *value, 26, 2);
     };
-    addRow(0, tr("Location"), &m_locationValue);
-    addRow(1, tr("Backed up"), &m_itemsValue);
-    addRow(2, tr("Space used"), &m_sizeValue);
-    addRow(3, tr("Waiting"), &m_pendingValue);
-    addRow(4, tr("Failed"), &m_failedValue);
-    addRow(5, tr("Unused backups"), &m_unusedValue);
-    root->addLayout(grid);
-    root->addStretch();
+    addRow(tr("Location"), &m_locationValue);
+    addRow(tr("Backed up"), &m_itemsValue);
+    addRow(tr("Space used"), &m_sizeValue);
+    addRow(tr("Waiting"), &m_pendingValue);
+    addRow(tr("Failed"), &m_failedValue);
+    addRow(tr("Unused backups"), &m_unusedValue);
 
-    auto* buttons = new QHBoxLayout();
-    m_backUpNow = new QPushButton(tr("Back Up Now"), this);
+    m_backUpNow = new GlButton(c, GlButton::Kind::Secondary);
+    m_backUpNow->setText(tr("Back Up Now"));
     m_backUpNow->setToolTip(tr("Copy anything not backed up yet and retry failed files"));
-    connect(m_backUpNow, &QPushButton::clicked, m_manager, &BackupManager::backUpNow);
-    buttons->addWidget(m_backUpNow);
-    auto* openFolder = new QPushButton(tr("Open Backup Folder"), this);
-    connect(openFolder, &QPushButton::clicked, this, [this] {
+    connect(m_backUpNow, &GlButton::clicked, m_manager, &BackupManager::backUpNow);
+    m_openFolder = new GlButton(c, GlButton::Kind::Secondary);
+    m_openFolder->setText(tr("Open Backup Folder"));
+    connect(m_openFolder, &GlButton::clicked, this, [this] {
         const QString path = m_manager->provider()->location();
         QDir().mkpath(path);
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     });
-    buttons->addWidget(openFolder);
-    buttons->addStretch();
-    auto* remove = new QPushButton(tr("Remove Backups…"), this);
-    remove->setToolTip(tr("Deleting backups is done in Cleanup & Reset"));
-    connect(remove, &QPushButton::clicked, this, &BackupWindow::openCleanupRequested);
-    buttons->addWidget(remove);
-    auto* close = new QPushButton(tr("Close"), this);
-    connect(close, &QPushButton::clicked, this, &QDialog::close);
-    buttons->addWidget(close);
-    root->addLayout(buttons);
+    m_removeButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_removeButton->setText(tr("Remove Backups…"));
+    m_removeButton->setToolTip(tr("Deleting backups is done in Cleanup & Reset"));
+    connect(m_removeButton, &GlButton::clicked, this, &BackupWindow::openCleanupRequested);
+    m_closeButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_closeButton->setText(tr("Close"));
+    connect(m_closeButton, &GlButton::clicked, this, &QDialog::close);
 
     connect(m_manager, &BackupManager::enabledChanged, this, &BackupWindow::refresh);
     connect(m_manager, &BackupManager::stateChanged, this, &BackupWindow::refresh);
     connect(m_manager, &BackupManager::progressChanged, this, &BackupWindow::refresh);
     connect(m_manager, &BackupManager::statsChanged, this, &BackupWindow::refresh);
     refresh();
-    DialogSizing::applyComfortableSize(this, QSize(560, 600));
+    resize(800, 660);
+    setMinimumSize(700, 560);
+}
+
+void BackupWindow::layoutContent(const QRectF& content, const QRectF& footer) {
+    m_stack.layout(content);
+    layoutFooter({m_backUpNow, m_openFolder, m_removeButton, m_closeButton}, footer, 110);
 }
 
 void BackupWindow::present() {
@@ -201,7 +198,7 @@ void BackupWindow::present() {
 }
 
 void BackupWindow::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    GlWindow::showEvent(event);
     m_manager->refreshStats();
     refresh();
 }
@@ -221,7 +218,7 @@ void BackupWindow::refresh() {
     if (running) {
         m_progress->setRange(0, qMax(1, m_manager->total()));
         m_progress->setValue(m_manager->done());
-        m_progress->setFormat(tr("%1 / %2").arg(m_manager->done()).arg(m_manager->total()));
+        m_progress->setText(tr("%1 / %2").arg(m_manager->done()).arg(m_manager->total()));
         m_progressDetail->setText(m_manager->currentName().isEmpty()
                                       ? QString()
                                       : tr("%1  (%2%)").arg(m_manager->currentName()).arg(m_manager->currentPercent()));
@@ -239,4 +236,5 @@ void BackupWindow::refresh() {
     m_failedValue->setText(QString::number(s.failed));
     m_unusedValue->setText(s.unused == 0 ? tr("none")
                                          : tr("%1 (their media is no longer in any playlist)").arg(s.unused));
+    canvas()->relayout();
 }

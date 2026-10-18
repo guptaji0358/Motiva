@@ -1,14 +1,13 @@
 #pragma once
 
 #include "CleanupManager.h"
+#include "GlWindow.h"
 #include "Theme.h"
 
-#include <QDialog>
-
-class QLabel;
-class QPushButton;
-class QStackedWidget;
-class QVBoxLayout;
+class GlLabel;
+class GlButton;
+class GlRule;
+class GlPanel;
 
 // The dedicated "Cleanup & Reset" window, opened from SettingsDialog's
 // compact "Open Cleanup" entry (one instance, re-focused when opened
@@ -16,12 +15,8 @@ class QVBoxLayout;
 // for the individual operations that genuinely exist, and a Factory Reset
 // danger zone. Pure UI - every operation is carried out by CleanupManager;
 // this window only confirms, shows progress (inline, on its own page) and
-// reports the outcome.
-//
-// Styled from the active Motiva Theme's own palette (Theme::themePalette)
-// and the app-wide button styles - no separate visual system - and
-// restyled on every live theme change (PaletteChange).
-class CleanupWindow : public QDialog {
+// reports the outcome. Drawn on the GL canvas like the other Motiva windows.
+class CleanupWindow : public GlWindow {
     Q_OBJECT
 public:
     explicit CleanupWindow(CleanupManager* manager, QWidget* parent = nullptr);
@@ -29,10 +24,10 @@ public:
     // Shows the window (centered on Motiva's main window the first time),
     // or raises and focuses it if it is already open.
     void present();
+    void layoutContent(const QRectF& content, const QRectF& footer) override;
 
 protected:
     void showEvent(QShowEvent* event) override;
-    void changeEvent(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void reject() override;
     // While an operation runs, input to every other Motiva window is
@@ -42,11 +37,17 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    QWidget* buildLevelsPage();
-    QWidget* buildProgressPage();
-    QWidget* makeLevelRow(const char* dotColor, const QString& title, const QString& description,
-                          QLabel** sizeLabel, const QString& buttonText, CleanupManager::Operation op);
-    void applyThemeStyle();
+    struct LevelRow {
+        GlLabel* dot = nullptr;
+        GlLabel* heading = nullptr;
+        GlLabel* desc = nullptr;
+        GlLabel* size = nullptr;
+        GlButton* button = nullptr;
+        GlRule* rule = nullptr;
+    };
+    LevelRow makeLevelRow(const char* dotColor, const QString& title, const QString& description,
+                          const QString& buttonText, bool destructive, CleanupManager::Operation op);
+    void showPage(int page);
     void onSizesReady(const CleanupManager::Sizes& sizes);
     void showMoreDialog();
     // Operation-specific confirmation; true = proceed.
@@ -60,26 +61,37 @@ private:
 
     CleanupManager* m_manager;
     CleanupManager::Sizes m_sizes;
-    Theme::AppTheme m_styledTheme = Theme::AppTheme::DarkAurora;
     bool m_positioned = false;
+    int m_page = 0; // 0 = cleanup levels, 1 = progress
 
-    QStackedWidget* m_pages = nullptr;
-    QLabel* m_cacheSize = nullptr;
-    QLabel* m_dataSize = nullptr;
-    QLabel* m_combinedSize = nullptr;
-    QLabel* m_backupSize = nullptr;
-    QPushButton* m_closeButton = nullptr;
+    QList<LevelRow> m_levels; // Cache, Data, Cache + Data, Media Backups
+    GlLabel* m_cacheSize = nullptr;
+    GlLabel* m_dataSize = nullptr;
+    GlLabel* m_combinedSize = nullptr;
+    GlLabel* m_backupSize = nullptr;
+    GlRule* m_advancedRule = nullptr;
+    GlLabel* m_advancedHeading = nullptr;
+    GlLabel* m_advancedDesc = nullptr;
+    GlButton* m_moreButton = nullptr;
+    GlPanel* m_dangerCard = nullptr;
+    GlLabel* m_dangerDot = nullptr;
+    GlLabel* m_dangerHeading = nullptr;
+    GlLabel* m_dangerDesc = nullptr;
+    GlButton* m_factoryButton = nullptr;
+    GlLabel* m_safeNote = nullptr;
+    GlButton* m_closeButton = nullptr;
 
     // Progress page
     bool m_running = false;
     // Factory Reset finished: the only way out is restarting Motiva.
     bool m_restartPending = false;
     CleanupManager::Operation m_runningOp = CleanupManager::Operation::DeleteCache;
-    QLabel* m_progressTitle = nullptr;
-    QVBoxLayout* m_stepsLayout = nullptr;
-    QList<QLabel*> m_stepRows;  // step text labels
-    QList<QLabel*> m_stepIcons; // matching SVG status marks
+    GlLabel* m_progressTitle = nullptr;
+    QList<GlLabel*> m_stepIcons;   // matching SVG status marks
+    QList<GlLabel*> m_stepRows;    // step text labels
+    QList<GlLabel*> m_stepDetails; // optional detail lines
+    int m_stepCount = 0;
     QStringList m_stepLabels;
-    QLabel* m_progressStatus = nullptr;
-    QPushButton* m_progressButton = nullptr;
+    GlLabel* m_progressStatus = nullptr;
+    GlButton* m_progressButton = nullptr;
 };

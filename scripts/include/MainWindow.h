@@ -21,6 +21,7 @@
 
 class QVideoWidget;
 class GlCanvas;
+class GlMenu;
 class GlButton;
 class GlLabel;
 class GlPanel;
@@ -322,6 +323,7 @@ private:
     GlButton* m_primaryButton = nullptr;
 
     QSystemTrayIcon* m_tray = nullptr;
+    GlMenu* m_trayMenu = nullptr;
     QAction* m_trayPlayAction = nullptr;
     QAction* m_trayPauseAction = nullptr;
     QAction* m_trayMuteAction = nullptr;

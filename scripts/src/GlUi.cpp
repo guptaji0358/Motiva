@@ -78,7 +78,7 @@ QFont uiFont(qreal pointSize, bool bold) {
 }
 
 bool handleFrameHitTest(QWidget* w, GlCanvas* canvas, const QRectF& captionRect, const void* nativeMsg,
-                        qintptr* result) {
+                        qintptr* result, bool resizable) {
     const MSG* msg = static_cast<const MSG*>(nativeMsg);
     if (msg->message != WM_NCHITTEST || !canvas) {
         return false;
@@ -90,7 +90,7 @@ bool handleFrameHitTest(QWidget* w, GlCanvas* canvas, const QRectF& captionRect,
     const qreal dpr = w->devicePixelRatioF();
     const LONG ww = wr.right - wr.left, hh = wr.bottom - wr.top;
     const LONG edge = LONG(std::lround(7 * dpr));
-    if (!w->isMaximized()) {
+    if (resizable && !w->isMaximized()) {
         const bool l = px < edge, r = px >= ww - edge, t = py < edge, b = py >= hh - edge;
         if (t && l) { *result = HTTOPLEFT; return true; }
         if (t && r) { *result = HTTOPRIGHT; return true; }
@@ -188,6 +188,12 @@ GlItem::GlItem(GlCanvas* canvas) : QObject(canvas), m_canvas(canvas) {
     canvas->registerItem(this);
 }
 
+GlItem::~GlItem() {
+    if (m_canvas) {
+        m_canvas->unregisterItem(this);
+    }
+}
+
 void GlItem::setRect(const QRectF& r) {
     if (r == m_rect) {
         return;
@@ -259,9 +265,9 @@ GlPanel::GlPanel(GlCanvas* canvas) : GlItem(canvas) {}
 void GlPanel::paint(QPainter& p, const Style& s) {
     const qreal rad = m_radius * s.radius;
     GlUi::drawGlassCard(p, rect(), rad, s, 0.0);
-    if (m_block == Block::Warning) {
+    if (m_block == Block::Warning || m_block == Block::Danger) {
         p.save();
-        QColor w = s.warn;
+        QColor w = m_block == Block::Danger ? s.bad : s.warn;
         w.setAlphaF(0.14);
         p.setPen(Qt::NoPen);
         p.setBrush(w);
@@ -324,6 +330,74 @@ void GlLabel::setAlignment(Qt::Alignment a) {
 void GlLabel::setCaps(bool caps) {
     m_caps = caps;
     update();
+}
+
+qreal GlLabel::heightForWidth(qreal width) const {
+    QFont f = GlUi::uiFont(m_pt, m_bold);
+    return QFontMetricsF(f).boundingRect(QRectF(0, 0, std::max<qreal>(10, width), 100000),
+                                         Qt::TextWordWrap | Qt::AlignLeft, m_text).height();
+}
+
+void GlRule::paint(QPainter& p, const Style& s) {
+    const QRectF r = rect();
+    QLinearGradient g(r.left(), r.center().y(), r.right(), r.center().y());
+    QColor a = s.glassEdge, b = s.accent2;
+    b.setAlphaF(0.35);
+    g.setColorAt(0, b);
+    g.setColorAt(0.5, a);
+    g.setColorAt(1, b);
+    p.fillRect(QRectF(r.left(), r.center().y() - 0.5, r.width(), 1.0), g);
+}
+
+GlProgressBar::GlProgressBar(GlCanvas* canvas) : GlItem(canvas) {}
+
+bool GlProgressBar::advance(qreal dt) {
+    return GlItem::advance(dt) || m_indeterminate;
+}
+
+void GlProgressBar::paint(QPainter& p, const Style& s) {
+    const QRectF r = rect();
+    const qreal rad = std::min(r.height() / 2, std::max(5.0, r.height() * 0.5 * s.radius + 2));
+    p.save();
+    p.setPen(QPen(s.glassEdge, 1.0));
+    p.setBrush(s.dark ? QColor(255, 255, 255, 22) : QColor(0, 0, 0, 28));
+    p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), rad, rad);
+    if (m_indeterminate) {
+        const qreal inner = r.width() - 2;
+        const qreal segW = inner * 0.3;
+        const qreal t = std::fmod(canvas()->clock() * 0.55, 1.0);
+        const qreal x = r.left() + 1 + (inner + segW) * t - segW;
+        p.save();
+        QPainterPath clipPath;
+        clipPath.addRoundedRect(r.adjusted(1, 1, -1, -1), rad, rad);
+        p.setClipPath(clipPath);
+        QLinearGradient g(x, 0, x + segW, 0);
+        g.setColorAt(0, QColor(s.accent.red(), s.accent.green(), s.accent.blue(), 0));
+        g.setColorAt(0.5, s.accent2);
+        g.setColorAt(1, QColor(s.accent.red(), s.accent.green(), s.accent.blue(), 0));
+        p.setPen(Qt::NoPen);
+        p.setBrush(g);
+        p.drawRect(QRectF(x, r.top() + 1, segW, r.height() - 2));
+        p.restore();
+        p.restore();
+        return;
+    }
+    const qreal f = std::clamp(qreal(m_value - m_min) / (m_max - m_min), 0.0, 1.0);
+    if (f > 0) {
+        QRectF fill(r.left() + 1, r.top() + 1, std::max<qreal>(rad, (r.width() - 2) * f), r.height() - 2);
+        QLinearGradient g(r.topLeft(), r.topRight());
+        g.setColorAt(0, s.accent);
+        g.setColorAt(1, s.accent2);
+        p.setPen(Qt::NoPen);
+        p.setBrush(g);
+        p.drawRoundedRect(fill, rad, rad);
+    }
+    if (!m_text.isEmpty()) {
+        p.setFont(GlUi::uiFont(9.5, true));
+        p.setPen(s.text);
+        p.drawText(r, Qt::AlignCenter, m_text);
+    }
+    p.restore();
 }
 
 void GlLabel::paint(QPainter& p, const Style& s) {
@@ -2508,6 +2582,7 @@ void GlItemView::mousePressAt(const QPointF& p) {
     m_pressPos = p;
     if (m_pressRow >= 0) {
         setCurrentRow(m_pressRow, false);
+        emit clicked(m_pressRow);
     }
 }
 

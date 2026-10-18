@@ -1,45 +1,43 @@
 #pragma once
 
+#include "GlWindow.h"
 #include "LibraryDatabase.h"
-
-#include <QDialog>
 
 class PlaylistLibrary;
 class PlaylistModel;
-class QComboBox;
-class QLabel;
-class QLineEdit;
-class QListWidget;
-class QPushButton;
+class QStringListModel;
 class QTimer;
-class QVBoxLayout;
+class GlLabel;
+class GlButton;
+class GlDropdown;
+class GlTextInput;
+class GlItemView;
 
-// "Build Category" for the open playlist: a name plus filter conditions on
-// the metadata Motiva actually stores for each item (file name, path,
-// extension, file size) - no content analysis. A live preview shows which
-// of THIS playlist's items match. The result is a saved filter
-// (playlist_filters); nothing is copied. With an existing filter it edits
-// that one ("Edit Category…").
-class CategoryFilterDialog : public QDialog {
+// Builds or edits a rule-based ("virtual") category of one playlist: a name,
+// a match mode and one or more conditions over stored media metadata, with a
+// live preview of the matching items. Nothing is copied.
+class CategoryFilterDialog : public GlWindow {
     Q_OBJECT
 public:
     CategoryFilterDialog(PlaylistLibrary* library, PlaylistModel* playlist, const PlaylistFilterInfo* existing,
                          QWidget* parent = nullptr);
     qint64 filterId() const { return m_filterId; }
+    void layoutContent(const QRectF& content, const QRectF& footer) override;
 
 protected:
     void accept() override;
     void changeEvent(QEvent* event) override;
 
 private:
-    static void applyRemoveIcon(class IconButton* button); // SVG for the active theme
     struct RuleRow {
-        QWidget* row = nullptr;
-        QComboBox* field = nullptr;
-        QComboBox* op = nullptr;
-        QLineEdit* value = nullptr;
+        GlDropdown* field = nullptr;
+        GlDropdown* op = nullptr;
+        GlTextInput* value = nullptr;
+        GlButton* remove = nullptr;
     };
+    void applyIcons();
     void addRule(const FilterRule& rule = {});
+    void removeRule(GlButton* which);
     void fillOperators(RuleRow& row, const QString& selectOp);
     FilterDefinition definition() const;
     void updatePreview();
@@ -48,13 +46,19 @@ private:
     PlaylistLibrary* m_library;
     PlaylistModel* m_playlist;
     qint64 m_filterId = 0;
-    QLineEdit* m_nameEdit = nullptr;
-    QComboBox* m_matchCombo = nullptr;
-    QVBoxLayout* m_rulesLayout = nullptr;
+    GlLabel* m_intro = nullptr;
+    GlLabel* m_nameLabel = nullptr;
+    GlTextInput* m_nameEdit = nullptr;
+    GlLabel* m_filterHeading = nullptr;
+    GlLabel* m_matchLabel = nullptr;
+    GlDropdown* m_matchCombo = nullptr;
     QList<RuleRow> m_rules;
-    QLabel* m_previewLabel = nullptr;
-    QListWidget* m_previewList = nullptr;
-    QLabel* m_errorLabel = nullptr;
-    QPushButton* m_okButton = nullptr;
+    GlButton* m_addRuleButton = nullptr;
+    GlLabel* m_previewLabel = nullptr;
+    GlItemView* m_previewList = nullptr;
+    QStringListModel* m_previewModel = nullptr;
+    GlLabel* m_errorLabel = nullptr;
+    GlButton* m_okButton = nullptr;
+    GlButton* m_cancelButton = nullptr;
     QTimer* m_previewTimer = nullptr;
 };

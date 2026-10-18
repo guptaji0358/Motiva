@@ -1,3 +1,4 @@
+#include "GlPopups.h"
 #include "PlaylistDialog.h"
 #include "NotificationManager.h"
 #include "BackupManager.h"
@@ -1434,7 +1435,7 @@ void PlaylistDialog::onRestoreFromBackup(int row) {
                                    ? tr("A different file already exists at the original location, and Motiva never "
                                         "overwrites files.")
                                    : tr("The original folder isn't available.");
-        QMessageBox::information(this, tr("Restore from Backup"),
+        GlMessageBox::information(this, tr("Restore from Backup"),
                                  reason + QStringLiteral("\n\n") + tr("Choose where to restore the backup."));
         destination = QFileDialog::getSaveFileName(this, tr("Restore from Backup"),
                                                    target.exists() ? QDir::home().filePath(target.fileName())
@@ -1482,7 +1483,7 @@ void PlaylistDialog::onCreatePlaylist(int type) {
     const PlaylistType t = static_cast<PlaylistType>(type);
     bool ok = false;
     const bool mixed = t == PlaylistType::Mixed;
-    const QString name = QInputDialog::getText(
+    const QString name = GlMessageBox::getText(
         this, mixed ? tr("New Mixed Playlist") : t == PlaylistType::Video ? tr("New Video Playlist") : tr("New Image Playlist"),
         tr("Playlist name:"), QLineEdit::Normal,
         mixed ? tr("My Media") : t == PlaylistType::Video ? tr("My Videos") : tr("My Images"), &ok);
@@ -1544,7 +1545,7 @@ void PlaylistDialog::showPlaylistMenu(const QPoint& global, int row) {
         }
     }
     m_playlistList->setCurrentRow(row, false);
-    QMenu menu(this);
+    GlMenu menu(this);
     QAction* rename = menu.addAction(tr("Rename"));
     rename->setShortcut(QKeySequence(Qt::Key_F2));
     QAction* del = menu.addAction(tr("Delete"));
@@ -1572,7 +1573,7 @@ void PlaylistDialog::showItemMenu(const QPoint& global, int sourceRow) {
     selectRow(row); // the menu always acts on the item it was opened for
     const bool available = m->isAvailable(row);
 
-    QMenu menu(this);
+    GlMenu menu(this);
     QAction* showNow = nullptr;
     QAction* findFile = nullptr;
     QAction* moveLeft = nullptr;
@@ -1608,7 +1609,7 @@ void PlaylistDialog::showItemMenu(const QPoint& global, int sourceRow) {
     }
     // Add to Category: the playlist's own categories, as a hierarchy.
     const qint64 itemId = m->itemIdAt(row);
-    QMenu* categoryMenu = menu.addMenu(tr("Add to Category"));
+    GlMenu* categoryMenu = menu.addMenu(tr("Add to Category"));
     categoryMenu->setToolTipsVisible(true);
     QHash<QAction*, qint64> categoryActions;
     if (m_filters.isEmpty()) {
@@ -1791,7 +1792,7 @@ void PlaylistDialog::onFindAll() {
 }
 
 void PlaylistDialog::offerRemovalAfterFailedSearch(qint64 itemId, const QString& path) {
-    QMessageBox box(this);
+    GlMessageBox box(this);
     box.setIcon(QMessageBox::Warning);
     box.setWindowTitle(tr("File could not be found"));
     box.setText(tr("Motiva could not locate this media file anywhere on the available drives."));
@@ -1802,7 +1803,7 @@ void PlaylistDialog::offerRemovalAfterFailedSearch(qint64 itemId, const QString&
            "Cancel (not recommended) keeps the missing entry so it can be recovered later, for example after "
            "reconnecting a drive.")
             .arg(QDir::toNativeSeparators(path)));
-    QPushButton* remove = box.addButton(tr("Remove"), QMessageBox::AcceptRole);
+    auto* remove = box.addButton(tr("Remove"), QMessageBox::AcceptRole);
     box.addButton(QMessageBox::Cancel);
     box.setDefaultButton(remove);
     box.exec();
@@ -1854,7 +1855,7 @@ void PlaylistDialog::onDeletePlaylist() {
     if (!m) {
         return;
     }
-    const auto answer = QMessageBox::question(
+    const auto answer = GlMessageBox::question(
         this, tr("Delete Playlist"),
         tr("Delete the playlist \"%1\"?\n\nOnly the playlist is removed - your %2 files are not deleted.")
             .arg(m->name(), m->isMixed() ? tr("image and video") : m->isVideo() ? tr("video") : tr("image")),
@@ -2027,7 +2028,7 @@ void PlaylistDialog::onClear() {
     const QString question = (m->count() == 1)
         ? tr("Remove the only item from \"%1\"?\n\nThe file is not deleted.").arg(m->name())
         : tr("Remove all %1 items from \"%2\"?\n\nYour files are not deleted.").arg(m->count()).arg(m->name());
-    if (QMessageBox::question(this, tr("Clear Playlist"), question, QMessageBox::Yes | QMessageBox::Cancel,
+    if (GlMessageBox::question(this, tr("Clear Playlist"), question, QMessageBox::Yes | QMessageBox::Cancel,
                               QMessageBox::Cancel) != QMessageBox::Yes) {
         return;
     }
@@ -2308,7 +2309,7 @@ void PlaylistDialog::applyItemFilter() {
 }
 
 void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {
-    QMenu menu(this);
+    GlMenu menu(this);
     const bool user = currentFilter() != nullptr; // "All" can't be edited, renamed or deleted
     const PlaylistFilterInfo* selected = currentFilter();
     QAction* editAction = menu.addAction(selected && selected->isSelection() ? tr("Manage Selection…") : tr("Edit Category…"));
@@ -2326,7 +2327,7 @@ void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {
     // Move the selected category under another one (or back to the top level).
     const qint64 selId = selected ? selected->id : 0;
     const qint64 selParent = selected ? selected->parentId : 0;
-    QMenu* moveMenu = menu.addMenu(tr("Move Category To"));
+    GlMenu* moveMenu = menu.addMenu(tr("Move Category To"));
     moveMenu->setEnabled(user);
     QHash<QAction*, qint64> moveActions;
     QAction* toTop = nullptr;
@@ -2364,7 +2365,7 @@ void PlaylistDialog::showCategoryMenu(const QPoint& globalPos) {
     }
 }
 
-void PlaylistDialog::addCategoryTree(QMenu* menu, qint64 parentId, const QSet<qint64>& excluded,
+void PlaylistDialog::addCategoryTree(GlMenu* menu, qint64 parentId, const QSet<qint64>& excluded,
                                      QHash<QAction*, qint64>& actions,
                                      const std::function<void(const PlaylistFilterInfo&, QAction*)>& decorate) {
     QSet<qint64> known;
@@ -2388,7 +2389,7 @@ void PlaylistDialog::addCategoryTree(QMenu* menu, qint64 parentId, const QSet<qi
             decorate(f, a);
             continue;
         }
-        QMenu* sub = menu->addMenu(label(f.name));
+        GlMenu* sub = menu->addMenu(label(f.name));
         sub->setToolTipsVisible(true);
         QAction* self = sub->addAction(label(f.name));
         actions.insert(self, f.id);
@@ -2442,7 +2443,7 @@ void PlaylistDialog::onNewCategoryFromItems(const QSet<qint64>& itemIds) {
     }
     bool ok = false;
     const QString name =
-        QInputDialog::getText(this, tr("New Category"), tr("Category name:"), QLineEdit::Normal, QString(), &ok).trimmed();
+        GlMessageBox::getText(this, tr("New Category"), tr("Category name:"), QLineEdit::Normal, QString(), &ok).trimmed();
     if (!ok || name.isEmpty()) {
         return;
     }
@@ -2483,15 +2484,15 @@ void PlaylistDialog::onBuildCategory(qint64 parentId) {
     }
     // Two ways to build a category: saved conditions, or a hand-picked
     // selection of this playlist's items.
-    QMessageBox choice(QMessageBox::Question, parentId > 0 ? tr("Build Subcategory") : tr("Build Category"),
+    GlMessageBox choice(QMessageBox::Question, parentId > 0 ? tr("Build Subcategory") : tr("Build Category"),
                        parentId > 0 ? tr("How do you want to build a subcategory of \"%1\"?").arg(parentName)
                                     : tr("How do you want to build a category for \"%1\"?").arg(m->name()),
                        QMessageBox::NoButton, this);
     choice.setInformativeText(tr("Conditions: a saved filter, e.g. file names containing \"anime\". Matching items "
                                  "are included automatically.\n\nSelect from Playlist: tick the items of this playlist "
                                  "yourself. Nothing is copied."));
-    QPushButton* byConditions = choice.addButton(tr("Conditions"), QMessageBox::AcceptRole);
-    QPushButton* bySelection = choice.addButton(tr("Select from Playlist"), QMessageBox::AcceptRole);
+    auto* byConditions = choice.addButton(tr("Conditions"), QMessageBox::AcceptRole);
+    auto* bySelection = choice.addButton(tr("Select from Playlist"), QMessageBox::AcceptRole);
     choice.addButton(QMessageBox::Cancel);
     choice.exec();
     if (choice.clickedButton() == bySelection) {
@@ -2559,7 +2560,7 @@ void PlaylistDialog::onRenameCategory() {
     const PlaylistFilterInfo copy = *filter;
     bool ok = false;
     const QString name =
-        QInputDialog::getText(this, tr("Rename Category"), tr("Category name:"), QLineEdit::Normal, copy.name, &ok).trimmed();
+        GlMessageBox::getText(this, tr("Rename Category"), tr("Category name:"), QLineEdit::Normal, copy.name, &ok).trimmed();
     if (!ok || name.isEmpty() || name == copy.name) {
         return;
     }
@@ -2583,7 +2584,7 @@ void PlaylistDialog::onDeleteCategory() {
         return;
     }
     const PlaylistFilterInfo copy = *filter;
-    const auto answer = QMessageBox::question(
+    const auto answer = GlMessageBox::question(
         this, tr("Delete Category"),
         tr("Delete the category \"%1\"?\n\nOnly the saved filter is removed. Every item stays in \"%2\".")
                 .arg(copy.name, m->name()) +

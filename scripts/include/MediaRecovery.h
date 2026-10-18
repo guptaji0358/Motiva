@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GlWindow.h"
 #include "LibraryDatabase.h" // MediaFacts
 
 #include <QDateTime>
@@ -14,7 +15,7 @@
 class QLabel;
 class QProgressBar;
 class QPushButton;
-class QStackedWidget;
+class QStandardItemModel;
 class QTimer;
 class QTreeWidget;
 
@@ -91,7 +92,7 @@ QString unreachableReason(const QString& path);
 // Result: exec()/finished() code is Found, NotFound or Rejected (cancelled);
 // chosenPath() holds the file for Found. It never changes the library
 // itself - the caller decides (PlaylistLibrary::relocateMedia / remove).
-class MediaRecoveryDialog : public QDialog {
+class MediaRecoveryDialog : public GlWindow {
     Q_OBJECT
 public:
     enum Result { Found = 10, NotFound = 11 };
@@ -100,6 +101,7 @@ public:
     ~MediaRecoveryDialog() override;
 
     QString chosenPath() const { return m_chosen; }
+    void layoutContent(const QRectF& content, const QRectF& footer) override;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -118,12 +120,20 @@ private:
     std::shared_ptr<MediaSearchProgress> m_progress;
     QFutureWatcher<QVector<MediaCandidate>> m_watcher;
 
-    QStackedWidget* m_pages = nullptr;
-    QLabel* m_statusLabel = nullptr;
-    QProgressBar* m_progressBar = nullptr;
+    void showPage(int page);
+    int m_page = 0;
+    GlLabel* m_title0 = nullptr;
+    GlLabel* m_was = nullptr;
+    GlProgressBar* m_progressBar = nullptr;
+    GlLabel* m_statusLabel = nullptr;
+    GlButton* m_cancel0 = nullptr;
+    GlLabel* m_title1 = nullptr;
+    GlLabel* m_hint = nullptr;
+    QStandardItemModel* m_choiceModel = nullptr;
+    GlItemView* m_choices = nullptr;
+    GlButton* m_useButton = nullptr;
+    GlButton* m_cancel1 = nullptr;
     QTimer* m_progressTimer = nullptr;
-    QTreeWidget* m_choices = nullptr;
-    QPushButton* m_useButton = nullptr;
 };
 
 // "Find All at Once": looks for every missing file of a playlist in ONE
@@ -133,7 +143,7 @@ private:
 // Result: Accepted when the user applies; resolutions() then holds the
 // (media id -> new path) repairs to make. It never changes the library
 // itself - the caller does (PlaylistLibrary::relocateMedia).
-class BulkMediaRecoveryDialog : public QDialog {
+class BulkMediaRecoveryDialog : public GlWindow {
     Q_OBJECT
 public:
     struct Entry {
@@ -156,6 +166,7 @@ public:
     int unreadableFolders() const { return m_unreadable; } // folders that couldn't be listed
     bool wasCancelled() const { return m_cancelled; }
     bool failed() const { return m_failed; }
+    void layoutContent(const QRectF& content, const QRectF& footer) override;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -178,15 +189,21 @@ private:
     std::shared_ptr<MediaSearchProgress> m_progress;
     QFutureWatcher<MediaBatchResult> m_watcher;
 
-    QStackedWidget* m_pages = nullptr;
-    QLabel* m_statusLabel = nullptr;
-    QLabel* m_countsLabel = nullptr;
-    QProgressBar* m_progressBar = nullptr;
-    QPushButton* m_stopButton = nullptr;
+    void showPage(int page);
+    void toggleResultRow(int row);
+    int m_page = 0;
+    GlLabel* m_title0 = nullptr;
+    GlLabel* m_how = nullptr;
+    GlProgressBar* m_progressBar = nullptr;
+    GlLabel* m_statusLabel = nullptr;
+    GlLabel* m_countsLabel = nullptr;
+    GlButton* m_stopButton = nullptr;
     QTimer* m_progressTimer = nullptr;
-    QLabel* m_summaryLabel = nullptr;
-    QLabel* m_noteLabel = nullptr;
-    QTreeWidget* m_results = nullptr;
-    QPushButton* m_applyButton = nullptr;
+    GlLabel* m_summaryLabel = nullptr;
+    GlLabel* m_noteLabel = nullptr;
+    QStandardItemModel* m_resultModel = nullptr;
+    GlItemView* m_results = nullptr;
+    GlButton* m_applyButton = nullptr;
+    GlButton* m_closeButton = nullptr;
     bool m_updatingChecks = false;
 };

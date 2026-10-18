@@ -1,4 +1,7 @@
 #include "MediaRecovery.h"
+#include "GlUi.h"
+#include <QStandardItemModel>
+#include <QKeyEvent>
 
 #include "Theme.h"
 
@@ -494,93 +497,105 @@ QVector<MediaCandidate> MediaRecovery::search(const QString& originalPath, const
 // ---------------------------------------------------------------- dialog
 
 MediaRecoveryDialog::MediaRecoveryDialog(const QString& originalPath, const MediaFacts& facts, QWidget* parent)
-    : QDialog(parent), m_originalPath(originalPath), m_facts(facts),
+    : GlWindow(tr("Find File"), tr("Locate missing media"), parent), m_originalPath(originalPath), m_facts(facts),
       m_progress(std::make_shared<MediaSearchProgress>()) {
     const QString name = QFileInfo(originalPath).fileName();
-    setWindowTitle(tr("Find File"));
-    setMinimumWidth(560);
-
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 18, 20, 18);
-    root->setSpacing(12);
-    m_pages = new QStackedWidget(this);
-    root->addWidget(m_pages);
+    GlCanvas* c = canvas();
 
     // Page 0: searching
-    auto* searching = new QWidget(m_pages);
-    auto* sCol = new QVBoxLayout(searching);
-    sCol->setContentsMargins(0, 0, 0, 0);
-    sCol->setSpacing(10);
-    auto* title = new QLabel(tr("Searching for \"%1\"…").arg(name), searching);
-    QFont tf = title->font();
-    tf.setBold(true);
-    title->setFont(tf);
-    sCol->addWidget(title);
-    auto* was = new QLabel(tr("Last known location: %1").arg(QDir::toNativeSeparators(originalPath)), searching);
-    was->setObjectName(QStringLiteral("secondaryText"));
-    was->setWordWrap(true);
-    sCol->addWidget(was);
-    m_progressBar = new QProgressBar(searching);
-    m_progressBar->setRange(0, 0); // indeterminate: the total folder count isn't known in advance
-    m_progressBar->setTextVisible(false);
-    m_progressBar->setMaximumHeight(6);
-    sCol->addWidget(m_progressBar);
-    m_statusLabel = new QLabel(tr("Searching your drives…"), searching);
-    m_statusLabel->setObjectName(QStringLiteral("secondaryText"));
-    sCol->addWidget(m_statusLabel);
-    auto* sButtons = new QDialogButtonBox(QDialogButtonBox::Cancel, searching);
-    connect(sButtons, &QDialogButtonBox::rejected, this, &MediaRecoveryDialog::reject);
-    sCol->addWidget(sButtons);
-    m_pages->addWidget(searching);
+    m_title0 = new GlLabel(c);
+    m_title0->setText(tr("Searching for \"%1\"…").arg(name));
+    m_title0->setBold(true);
+    m_title0->setPointSize(12);
+    m_was = new GlLabel(c);
+    m_was->setText(tr("Last known location: %1").arg(QDir::toNativeSeparators(originalPath)));
+    m_was->setWordWrap(true);
+    m_was->setPointSize(10);
+    m_was->setTone(GlLabel::Tone::Dim);
+    m_was->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_progressBar = new GlProgressBar(c);
+    m_progressBar->setIndeterminate(true); // the total folder count isn't known in advance
+    m_statusLabel = new GlLabel(c);
+    m_statusLabel->setText(tr("Searching your drives…"));
+    m_statusLabel->setPointSize(10);
+    m_statusLabel->setTone(GlLabel::Tone::Dim);
+    m_cancel0 = new GlButton(c, GlButton::Kind::Secondary);
+    m_cancel0->setText(tr("Cancel"));
+    connect(m_cancel0, &GlButton::clicked, this, &MediaRecoveryDialog::reject);
 
     // Page 1: choose among several / weak matches
-    auto* choose = new QWidget(m_pages);
-    auto* cCol = new QVBoxLayout(choose);
-    cCol->setContentsMargins(0, 0, 0, 0);
-    cCol->setSpacing(10);
-    auto* chooseTitle = new QLabel(tr("Which file is \"%1\"?").arg(name), choose);
-    chooseTitle->setFont(tf);
-    cCol->addWidget(chooseTitle);
-    auto* chooseHint = new QLabel(tr("Motiva found more than one possible match, or none it can be sure about. "
-                                     "Choose the right file, or cancel."),
-                                  choose);
-    chooseHint->setObjectName(QStringLiteral("secondaryText"));
-    chooseHint->setWordWrap(true);
-    cCol->addWidget(chooseHint);
-    m_choices = new QTreeWidget(choose);
-    m_choices->setRootIsDecorated(false);
-    m_choices->setUniformRowHeights(true);
-    m_choices->setHeaderLabels({tr("Name"), tr("Folder"), tr("Size"), tr("Modified"), tr("Match")});
-    m_choices->header()->setStretchLastSection(false);
-    m_choices->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    m_choices->setMinimumHeight(180);
-    connect(m_choices, &QTreeWidget::itemSelectionChanged, this,
-            [this] { m_useButton->setEnabled(!m_choices->selectedItems().isEmpty()); });
-    connect(m_choices, &QTreeWidget::itemDoubleClicked, this, [this] { m_useButton->click(); });
-    cCol->addWidget(m_choices, 1);
-    auto* cButtons = new QHBoxLayout();
-    cButtons->addStretch();
-    m_useButton = new QPushButton(tr("Use This File"), choose);
-    m_useButton->setObjectName(QStringLiteral("primaryButton"));
+    m_title1 = new GlLabel(c);
+    m_title1->setText(tr("Which file is \"%1\"?").arg(name));
+    m_title1->setBold(true);
+    m_title1->setPointSize(12);
+    m_hint = new GlLabel(c);
+    m_hint->setText(tr("Motiva found more than one possible match, or none it can be sure about. "
+                       "Choose the right file, or cancel."));
+    m_hint->setWordWrap(true);
+    m_hint->setPointSize(10);
+    m_hint->setTone(GlLabel::Tone::Dim);
+    m_hint->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_choiceModel = new QStandardItemModel(0, 5, this);
+    m_choices = new GlItemView(c);
+    m_choices->setModel(m_choiceModel);
+    m_choices->setDelegate(new GlTableDelegate({0.24, 0.30, 0.10, 0.16, 0.20}, m_choices));
+    m_choices->setMode(GlItemView::Mode::List, QSize(200, 34), 0);
+    m_choices->setAccessibleName(tr("Possible matches"));
+    m_useButton = new GlButton(c, GlButton::Kind::Primary);
+    m_useButton->setText(tr("Use This File"));
     m_useButton->setEnabled(false);
-    connect(m_useButton, &QPushButton::clicked, this, [this] {
-        const auto selected = m_choices->selectedItems();
-        if (!selected.isEmpty()) {
-            m_chosen = selected.first()->data(0, Qt::UserRole).toString();
+    connect(m_useButton, &GlButton::clicked, this, [this] {
+        const int row = m_choices->currentRow();
+        if (row >= 0) {
+            m_chosen = m_choiceModel->item(row, 0)->data(Qt::UserRole).toString();
             done(Found);
         }
     });
-    cButtons->addWidget(m_useButton);
-    auto* cancel = new QPushButton(tr("Cancel"), choose);
-    connect(cancel, &QPushButton::clicked, this, &MediaRecoveryDialog::reject);
-    cButtons->addWidget(cancel);
-    cCol->addLayout(cButtons);
-    m_pages->addWidget(choose);
+    m_cancel1 = new GlButton(c, GlButton::Kind::Secondary);
+    m_cancel1->setText(tr("Cancel"));
+    connect(m_cancel1, &GlButton::clicked, this, &MediaRecoveryDialog::reject);
+    connect(m_choices, &GlItemView::currentRowChanged, this, [this](int row) { m_useButton->setEnabled(row >= 0); });
+    connect(m_choices, &GlItemView::doubleClicked, this, [this] { m_useButton->activate(); });
 
     m_progressTimer = new QTimer(this);
     m_progressTimer->setInterval(250); // display refresh only - the search itself is event-free work on a worker
     connect(m_progressTimer, &QTimer::timeout, this, &MediaRecoveryDialog::updateProgressText);
     connect(&m_watcher, &QFutureWatcher<QVector<MediaCandidate>>::finished, this, &MediaRecoveryDialog::onSearchFinished);
+    showPage(0);
+}
+
+void MediaRecoveryDialog::showPage(int page) {
+    m_page = page;
+    const bool searching = page == 0;
+    for (GlItem* it : QList<GlItem*>{m_title0, m_was, m_progressBar, m_statusLabel, m_cancel0}) {
+        it->setVisible(searching);
+    }
+    for (GlItem* it : QList<GlItem*>{m_title1, m_hint, m_choices, m_useButton, m_cancel1}) {
+        it->setVisible(!searching);
+    }
+    setFixedHeight(searching ? 330 : 560);
+    setMinimumWidth(searching ? 640 : 900);
+    resize(searching ? 680 : 960, searching ? 330 : 560);
+    canvas()->relayout();
+}
+
+void MediaRecoveryDialog::layoutContent(const QRectF& content, const QRectF& footer) {
+    if (m_page == 0) {
+        m_title0->setRect(QRectF(content.left(), content.top(), content.width(), 28));
+        const qreal wh = m_was->heightForWidth(content.width()) + 6;
+        m_was->setRect(QRectF(content.left(), content.top() + 38, content.width(), wh));
+        const qreal y = content.top() + 38 + wh + 16;
+        m_progressBar->setRect(QRectF(content.left(), y, content.width(), 12));
+        m_statusLabel->setRect(QRectF(content.left(), y + 22, content.width(), 24));
+        layoutFooter({m_cancel0}, footer, 120);
+    } else {
+        m_title1->setRect(QRectF(content.left(), content.top(), content.width(), 28));
+        const qreal hh = m_hint->heightForWidth(content.width()) + 6;
+        m_hint->setRect(QRectF(content.left(), content.top() + 34, content.width(), hh));
+        const qreal y = content.top() + 34 + hh + 10;
+        m_choices->setRect(QRectF(content.left(), y, content.width(), std::max<qreal>(120, content.bottom() - y)));
+        layoutFooter({m_cancel1, m_useButton}, footer, 140);
+    }
 }
 
 MediaRecoveryDialog::~MediaRecoveryDialog() {
@@ -591,7 +606,7 @@ MediaRecoveryDialog::~MediaRecoveryDialog() {
 }
 
 void MediaRecoveryDialog::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    GlWindow::showEvent(event);
     if (!m_started) {
         m_started = true;
         startSearch();
@@ -601,7 +616,7 @@ void MediaRecoveryDialog::showEvent(QShowEvent* event) {
 void MediaRecoveryDialog::reject() {
     m_progress->cancel = true;
     qInfo() << "[Recovery] Search cancelled for" << m_originalPath;
-    QDialog::reject();
+    GlWindow::reject();
 }
 
 void MediaRecoveryDialog::startSearch() {
@@ -644,7 +659,8 @@ void MediaRecoveryDialog::onSearchFinished() {
 }
 
 void MediaRecoveryDialog::showChoices(const QVector<MediaCandidate>& candidates) {
-    m_choices->clear();
+    m_choiceModel->removeRows(0, m_choiceModel->rowCount());
+    m_choiceModel->setHorizontalHeaderLabels({tr("Name"), tr("Folder"), tr("Size"), tr("Modified"), tr("Match")});
     for (const MediaCandidate& c : candidates) {
         const QFileInfo fi(c.path);
         QString match;
@@ -657,18 +673,17 @@ void MediaRecoveryDialog::showChoices(const QVector<MediaCandidate>& candidates)
         } else {
             match = tr("Renamed copy (same size and date)");
         }
-        auto* item = new QTreeWidgetItem(m_choices, {fi.fileName(), QDir::toNativeSeparators(fi.absolutePath()),
-                                                     formatSize(c.size),
-                                                     QLocale().toString(c.modified.toLocalTime(), QLocale::ShortFormat),
-                                                     match});
-        item->setData(0, Qt::UserRole, c.path);
-        item->setToolTip(1, c.path);
+        QList<QStandardItem*> cells;
+        for (const QString& text : {fi.fileName(), QDir::toNativeSeparators(fi.absolutePath()), formatSize(c.size),
+                                    QLocale().toString(c.modified.toLocalTime(), QLocale::ShortFormat), match}) {
+            cells << new QStandardItem(text);
+        }
+        cells[0]->setData(c.path, Qt::UserRole);
+        cells[1]->setToolTip(c.path);
+        m_choiceModel->appendRow(cells);
     }
-    for (int col : {0, 2, 3, 4}) {
-        m_choices->resizeColumnToContents(col);
-    }
-    m_pages->setCurrentIndex(1);
-    resize(qMax(width(), 760), qMax(height(), 360));
+    m_useButton->setEnabled(false);
+    showPage(1);
 }
 
 // ---------------------------------------------------------- Find All at Once
@@ -684,102 +699,131 @@ QIcon statusIcon(const char* resource, const char* color) {
 } // namespace
 
 BulkMediaRecoveryDialog::BulkMediaRecoveryDialog(const QVector<Entry>& entries, QWidget* parent)
-    : QDialog(parent), m_entries(entries), m_progress(std::make_shared<MediaSearchProgress>()) {
-    setWindowTitle(tr("Find All at Once"));
-    setMinimumWidth(620);
-
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 18, 20, 18);
-    root->setSpacing(12);
-    m_pages = new QStackedWidget(this);
-    root->addWidget(m_pages);
+    : GlWindow(tr("Find All at Once"), tr("Locate missing media"), parent), m_entries(entries),
+      m_progress(std::make_shared<MediaSearchProgress>()) {
+    GlCanvas* c = canvas();
 
     // Page 0: searching
-    auto* searching = new QWidget(m_pages);
-    auto* sCol = new QVBoxLayout(searching);
-    sCol->setContentsMargins(0, 0, 0, 0);
-    sCol->setSpacing(10);
-    auto* title = new QLabel(tr("Searching for %n missing file(s)…", nullptr, int(m_entries.size())), searching);
-    QFont tf = title->font();
-    tf.setBold(true);
-    title->setFont(tf);
-    sCol->addWidget(title);
-    auto* how = new QLabel(tr("Motiva looks for all of them in a single pass over your folders and drives."), searching);
-    how->setObjectName(QStringLiteral("secondaryText"));
-    how->setWordWrap(true);
-    sCol->addWidget(how);
-    m_progressBar = new QProgressBar(searching);
-    m_progressBar->setRange(0, 0); // indeterminate: the total folder count isn't known in advance
-    m_progressBar->setTextVisible(false);
-    m_progressBar->setMaximumHeight(6);
-    sCol->addWidget(m_progressBar);
-    m_statusLabel = new QLabel(searching);
-    sCol->addWidget(m_statusLabel);
-    m_countsLabel = new QLabel(searching);
-    m_countsLabel->setObjectName(QStringLiteral("secondaryText"));
-    sCol->addWidget(m_countsLabel);
-    auto* sButtons = new QHBoxLayout();
-    sButtons->addStretch();
-    m_stopButton = new QPushButton(tr("Cancel"), searching);
-    connect(m_stopButton, &QPushButton::clicked, this, &BulkMediaRecoveryDialog::reject);
-    sButtons->addWidget(m_stopButton);
-    sCol->addLayout(sButtons);
-    m_pages->addWidget(searching);
+    m_title0 = new GlLabel(c);
+    m_title0->setText(tr("Searching for %n missing file(s)…", nullptr, int(m_entries.size())));
+    m_title0->setBold(true);
+    m_title0->setPointSize(12);
+    m_how = new GlLabel(c);
+    m_how->setText(tr("Motiva looks for all of them in a single pass over your folders and drives."));
+    m_how->setWordWrap(true);
+    m_how->setPointSize(10);
+    m_how->setTone(GlLabel::Tone::Dim);
+    m_how->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_progressBar = new GlProgressBar(c);
+    m_progressBar->setIndeterminate(true); // the total folder count isn't known in advance
+    m_statusLabel = new GlLabel(c);
+    m_statusLabel->setPointSize(10.5);
+    m_countsLabel = new GlLabel(c);
+    m_countsLabel->setPointSize(9.5);
+    m_countsLabel->setTone(GlLabel::Tone::Dim);
+    m_stopButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_stopButton->setText(tr("Cancel"));
+    connect(m_stopButton, &GlButton::clicked, this, &BulkMediaRecoveryDialog::reject);
 
     // Page 1: results
-    auto* results = new QWidget(m_pages);
-    auto* rCol = new QVBoxLayout(results);
-    rCol->setContentsMargins(0, 0, 0, 0);
-    rCol->setSpacing(10);
-    m_summaryLabel = new QLabel(results);
-    m_summaryLabel->setFont(tf);
-    rCol->addWidget(m_summaryLabel);
-    m_noteLabel = new QLabel(results);
-    m_noteLabel->setObjectName(QStringLiteral("secondaryText"));
+    m_summaryLabel = new GlLabel(c);
+    m_summaryLabel->setBold(true);
+    m_summaryLabel->setPointSize(12);
+    m_noteLabel = new GlLabel(c);
     m_noteLabel->setWordWrap(true);
-    rCol->addWidget(m_noteLabel);
-    m_results = new QTreeWidget(results);
-    m_results->setRootIsDecorated(true);
-    m_results->setUniformRowHeights(true);
-    m_results->setIconSize(QSize(kStatusIconSize, kStatusIconSize));
-    m_results->setHeaderLabels({tr("File"), tr("Result"), tr("Location")});
-    m_results->header()->setStretchLastSection(false);
-    m_results->header()->setSectionResizeMode(2, QHeaderView::Stretch);
-    m_results->setMinimumHeight(220);
-    connect(m_results, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int) {
-        if (m_updatingChecks) {
-            return;
+    m_noteLabel->setPointSize(10);
+    m_noteLabel->setTone(GlLabel::Tone::Dim);
+    m_noteLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_resultModel = new QStandardItemModel(0, 3, this);
+    m_results = new GlItemView(c);
+    m_results->setModel(m_resultModel);
+    m_results->setDelegate(new GlTableDelegate({0.34, 0.20, 0.46}, m_results));
+    m_results->setMode(GlItemView::Mode::List, QSize(200, 34), 0);
+    m_results->setAccessibleName(tr("Search results"));
+    connect(m_results, &GlItemView::clicked, this, &BulkMediaRecoveryDialog::toggleResultRow);
+    m_results->setKeyFilter([this](QKeyEvent* e) {
+        if (e->key() == Qt::Key_Space && !(e->modifiers() & Qt::ControlModifier)) {
+            toggleResultRow(m_results->currentRow());
+            return true;
         }
-        m_updatingChecks = true;
-        if (QTreeWidgetItem* parentItem = item->parent(); parentItem && item->checkState(0) == Qt::Checked) {
-            for (int i = 0; i < parentItem->childCount(); ++i) { // one choice per file
-                if (parentItem->child(i) != item) {
-                    parentItem->child(i)->setCheckState(0, Qt::Unchecked);
-                }
-            }
-        }
-        m_updatingChecks = false;
-        updateApplyButton();
+        return false;
     });
-    rCol->addWidget(m_results, 1);
-    auto* rButtons = new QHBoxLayout();
-    rButtons->addStretch();
-    m_applyButton = new QPushButton(tr("Apply"), results);
-    m_applyButton->setObjectName(QStringLiteral("primaryButton"));
+    m_applyButton = new GlButton(c, GlButton::Kind::Primary);
+    m_applyButton->setText(tr("Apply"));
     m_applyButton->setToolTip(tr("Update the saved location of the checked files. No file is moved or changed."));
-    connect(m_applyButton, &QPushButton::clicked, this, &QDialog::accept);
-    rButtons->addWidget(m_applyButton);
-    auto* close = new QPushButton(tr("Close"), results);
-    connect(close, &QPushButton::clicked, this, &QDialog::reject);
-    rButtons->addWidget(close);
-    rCol->addLayout(rButtons);
-    m_pages->addWidget(results);
+    connect(m_applyButton, &GlButton::clicked, this, &QDialog::accept);
+    m_closeButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_closeButton->setText(tr("Close"));
+    connect(m_closeButton, &GlButton::clicked, this, &QDialog::reject);
 
     m_progressTimer = new QTimer(this);
     m_progressTimer->setInterval(250); // display refresh only - the search itself runs on a worker
     connect(m_progressTimer, &QTimer::timeout, this, &BulkMediaRecoveryDialog::updateProgressText);
     connect(&m_watcher, &QFutureWatcher<MediaBatchResult>::finished, this, &BulkMediaRecoveryDialog::onSearchFinished);
+    showPage(0);
     updateProgressText();
+}
+
+void BulkMediaRecoveryDialog::showPage(int page) {
+    m_page = page;
+    const bool searching = page == 0;
+    for (GlItem* it : QList<GlItem*>{m_title0, m_how, m_progressBar, m_statusLabel, m_countsLabel, m_stopButton}) {
+        it->setVisible(searching);
+    }
+    for (GlItem* it : QList<GlItem*>{m_summaryLabel, m_noteLabel, m_results, m_applyButton, m_closeButton}) {
+        it->setVisible(!searching);
+    }
+    setMinimumWidth(searching ? 680 : 960);
+    setMinimumHeight(searching ? 340 : 560);
+    resize(searching ? 720 : 1040, searching ? 340 : 640);
+    canvas()->relayout();
+}
+
+void BulkMediaRecoveryDialog::layoutContent(const QRectF& content, const QRectF& footer) {
+    if (m_page == 0) {
+        m_title0->setRect(QRectF(content.left(), content.top(), content.width(), 28));
+        const qreal hh = m_how->heightForWidth(content.width()) + 6;
+        m_how->setRect(QRectF(content.left(), content.top() + 38, content.width(), hh));
+        const qreal y = content.top() + 38 + hh + 16;
+        m_progressBar->setRect(QRectF(content.left(), y, content.width(), 12));
+        m_statusLabel->setRect(QRectF(content.left(), y + 22, content.width(), 24));
+        m_countsLabel->setRect(QRectF(content.left(), y + 48, content.width(), 22));
+        layoutFooter({m_stopButton}, footer, 120);
+    } else {
+        m_summaryLabel->setRect(QRectF(content.left(), content.top(), content.width(), 28));
+        const bool note = !m_noteLabel->text().isEmpty();
+        const qreal nh = note ? m_noteLabel->heightForWidth(content.width()) + 6 : 0;
+        m_noteLabel->setVisible(note);
+        m_noteLabel->setRect(QRectF(content.left(), content.top() + 34, content.width(), nh));
+        const qreal y = content.top() + 34 + nh + 10;
+        m_results->setRect(QRectF(content.left(), y, content.width(), std::max<qreal>(140, content.bottom() - y)));
+        layoutFooter({m_closeButton, m_applyButton}, footer, 130);
+    }
+}
+
+void BulkMediaRecoveryDialog::toggleResultRow(int row) {
+    if (m_updatingChecks || row < 0 || row >= m_resultModel->rowCount()) {
+        return;
+    }
+    QStandardItem* item = m_resultModel->item(row, 0);
+    if (!item->data(GlTableDelegate::kCheckableRole).toBool()) {
+        return;
+    }
+    m_updatingChecks = true;
+    const bool nowChecked = item->data(Qt::CheckStateRole).toInt() != Qt::Checked;
+    item->setData(nowChecked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole);
+    if (nowChecked && item->data(GlTableDelegate::kDepthRole).toInt() > 0) {
+        // One choice per file: untick the other candidates of the same entry.
+        const int entry = item->data(kRoleEntry).toInt();
+        for (int r = 0; r < m_resultModel->rowCount(); ++r) {
+            QStandardItem* other = m_resultModel->item(r, 0);
+            if (r != row && other->data(GlTableDelegate::kDepthRole).toInt() > 0 && other->data(kRoleEntry).toInt() == entry) {
+                other->setData(Qt::Unchecked, Qt::CheckStateRole);
+            }
+        }
+    }
+    m_updatingChecks = false;
+    updateApplyButton();
 }
 
 BulkMediaRecoveryDialog::~BulkMediaRecoveryDialog() {
@@ -788,7 +832,7 @@ BulkMediaRecoveryDialog::~BulkMediaRecoveryDialog() {
 }
 
 void BulkMediaRecoveryDialog::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    GlWindow::showEvent(event);
     if (!m_started) {
         m_started = true;
         startSearch();
@@ -796,7 +840,7 @@ void BulkMediaRecoveryDialog::showEvent(QShowEvent* event) {
 }
 
 void BulkMediaRecoveryDialog::reject() {
-    if (m_pages->currentIndex() == 0 && m_watcher.isRunning()) {
+    if (m_page == 0 && m_watcher.isRunning()) {
         // Stop the walk, then show whatever it located so far (see
         // onSearchFinished) - never a half-applied state.
         if (!m_stopping) {
@@ -808,7 +852,7 @@ void BulkMediaRecoveryDialog::reject() {
         }
         return;
     }
-    QDialog::reject();
+    GlWindow::reject();
 }
 
 void BulkMediaRecoveryDialog::startSearch() {
@@ -841,12 +885,12 @@ void BulkMediaRecoveryDialog::onSearchFinished() {
         // The worker threw (e.g. out of memory): report it, never crash.
         qWarning() << "[Recovery] Find All failed:" << e.what();
         m_failed = true;
-        QDialog::reject();
+        GlWindow::reject();
         return;
     } catch (...) {
         qWarning() << "[Recovery] Find All failed (unknown error).";
         m_failed = true;
-        QDialog::reject();
+        GlWindow::reject();
         return;
     }
     int convincing = 0;
@@ -865,7 +909,7 @@ void BulkMediaRecoveryDialog::onSearchFinished() {
     m_cancelled = result.cancelled;
     m_unreadable = m_progress->inaccessibleFolders.load();
     if (result.cancelled && convincing == 0) {
-        QDialog::reject(); // nothing to show
+        GlWindow::reject(); // nothing to show
         return;
     }
     showResults(result);
@@ -873,12 +917,30 @@ void BulkMediaRecoveryDialog::onSearchFinished() {
 
 void BulkMediaRecoveryDialog::showResults(const MediaBatchResult& result) {
     m_updatingChecks = true;
-    m_results->clear();
+    m_resultModel->removeRows(0, m_resultModel->rowCount());
     int found = 0;
     int needChoice = 0;
     int notFound = 0;
     int unreachable = 0;
     const int unreadable = m_progress->inaccessibleFolders.load();
+
+    const auto addRow = [this](int depth, const QString& file, const QString& res, const QString& where,
+                               const QIcon& icon, int entry, const QString& path, bool checkable, bool checked,
+                               const QString& tip) {
+        QList<QStandardItem*> cells{new QStandardItem(file), new QStandardItem(res), new QStandardItem(where)};
+        cells[0]->setData(depth, GlTableDelegate::kDepthRole);
+        cells[0]->setData(entry, kRoleEntry);
+        cells[0]->setData(path, kRolePath);
+        cells[0]->setData(checkable, GlTableDelegate::kCheckableRole);
+        if (checkable) {
+            cells[0]->setData(checked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole);
+        }
+        if (!icon.isNull()) {
+            cells[1]->setIcon(icon);
+        }
+        cells[2]->setToolTip(tip);
+        m_resultModel->appendRow(cells);
+    };
 
     for (int i = 0; i < m_entries.size(); ++i) {
         const Entry& e = m_entries[i];
@@ -889,52 +951,33 @@ void BulkMediaRecoveryDialog::showResults(const MediaBatchResult& result) {
                 convincing << c;
             }
         }
-        auto* item = new QTreeWidgetItem(m_results);
-        item->setText(0, QFileInfo(e.path).fileName());
-        item->setToolTip(0, QDir::toNativeSeparators(e.path));
-        item->setData(0, kRoleEntry, i);
+        const QString fileName = QFileInfo(e.path).fileName();
         if (convincing.size() == 1) {
             ++found;
             const MediaCandidate& c = convincing.first();
-            item->setIcon(1, statusIcon(":/status/check.svg", Theme::kStatusSuccess));
-            item->setText(1, tr("Found"));
-            item->setText(2, QDir::toNativeSeparators(QFileInfo(c.path).absolutePath()));
-            item->setToolTip(2, c.path);
-            item->setData(0, kRolePath, c.path);
-            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-            item->setCheckState(0, Qt::Checked);
+            addRow(0, fileName, tr("Found"), QDir::toNativeSeparators(QFileInfo(c.path).absolutePath()),
+                   statusIcon(":/status/check.svg", Theme::kStatusSuccess), i, c.path, true, true, c.path);
         } else if (!candidates.isEmpty()) {
             ++needChoice;
             const QVector<MediaCandidate>& shown = convincing.size() > 1 ? convincing : candidates;
-            item->setIcon(1, statusIcon(":/status/pending.svg", Theme::kStatusWarning));
-            item->setText(1, tr("Choose a match"));
-            item->setText(2, tr("%n possible match(es) - check the right one", nullptr, int(shown.size())));
+            addRow(0, fileName, tr("Choose a match"), tr("%n possible match(es) - check the right one", nullptr, int(shown.size())),
+                   statusIcon(":/status/pending.svg", Theme::kStatusWarning), i, QString(), false, false, QString());
             for (const MediaCandidate& c : shown) {
-                auto* child = new QTreeWidgetItem(item);
                 const QString how = c.isConvincing()  ? tr("Same name, size and date")
                                     : c.sameName      ? (c.sameSize ? tr("Same name and size") : tr("Same name"))
                                                       : tr("Renamed copy (same size and date)");
-                child->setText(0, QFileInfo(c.path).fileName());
-                child->setText(1, how);
-                child->setText(2, QDir::toNativeSeparators(QFileInfo(c.path).absolutePath()));
-                child->setToolTip(2, c.path);
-                child->setData(0, kRoleEntry, i);
-                child->setData(0, kRolePath, c.path);
-                child->setFlags(child->flags() | Qt::ItemIsUserCheckable);
-                child->setCheckState(0, Qt::Unchecked);
+                addRow(1, QFileInfo(c.path).fileName(), how, QDir::toNativeSeparators(QFileInfo(c.path).absolutePath()),
+                       QIcon(), i, c.path, true, false, c.path);
             }
-            item->setExpanded(true);
         } else if (const QString why = MediaRecovery::unreachableReason(e.path); !why.isEmpty()) {
             ++unreachable;
-            item->setIcon(1, statusIcon(":/status/cross.svg", Theme::kStatusWarning));
-            item->setText(1, tr("Couldn't be searched"));
-            item->setText(2, why);
+            addRow(0, fileName, tr("Couldn't be searched"), why, statusIcon(":/status/cross.svg", Theme::kStatusWarning),
+                   i, QString(), false, false, QString());
         } else {
             ++notFound;
-            item->setIcon(1, statusIcon(":/status/cross.svg", Theme::kStatusError));
-            item->setText(1, tr("Not found"));
-            item->setText(2, unreadable > 0 ? tr("Not found in the folders Motiva could read")
-                                            : tr("Not found on the available drives"));
+            addRow(0, fileName, tr("Not found"),
+                   unreadable > 0 ? tr("Not found in the folders Motiva could read") : tr("Not found on the available drives"),
+                   statusIcon(":/status/cross.svg", Theme::kStatusError), i, QString(), false, false, QString());
         }
     }
     m_updatingChecks = false;
@@ -962,14 +1005,8 @@ void BulkMediaRecoveryDialog::showResults(const MediaBatchResult& result) {
     }
     m_noteLabel->setText(notes.join(QLatin1Char(' ')));
     m_noteLabel->setToolTip(result.inaccessible.join(QLatin1Char('\n')));
-    m_noteLabel->setVisible(!notes.isEmpty());
-
-    for (int col : {0, 1}) {
-        m_results->resizeColumnToContents(col);
-    }
     updateApplyButton();
-    m_pages->setCurrentIndex(1);
-    resize(qMax(width(), 800), qMax(height(), 420));
+    showPage(1);
 }
 
 void BulkMediaRecoveryDialog::updateApplyButton() {
@@ -980,20 +1017,14 @@ void BulkMediaRecoveryDialog::updateApplyButton() {
 
 QVector<BulkMediaRecoveryDialog::Resolution> BulkMediaRecoveryDialog::resolutions() const {
     QVector<Resolution> out;
-    if (!m_results) {
+    if (!m_resultModel) {
         return out;
     }
-    auto take = [&](const QTreeWidgetItem* item) {
-        if ((item->flags() & Qt::ItemIsUserCheckable) && item->checkState(0) == Qt::Checked) {
-            const int index = item->data(0, kRoleEntry).toInt();
-            out.push_back({m_entries.at(index).mediaId, item->data(0, kRolePath).toString()});
-        }
-    };
-    for (int i = 0; i < m_results->topLevelItemCount(); ++i) {
-        const QTreeWidgetItem* top = m_results->topLevelItem(i);
-        take(top);
-        for (int c = 0; c < top->childCount(); ++c) {
-            take(top->child(c));
+    for (int r = 0; r < m_resultModel->rowCount(); ++r) {
+        const QStandardItem* item = m_resultModel->item(r, 0);
+        if (item->data(GlTableDelegate::kCheckableRole).toBool() && item->data(Qt::CheckStateRole).toInt() == Qt::Checked) {
+            const int index = item->data(kRoleEntry).toInt();
+            out.push_back({m_entries.at(index).mediaId, item->data(kRolePath).toString()});
         }
     }
     return out;

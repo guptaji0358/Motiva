@@ -1,19 +1,19 @@
 #pragma once
 
-#include <QDialog>
+#include "GlWindow.h"
 
 class BackupManager;
-class QCheckBox;
-class QLabel;
-class QProgressBar;
-class QPushButton;
+class GlToggle;
+class GlLabel;
+class GlProgressBar;
+class GlButton;
 
 // "Media Backup": a utility window opened from Settings. Shows whether
 // backup is on, what it is doing right now (with progress and Cancel), where
 // the copies are and how much space they use. Deleting backups is a
 // destructive action and lives in Cleanup & Reset (the button here opens
 // it), so there is one place for it.
-class BackupWindow : public QDialog {
+class BackupWindow : public GlWindow {
     Q_OBJECT
 public:
     explicit BackupWindow(BackupManager* manager, QWidget* parent = nullptr);
@@ -27,6 +27,8 @@ public:
     static bool confirmAndDisable(BackupManager* manager, QWidget* parent);
     static QString explanationText();
 
+    void layoutContent(const QRectF& content, const QRectF& footer) override;
+
 signals:
     void openCleanupRequested();
 
@@ -38,17 +40,23 @@ private:
     static QString sizeText(qint64 bytes);
 
     BackupManager* m_manager;
-    QCheckBox* m_enableCheck = nullptr;
-    QLabel* m_status = nullptr;
-    QProgressBar* m_progress = nullptr;
-    QLabel* m_progressDetail = nullptr;
-    QPushButton* m_cancelButton = nullptr;
-    QPushButton* m_backUpNow = nullptr;
-    QLabel* m_locationValue = nullptr;
-    QLabel* m_itemsValue = nullptr;
-    QLabel* m_sizeValue = nullptr;
-    QLabel* m_pendingValue = nullptr;
-    QLabel* m_failedValue = nullptr;
-    QLabel* m_unusedValue = nullptr;
-    QLabel* m_problem = nullptr;
+    GlStack m_stack;
+    GlLabel* m_intro = nullptr;
+    GlToggle* m_enableCheck = nullptr;
+    GlLabel* m_status = nullptr;
+    GlProgressBar* m_progress = nullptr;
+    GlLabel* m_progressDetail = nullptr;
+    GlButton* m_cancelButton = nullptr;
+    GlButton* m_backUpNow = nullptr;
+    GlButton* m_openFolder = nullptr;
+    GlButton* m_removeButton = nullptr;
+    GlButton* m_closeButton = nullptr;
+    GlLabel* m_storageHeading = nullptr;
+    GlLabel* m_locationValue = nullptr;
+    GlLabel* m_itemsValue = nullptr;
+    GlLabel* m_sizeValue = nullptr;
+    GlLabel* m_pendingValue = nullptr;
+    GlLabel* m_failedValue = nullptr;
+    GlLabel* m_unusedValue = nullptr;
+    GlLabel* m_problem = nullptr;
 };

@@ -1,3 +1,4 @@
+#include "GlPopups.h"
 #include "FlowDialog.h"
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
@@ -511,8 +512,8 @@ void FlowView::changeEvent(QEvent* event) {
 
 FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const QString& scopeName,
                        ScopeProvider scopeItems, QWidget* parent)
-    : QDialog(parent), m_library(library), m_playlist(playlist), m_scopeName(scopeName),
-      m_scopeItems(std::move(scopeItems)) {
+    : GlWindow(tr("Wallpaper Flow"), tr("Playback order"), parent), m_library(library), m_playlist(playlist),
+      m_scopeName(scopeName), m_scopeItems(std::move(scopeItems)) {
     setWindowTitle(tr("Wallpaper Flow"));
     setWindowIcon(QIcon(QStringLiteral(":/playlist/%1/playlist.svg").arg(Theme::iconVariant(Theme::currentTheme()))));
     {
@@ -535,70 +536,114 @@ FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const 
 
     refresh();
     QTimer::singleShot(0, this, [this] { fitAll(); });
-    DialogSizing::applyComfortableSize(this, QSize(1120, 740));
+    resize(1200, 820);
+    setMinimumSize(1000, 660);
 }
 
 void FlowDialog::applyDirectionIcons() {
     const QString v = Theme::iconVariant(Theme::currentTheme());
     auto icon = [&v](const char* name) { return QIcon(QStringLiteral(":/flow/%1/%2.svg").arg(v, QLatin1String(name))); };
-    m_earlierButton->setStateIcon(icon("earlier"), QIcon(), QIcon(), icon("earlier-disabled"));
-    m_laterButton->setStateIcon(icon("later"), QIcon(), QIcon(), icon("later-disabled"));
-    const auto add = [&v](const char* n) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(n))); };
-    m_addButton->setStateIcon(add("add"), QIcon(), QIcon(), add("add-disabled"));
-    m_zoomInButton->setStateIcon(icon("zoom-in"), QIcon(), QIcon(), icon("zoom-in-disabled"));
-    m_zoomOutButton->setStateIcon(icon("zoom-out"), QIcon(), QIcon(), icon("zoom-out-disabled"));
+    m_earlierButton->setIcon(icon("earlier"));
+    m_laterButton->setIcon(icon("later"));
+    m_addButton->setIcon(QIcon(QStringLiteral(":/playlist/%1/add.svg").arg(v)));
+    m_zoomInButton->setIcon(icon("zoom-in"));
+    m_zoomOutButton->setIcon(icon("zoom-out"));
 }
 
 void FlowDialog::changeEvent(QEvent* event) {
-    QDialog::changeEvent(event);
+    GlWindow::changeEvent(event);
     if ((event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) && m_zoomOutButton) {
         applyDirectionIcons();
     }
 }
 
 void FlowDialog::buildUi() {
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(18, 16, 18, 14);
-    root->setSpacing(8);
-
-    m_title = new QLabel(this);
-    m_title->setObjectName(QStringLiteral("appTitle"));
-    QFont tf = m_title->font();
-    tf.setBold(true);
-    tf.setPointSize(tf.pointSize() + 3);
-    m_title->setFont(tf);
-    root->addWidget(m_title);
-    m_summary = new QLabel(this);
-    m_summary->setObjectName(QStringLiteral("secondaryText"));
+    GlCanvas* c = canvas();
+    const auto makeButton = [c](GlButton::Kind kind, const QString& text, const QString& tip) {
+        auto* b = new GlButton(c, kind);
+        b->setText(text);
+        b->setToolTip(tip);
+        return b;
+    };
+    m_summary = new GlLabel(c);
     m_summary->setWordWrap(true);
-    root->addWidget(m_summary);
+    m_summary->setPointSize(10);
+    m_summary->setTone(GlLabel::Tone::Dim);
+    m_summary->setAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    auto* bar = new QHBoxLayout();
-    bar->setSpacing(8);
-    m_addButton = new IconButton(QIcon(), tr("Add Media"), this);
-    m_addButton->setToolTip(tr("Add files to this playlist (they are added at the end of the sequence). Nothing is copied."));
-    connect(m_addButton, &QPushButton::clicked, this, &FlowDialog::addMediaRequested);
-    bar->addWidget(m_addButton);
+    m_addButton = makeButton(GlButton::Kind::Secondary, tr("Add Media"),
+                             tr("Add files to this playlist (they are added at the end of the sequence). Nothing is copied."));
+    connect(m_addButton, &GlButton::clicked, this, &FlowDialog::addMediaRequested);
+    m_arrangeButton = makeButton(GlButton::Kind::Secondary, tr("Arrange"),
+                                 tr("Rewrite the saved sequence by file name. This changes the order the wallpaper follows "
+                                    "(you can undo it here)."));
+    connect(m_arrangeButton, &GlButton::clicked, this, [this] {
+        GlMenu menu(this);
+        connect(menu.addAction(tr("Sequence A – Z")), &QAction::triggered, this, [this] { sortSequence(true); });
+        connect(menu.addAction(tr("Sequence Z – A")), &QAction::triggered, this, [this] { sortSequence(false); });
+        menu.addSeparator();
+        connect(menu.addAction(tr("Tidy Layout")), &QAction::triggered, this, &FlowDialog::tidyLayout);
+        const QRectF r = m_arrangeButton->rect();
+        menu.exec(canvas()->mapToGlobal(QPoint(int(r.left()), int(r.bottom()) + 4)));
+    });
+    m_earlierButton = makeButton(GlButton::Kind::Secondary, tr("Earlier"),
+                                 tr("Move the selected item one step earlier in the sequence (L or Ctrl+Left)"));
+    connect(m_earlierButton, &GlButton::clicked, this, [this] { moveSelected(-1); });
+    m_laterButton = makeButton(GlButton::Kind::Secondary, tr("Later"),
+                               tr("Move the selected item one step later in the sequence (R or Ctrl+Right)"));
+    connect(m_laterButton, &GlButton::clicked, this, [this] { moveSelected(+1); });
+    m_removeButton = makeButton(GlButton::Kind::Secondary, tr("Remove"),
+                                tr("Remove the selected items from this playlist (Delete). No files are deleted."));
+    connect(m_removeButton, &GlButton::clicked, this, &FlowDialog::removeSelected);
+    m_undoButton = makeButton(GlButton::Kind::Secondary, tr("Undo"), tr("Undo the last sequence change (Ctrl+Z)"));
+    connect(m_undoButton, &GlButton::clicked, this, &FlowDialog::undo);
+    m_redoButton = makeButton(GlButton::Kind::Secondary, tr("Redo"), tr("Redo (Ctrl+Y)"));
+    connect(m_redoButton, &GlButton::clicked, this, &FlowDialog::redo);
+    m_fitButton = makeButton(GlButton::Kind::Secondary, tr("Fit"),
+                             tr("Zoom to show the whole diagram (Ctrl+wheel zooms, Ctrl+0 resets to 100%, middle-drag pans)"));
+    connect(m_fitButton, &GlButton::clicked, this, [this] { fitAll(); });
 
-    m_arrangeButton = new QToolButton(this);
-    m_arrangeButton->setText(tr("Arrange")); // Qt draws the menu indicator
-    m_arrangeButton->setPopupMode(QToolButton::InstantPopup);
-    m_arrangeButton->setToolTip(tr("Rewrite the saved sequence by file name. This changes the order the wallpaper follows "
-                                   "(you can undo it here)."));
-    auto* arrangeMenu = new QMenu(m_arrangeButton);
-    connect(arrangeMenu->addAction(tr("Sequence A – Z")), &QAction::triggered, this, [this] { sortSequence(true); });
-    connect(arrangeMenu->addAction(tr("Sequence Z – A")), &QAction::triggered, this, [this] { sortSequence(false); });
-    arrangeMenu->addSeparator();
-    connect(arrangeMenu->addAction(tr("Tidy Layout")), &QAction::triggered, this, &FlowDialog::tidyLayout);
-    m_arrangeButton->setMenu(arrangeMenu);
-    bar->addWidget(m_arrangeButton);
-
-    m_autoOrganize = new QCheckBox(tr("Auto-organize wiring"), this);
+    m_autoOrganize = new GlToggle(c);
+    m_autoOrganize->setText(tr("Auto-organize wiring"));
     m_autoOrganize->setToolTip(tr("When on, the diagram is laid out automatically whenever items are added, removed or "
                                   "reordered, so the arrows don't cross or overlap. Only node positions change - never the "
                                   "sequence. Turn it off to keep your own arrangement."));
     m_autoOrganize->setChecked(QSettings().value(QStringLiteral("flow/autoOrganize"), false).toBool());
-    connect(m_autoOrganize, &QCheckBox::toggled, this, [this](bool on) {
+
+    m_gridLabel = new GlLabel(c);
+    m_gridLabel->setText(tr("Grid layout"));
+    m_gridLabel->setCaps(true);
+    m_gridLabel->setBold(true);
+    m_gridLabel->setPointSize(8.5);
+    m_gridLabel->setTone(GlLabel::Tone::Accent);
+    m_columnsLabel = new GlLabel(c);
+    m_columnsLabel->setText(tr("Columns"));
+    m_columnsLabel->setTone(GlLabel::Tone::Dim);
+    m_columnsLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_columnsCombo = new GlDropdown(c);
+    m_columnsCombo->setCompact(true);
+    for (int col = kMinColumns; col <= kMaxColumns; ++col) {
+        m_columnsCombo->addItem(QString::number(col), col);
+    }
+    m_columnsCombo->setCurrentIndex(0);
+    m_columnsCombo->setAccessibleName(tr("Grid columns"));
+    m_columnsCombo->setToolTip(tr("How many nodes sit in each row of the layout (default %1). Changing it re-lays out the "
+                                  "diagram; the sequence and the zoom are not changed.").arg(kDefaultColumns));
+    m_rowsLabel = new GlLabel(c);
+    m_rowsLabel->setToolTip(tr("Rows are worked out automatically from the number of items and the columns."));
+    m_rowsLabel->setTone(GlLabel::Tone::Dim);
+    m_gridResetButton = makeButton(GlButton::Kind::Secondary, tr("Reset to Default"), tr("Go back to %1 columns").arg(kDefaultColumns));
+    m_zoomOutButton = makeButton(GlButton::Kind::Icon, QString(), tr("Zoom Out (Ctrl+-)"));
+    m_zoomOutButton->setAccessibleName(tr("Zoom Out"));
+    m_zoomInButton = makeButton(GlButton::Kind::Icon, QString(), tr("Zoom In (Ctrl++)"));
+    m_zoomInButton->setAccessibleName(tr("Zoom In"));
+    m_zoomLabel = new GlLabel(c);
+    m_zoomLabel->setAlignment(Qt::AlignCenter);
+    m_zoomLabel->setTone(GlLabel::Tone::Dim);
+    m_zoomLabel->setToolTip(tr("Current zoom. Reset Zoom: Ctrl+0"));
+    applyDirectionIcons();
+
+    connect(m_autoOrganize, &GlToggle::toggled, this, [this](bool on) {
         QSettings().setValue(QStringLiteral("flow/autoOrganize"), on);
         if (on) {
             m_layoutPending = true;
@@ -609,86 +654,13 @@ void FlowDialog::buildUi() {
             m_status->setText(tr("Auto-organize is off. Your arrangement is kept as it is."));
         }
     });
-    bar->addWidget(m_autoOrganize);
 
-    m_earlierButton = new IconButton(QIcon(), tr("Earlier"), this);
-    m_earlierButton->setToolTip(tr("Move the selected item one step earlier in the sequence (L or Ctrl+Left)"));
-    connect(m_earlierButton, &QPushButton::clicked, this, [this] { moveSelected(-1); });
-    bar->addWidget(m_earlierButton);
-    m_laterButton = new IconButton(QIcon(), tr("Later"), this);
-    m_laterButton->setToolTip(tr("Move the selected item one step later in the sequence (R or Ctrl+Right)"));
-    connect(m_laterButton, &QPushButton::clicked, this, [this] { moveSelected(+1); });
-    bar->addWidget(m_laterButton);
-    m_zoomOutButton = new IconButton(QIcon(), QString(), this);
-    m_zoomInButton = new IconButton(QIcon(), QString(), this);
-    applyDirectionIcons();
-    m_removeButton = new QPushButton(tr("Remove"), this);
-    m_removeButton->setToolTip(tr("Remove the selected items from this playlist (Delete). No files are deleted."));
-    connect(m_removeButton, &QPushButton::clicked, this, &FlowDialog::removeSelected);
-    bar->addWidget(m_removeButton);
-    bar->addSpacing(10);
-    m_undoButton = new QPushButton(tr("Undo"), this);
-    m_undoButton->setToolTip(tr("Undo the last sequence change (Ctrl+Z)"));
-    connect(m_undoButton, &QPushButton::clicked, this, &FlowDialog::undo);
-    bar->addWidget(m_undoButton);
-    m_redoButton = new QPushButton(tr("Redo"), this);
-    m_redoButton->setToolTip(tr("Redo (Ctrl+Y)"));
-    connect(m_redoButton, &QPushButton::clicked, this, &FlowDialog::redo);
-    bar->addWidget(m_redoButton);
-    bar->addStretch();
-    auto* fit = new QPushButton(tr("Fit"), this);
-    fit->setToolTip(tr("Zoom to show the whole diagram (Ctrl+wheel zooms, Ctrl+0 resets to 100%, middle-drag pans)"));
-    connect(fit, &QPushButton::clicked, this, [this] {
-        fitAll();
-    });
-    bar->addWidget(fit);
-    root->addLayout(bar);
-
-    // View row: zoom (how large the diagram is drawn) and grid columns (how the
-    // default layout is arranged). Independent of each other.
-    auto* viewBar = new QHBoxLayout();
-    viewBar->setSpacing(8);
-    auto* gridLabel = new QLabel(tr("Grid layout"), this);
-    gridLabel->setObjectName(QStringLiteral("secondaryText"));
-    viewBar->addWidget(gridLabel);
-    auto* columnsLabel = new QLabel(tr("Columns:"), this);
-    viewBar->addWidget(columnsLabel);
-    m_columnsCombo = new QComboBox(this);
-    for (int c = kMinColumns; c <= kMaxColumns; ++c) {
-        m_columnsCombo->addItem(QString::number(c), c);
-    }
-    m_columnsCombo->setAccessibleName(tr("Grid columns"));
-    m_columnsCombo->setToolTip(tr("How many nodes sit in each row of the layout (default %1). Changing it re-lays out the "
-                                  "diagram; the sequence and the zoom are not changed.").arg(kDefaultColumns));
-    columnsLabel->setBuddy(m_columnsCombo);
-    viewBar->addWidget(m_columnsCombo);
-    m_rowsLabel = new QLabel(this);
-    m_rowsLabel->setToolTip(tr("Rows are worked out automatically from the number of items and the columns."));
-    viewBar->addWidget(m_rowsLabel);
-    m_gridResetButton = new QPushButton(tr("Reset to Default"), this);
-    m_gridResetButton->setToolTip(tr("Go back to %1 columns").arg(kDefaultColumns));
-    viewBar->addWidget(m_gridResetButton);
-    viewBar->addStretch();
-
-    for (IconButton* b : {m_zoomOutButton, m_zoomInButton}) {
-        b->setFixedSize(36, 32);
-        b->setIconSize(QSize(18, 18));
-    }
-    m_zoomOutButton->setAccessibleName(tr("Zoom Out"));
-    m_zoomInButton->setAccessibleName(tr("Zoom In"));
-    m_zoomLabel = new QLabel(this);
-    m_zoomLabel->setMinimumWidth(44);
-    m_zoomLabel->setAlignment(Qt::AlignCenter);
-    m_zoomLabel->setObjectName(QStringLiteral("secondaryText"));
-    viewBar->addWidget(m_zoomOutButton);
-    viewBar->addWidget(m_zoomLabel);
-    viewBar->addWidget(m_zoomInButton);
-    root->addLayout(viewBar);
-
+    // The diagram itself stays a graphics view (a real child widget laid over
+    // the GL canvas); everything around it is drawn by the GL toolkit.
     m_scene = new QGraphicsScene(this);
-    m_view = new FlowView(this);
+    m_view = new FlowView(c);
     m_view->setScene(m_scene);
-    root->addWidget(m_view, 1);
+    m_view->show();
 
     // One QAction per zoom command: the shortcuts and the context menu share it.
     // Ctrl+= is accepted too (the "+" key needs Shift on many layouts). The
@@ -709,19 +681,29 @@ void FlowDialog::buildUi() {
                                                 QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Equal)}, &FlowDialog::zoomIn);
     m_zoomOutAction = makeAction(tr("Zoom Out"), {QKeySequence(Qt::CTRL | Qt::Key_Minus)}, &FlowDialog::zoomOut);
     m_zoomResetAction = makeAction(tr("Reset Zoom"), {QKeySequence(Qt::CTRL | Qt::Key_0)}, &FlowDialog::resetZoom);
-    m_zoomInButton->setToolTip(tr("Zoom In (Ctrl++)"));
-    m_zoomOutButton->setToolTip(tr("Zoom Out (Ctrl+-)"));
-    m_zoomLabel->setToolTip(tr("Current zoom. Reset Zoom: Ctrl+0"));
-    connect(m_zoomInButton, &QPushButton::clicked, this, &FlowDialog::zoomIn);
-    connect(m_zoomOutButton, &QPushButton::clicked, this, &FlowDialog::zoomOut);
+    connect(m_zoomInButton, &GlButton::clicked, this, &FlowDialog::zoomIn);
+    connect(m_zoomOutButton, &GlButton::clicked, this, &FlowDialog::zoomOut);
     connect(m_view, &FlowView::zoomChanged, this, &FlowDialog::updateZoomUi);
-    connect(m_columnsCombo, &QComboBox::activated, this, [this](int index) {
-        setColumns(m_columnsCombo->itemData(index).toInt(), /*persist=*/true);
+    connect(m_columnsCombo, &GlDropdown::currentIndexChanged, this, [this](int index) {
+        setColumns(m_columnsCombo->currentData().toInt(), /*persist=*/true);
+        Q_UNUSED(index);
     });
-    connect(m_gridResetButton, &QPushButton::clicked, this, [this] { setColumns(kDefaultColumns, /*persist=*/true); });
+    connect(m_gridResetButton, &GlButton::clicked, this, [this] { setColumns(kDefaultColumns, /*persist=*/true); });
+    m_status = new GlLabel(c);
+    m_status->setWordWrap(true);
+    m_status->setPointSize(10);
+    m_status->setTone(GlLabel::Tone::Dim);
+    m_status->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_savedNote = new GlLabel(c);
+    m_savedNote->setText(tr("Every change is saved to your library as soon as you make it."));
+    m_savedNote->setPointSize(9.5);
+    m_savedNote->setTone(GlLabel::Tone::Dim);
+    m_closeButton = makeButton(GlButton::Kind::Primary, tr("Close"), QString());
+    connect(m_closeButton, &GlButton::clicked, this, &QDialog::accept);
     updateGridUi();
     updateZoomUi();
     connect(m_scene, &QGraphicsScene::selectionChanged, this, &FlowDialog::updateButtons);
+    m_view->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_view, &QWidget::customContextMenuRequested, this, &FlowDialog::showNodeMenu);
     connect(m_view, &FlowView::nodesMoved, this, [this](const QHash<qint64, QPointF>& moved) {
         // Layout only - the sequence is untouched.
@@ -745,21 +727,6 @@ void FlowDialog::buildUi() {
         }
         m_status->setText(tr("Showing \"%1\" now.").arg(QFileInfo(m_playlist->pathAt(row)).fileName()));
     });
-
-    m_status = new QLabel(this);
-    m_status->setObjectName(QStringLiteral("secondaryText"));
-    m_status->setWordWrap(true);
-    root->addWidget(m_status);
-
-    auto* bottom = new QHBoxLayout();
-    auto* saved = new QLabel(tr("Every change is saved to your library as soon as you make it."), this);
-    saved->setObjectName(QStringLiteral("secondaryText"));
-    bottom->addWidget(saved, 1);
-    auto* close = new QPushButton(tr("Close"), this);
-    close->setDefault(true);
-    connect(close, &QPushButton::clicked, this, &QDialog::accept);
-    bottom->addWidget(close);
-    root->addLayout(bottom);
 
     auto shortcut = [this](const QKeySequence& seq, auto slot) {
         auto* s = new QShortcut(seq, this);
@@ -794,6 +761,53 @@ void FlowDialog::buildUi() {
     itemShortcut({QKeySequence(Qt::CTRL | Qt::Key_Left)}, [this] { moveSelected(-1); });
     itemShortcut({QKeySequence(Qt::CTRL | Qt::Key_Right)}, [this] { moveSelected(+1); });
     itemShortcut({QKeySequence(Qt::Key_Delete)}, [this] { removeSelected(); });
+}
+
+
+void FlowDialog::layoutContent(const QRectF& content, const QRectF& footer) {
+    if (!m_view || !m_closeButton) {
+        return;
+    }
+    const qreal sh = m_summary->heightForWidth(content.width()) + 6;
+    m_summary->setRect(QRectF(content.left(), content.top(), content.width(), sh));
+    qreal y = content.top() + sh + 8;
+    // Row 1: sequence actions.
+    qreal x = content.left();
+    const auto place = [&](GlButton* b, qreal w) {
+        b->setRect(QRectF(x, y, w, 38));
+        x += w + 8;
+    };
+    place(m_addButton, 130);
+    place(m_arrangeButton, 110);
+    place(m_earlierButton, 110);
+    place(m_laterButton, 100);
+    place(m_removeButton, 100);
+    place(m_undoButton, 90);
+    place(m_redoButton, 90);
+    m_fitButton->setRect(QRectF(content.right() - 80, y, 80, 38));
+    y += 46;
+    // Row 2: auto-organize, grid layout, zoom.
+    m_autoOrganize->setRect(QRectF(content.left() - 14, y - 4, 290, 44));
+    qreal gx = content.left() + 290;
+    m_gridLabel->setRect(QRectF(gx, y, 100, 36));
+    gx += 104;
+    m_columnsLabel->setRect(QRectF(gx, y, 74, 36));
+    gx += 82;
+    m_columnsCombo->setRect(QRectF(gx, y, 86, 36));
+    gx += 96;
+    m_rowsLabel->setRect(QRectF(gx, y, 130, 36));
+    gx += 134;
+    m_gridResetButton->setRect(QRectF(gx, y, 150, 36));
+    m_zoomInButton->setRect(QRectF(content.right() - 40, y, 40, 36));
+    m_zoomLabel->setRect(QRectF(content.right() - 40 - 64, y, 64, 36));
+    m_zoomOutButton->setRect(QRectF(content.right() - 40 - 64 - 44, y, 40, 36));
+    y += 46;
+    const qreal statusH = 44;
+    const QRectF viewRect(content.left(), y, content.width(), std::max<qreal>(160, content.bottom() - statusH - 6 - y));
+    m_view->setGeometry(viewRect.toAlignedRect());
+    m_status->setRect(QRectF(content.left(), content.bottom() - statusH, content.width(), statusH));
+    m_savedNote->setRect(QRectF(footer.left() + 12, footer.top() + 12, footer.width() - 160, 26));
+    m_closeButton->setRect(QRectF(footer.right() - 130, footer.top() + 6, 130, 40));
 }
 
 void FlowDialog::showSelectedNow() {
@@ -931,7 +945,7 @@ void FlowDialog::rebuild() {
     const bool whole = n == m_playlist->count();
     // Say when this diagram IS what the wallpaper is currently rotating.
     const bool isActiveSequence = m_playlist->isActive() && m_library->activeCategoryId() == m_scopeCategoryId;
-    m_title->setText(isActiveSequence ? tr("Wallpaper Flow — %1  (active sequence)").arg(m_scopeName)
+    setWindowTitle(isActiveSequence ? tr("Wallpaper Flow — %1  (active sequence)").arg(m_scopeName)
                                       : tr("Wallpaper Flow — %1").arg(m_scopeName));
     m_summary->setText(timingSummary() + QLatin1Char(' ') +
                        (whole ? tr("#n is an item's place in the sequence.")
@@ -939,6 +953,7 @@ void FlowDialog::rebuild() {
                                    "within this view.")
                                     .arg(n)
                                     .arg(m_playlist->count())));
+    canvas()->relayout();
     if (n == 0) {
         m_status->setText(tr("There is nothing to show here yet. Use Add Media."));
     } else if (m_status->text().isEmpty()) {
@@ -1047,7 +1062,7 @@ void FlowDialog::moveSelectedRelativeToOther(bool before) {
         }
     }
     bool ok = false;
-    const QString choice = QInputDialog::getItem(this, before ? tr("Move Before") : tr("Move After"),
+    const QString choice = GlMessageBox::getItem(this, before ? tr("Move Before") : tr("Move After"),
                                                  before ? tr("Place the selected item before:") : tr("Place the selected item after:"),
                                                  names, 0, false, &ok);
     if (!ok) {
@@ -1076,7 +1091,7 @@ void FlowDialog::sortSequence(bool ascending) {
     if (ids.size() < 2) {
         return;
     }
-    if (QMessageBox::question(this, tr("Arrange Sequence"),
+    if (GlMessageBox::question(this, tr("Arrange Sequence"),
                               tr("Rewrite the saved sequence of %1 by file name (%2)?\n\nThis changes the order the "
                                  "wallpaper follows. You can undo it with Undo.")
                                   .arg(m_scopeName, ascending ? tr("A – Z") : tr("Z – A")),
@@ -1109,7 +1124,7 @@ void FlowDialog::removeSelected() {
     const QString question = selected.size() == 1
         ? tr("Remove this item from \"%1\"?\n\nThe file is not deleted.").arg(m_playlist->name())
         : tr("Remove %1 items from \"%2\"?\n\nYour files are not deleted.").arg(selected.size()).arg(m_playlist->name());
-    if (QMessageBox::question(this, tr("Remove from Playlist"), question, QMessageBox::Yes | QMessageBox::Cancel,
+    if (GlMessageBox::question(this, tr("Remove from Playlist"), question, QMessageBox::Yes | QMessageBox::Cancel,
                               QMessageBox::Cancel) != QMessageBox::Yes) {
         return;
     }
@@ -1274,7 +1289,7 @@ void FlowDialog::showNodeMenu(const QPoint& viewPos) {
     if (count == 0) {
         return;
     }
-    QMenu menu(this);
+    GlMenu menu(this);
     // Shortcuts are shown for reference; the dialog's own shortcuts do the work.
     auto menuAction = [&menu](const QString& text, const QKeySequence& key) {
         QAction* a = menu.addAction(text);

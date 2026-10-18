@@ -1,100 +1,87 @@
 #include "CategoryItemPickerDialog.h"
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
-#include "DialogSizing.h"
 #include "Theme.h"
 
 #include <QFileInfo>
-#include <QHBoxLayout>
 #include <QIcon>
-#include <QLabel>
-#include <QLineEdit>
-#include <QListWidget>
+#include <QKeyEvent>
 #include <QPixmap>
-#include <QPushButton>
-#include <QVBoxLayout>
+#include <QStandardItemModel>
 
 namespace {
 constexpr int kItemIdRole = Qt::UserRole + 10;
 constexpr int kRowRole = Qt::UserRole + 11;
-constexpr int kIconSize = 40;
 } // namespace
 
 CategoryItemPickerDialog::CategoryItemPickerDialog(PlaylistLibrary* library, PlaylistModel* playlist,
                                                    const QString& existingName, const QSet<qint64>& preselected,
                                                    qint64 existingId, QWidget* parent)
-    : QDialog(parent), m_library(library), m_playlist(playlist), m_existingId(existingId),
-      m_creating(existingName.isEmpty()) {
-    setWindowTitle(m_creating ? tr("Select from Playlist") : tr("Manage Selection"));
+    : GlWindow(existingName.isEmpty() ? tr("Select from \"%1\"").arg(playlist->name())
+                                      : tr("Select media for \"%1\"").arg(existingName),
+               existingName.isEmpty() ? tr("Select from playlist") : tr("Manage selection"), parent),
+      m_library(library), m_playlist(playlist), m_existingId(existingId), m_creating(existingName.isEmpty()) {
+    setModal(true);
+    GlCanvas* c = canvas();
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 18, 20, 18);
-    root->setSpacing(8);
+    m_intro = new GlLabel(c);
+    m_intro->setText(tr("Tick the items of \"%1\" that belong in this category. Nothing is copied - the category "
+                        "only points at items already in the playlist.")
+                         .arg(playlist->name()));
+    m_intro->setWordWrap(true);
+    m_intro->setPointSize(10);
+    m_intro->setTone(GlLabel::Tone::Dim);
+    m_intro->setAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    auto* title = new QLabel(m_creating ? tr("Select from \"%1\"").arg(playlist->name())
-                                        : tr("Select media for \"%1\"").arg(existingName),
-                             this);
-    title->setObjectName(QStringLiteral("appTitle"));
-    QFont tf = title->font();
-    tf.setBold(true);
-    tf.setPointSize(tf.pointSize() + 3);
-    title->setFont(tf);
-    root->addWidget(title);
-    auto* intro = new QLabel(tr("Tick the items of \"%1\" that belong in this category. Nothing is copied - the category "
-                                "only points at items already in the playlist.")
-                                 .arg(playlist->name()),
-                             this);
-    intro->setObjectName(QStringLiteral("secondaryText"));
-    intro->setWordWrap(true);
-    root->addWidget(intro);
+    m_nameLabel = new GlLabel(c);
+    m_nameLabel->setText(tr("Name"));
+    m_nameLabel->setTone(GlLabel::Tone::Dim);
+    m_nameEdit = new GlTextInput(c);
+    m_nameEdit->setPlaceholder(tr("e.g. Anime, Games, Nature"));
+    m_nameEdit->setAccessibleName(tr("Category name"));
+    m_nameLabel->setVisible(m_creating);
+    m_nameEdit->setVisible(m_creating);
 
-    if (m_creating) {
-        root->addWidget(new QLabel(tr("Name:"), this));
-        m_nameEdit = new QLineEdit(this);
-        m_nameEdit->setPlaceholderText(tr("e.g. Anime, Games, Nature"));
-        m_nameEdit->setMaxLength(80);
-        m_nameEdit->setAccessibleName(tr("Category name"));
-        root->addWidget(m_nameEdit);
-    }
-
-    m_search = new QLineEdit(this);
-    m_search->setPlaceholderText(tr("Search these items…"));
-    m_search->setClearButtonEnabled(true);
+    m_search = new GlTextInput(c);
+    m_search->setPlaceholder(tr("Search these items…"));
+    m_search->setClearable(true);
     m_search->setAccessibleName(tr("Search items to select"));
-    root->addWidget(m_search);
 
-    m_countLabel = new QLabel(this);
-    m_countLabel->setObjectName(QStringLiteral("sectionLabel"));
-    QFont bf = m_countLabel->font();
-    bf.setBold(true);
-    m_countLabel->setFont(bf);
-    root->addWidget(m_countLabel);
+    m_countLabel = new GlLabel(c);
+    m_countLabel->setBold(true);
+    m_countLabel->setPointSize(10.5);
 
-    m_list = new QListWidget(this);
-    m_list->setSelectionMode(QAbstractItemView::NoSelection);
-    m_list->setIconSize(QSize(kIconSize, kIconSize));
-    m_list->setUniformItemSizes(true);
-    m_list->setAccessibleName(tr("Items of the playlist"));
-    root->addWidget(m_list, 1);
-
+    m_model = new QStandardItemModel(this);
     for (int row = 0; row < playlist->count(); ++row) {
-        const QString file = QFileInfo(playlist->pathAt(row)).fileName();
-        auto* item = new QListWidgetItem(file, m_list);
-        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        auto* item = new QStandardItem(QFileInfo(playlist->pathAt(row)).fileName());
         const qint64 id = playlist->itemIdAt(row);
-        item->setCheckState(preselected.contains(id) ? Qt::Checked : Qt::Unchecked);
-        item->setData(kItemIdRole, id);
-        item->setData(kRowRole, row);
+        item->setData(preselected.contains(id) ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole);
+        item->setData(id, kItemIdRole);
+        item->setData(row, kRowRole);
         item->setToolTip(playlist->pathAt(row));
         const QImage thumb = playlist->index(row, 0).data(PlaylistModel::ThumbnailRole).value<QImage>();
         if (!thumb.isNull()) {
             item->setIcon(QIcon(QPixmap::fromImage(thumb)));
         }
+        m_model->appendRow(item);
     }
+    m_list = new GlItemView(c);
+    m_list->setModel(m_model);
+    m_list->setDelegate(new GlCheckRowDelegate(m_list));
+    m_list->setMode(GlItemView::Mode::List, QSize(200, 54), 2);
+    m_list->setAccessibleName(tr("Items of the playlist"));
+    connect(m_list, &GlItemView::clicked, this, &CategoryItemPickerDialog::toggleRow);
+    m_list->setKeyFilter([this](QKeyEvent* e) {
+        if (e->key() == Qt::Key_Space && !(e->modifiers() & Qt::ControlModifier)) {
+            toggleRow(m_list->currentRow());
+            return true;
+        }
+        return false;
+    });
     // Previews arrive lazily - fill in the icons as they load.
     connect(playlist, &QAbstractItemModel::dataChanged, this, [this](const QModelIndex& from, const QModelIndex& to) {
-        for (int i = 0; i < m_list->count(); ++i) {
-            QListWidgetItem* item = m_list->item(i);
+        for (int i = 0; i < m_model->rowCount(); ++i) {
+            QStandardItem* item = m_model->item(i);
             const int row = item->data(kRowRole).toInt();
             if (row >= from.row() && row <= to.row() && item->icon().isNull()) {
                 const QImage thumb = m_playlist->index(row, 0).data(PlaylistModel::ThumbnailRole).value<QImage>();
@@ -105,60 +92,82 @@ CategoryItemPickerDialog::CategoryItemPickerDialog(PlaylistLibrary* library, Pla
         }
     });
 
-    auto* bulk = new QHBoxLayout();
-    auto* selectAll = new QPushButton(tr("Select All"), this);
-    selectAll->setToolTip(tr("Tick every item currently shown (respects the search)"));
-    auto* clear = new QPushButton(tr("Clear Selection"), this);
-    clear->setToolTip(tr("Untick every item"));
-    bulk->addWidget(selectAll);
-    bulk->addWidget(clear);
-    bulk->addStretch();
-    root->addLayout(bulk);
-    connect(selectAll, &QPushButton::clicked, this, [this] {
-        for (int i = 0; i < m_list->count(); ++i) {
-            if (!m_list->item(i)->isHidden()) {
-                m_list->item(i)->setCheckState(Qt::Checked);
+    m_selectAll = new GlButton(c, GlButton::Kind::Secondary);
+    m_selectAll->setText(tr("Select All"));
+    m_selectAll->setToolTip(tr("Tick every item currently shown (respects the search)"));
+    m_clear = new GlButton(c, GlButton::Kind::Secondary);
+    m_clear->setText(tr("Clear Selection"));
+    m_clear->setToolTip(tr("Untick every item"));
+    connect(m_selectAll, &GlButton::clicked, this, [this] {
+        for (int i = 0; i < m_model->rowCount(); ++i) {
+            if (!m_list->isRowHidden(i)) {
+                m_model->item(i)->setData(Qt::Checked, Qt::CheckStateRole);
             }
         }
+        updateCount();
     });
-    connect(clear, &QPushButton::clicked, this, [this] {
-        for (int i = 0; i < m_list->count(); ++i) {
-            m_list->item(i)->setCheckState(Qt::Unchecked);
+    connect(m_clear, &GlButton::clicked, this, [this] {
+        for (int i = 0; i < m_model->rowCount(); ++i) {
+            m_model->item(i)->setData(Qt::Unchecked, Qt::CheckStateRole);
         }
+        updateCount();
     });
 
-    m_errorLabel = new QLabel(this);
-    m_errorLabel->setStyleSheet(QStringLiteral("color: %1;").arg(QLatin1String(Theme::kStatusError)));
-    m_errorLabel->setWordWrap(true);
-    root->addWidget(m_errorLabel);
+    m_errorLabel = new GlLabel(c);
+    m_errorLabel->setColor(QColor(QLatin1String(Theme::kStatusError)));
+    m_errorLabel->setPointSize(10);
+    m_cancelButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_cancelButton->setText(tr("Cancel"));
+    connect(m_cancelButton, &GlButton::clicked, this, &QDialog::reject);
+    m_okButton = new GlButton(c, GlButton::Kind::Primary);
+    m_okButton->setText(m_creating ? tr("Add Selected") : tr("Save"));
+    connect(m_okButton, &GlButton::clicked, this, &CategoryItemPickerDialog::accept);
 
-    auto* buttons = new QHBoxLayout();
-    buttons->addStretch();
-    auto* cancel = new QPushButton(tr("Cancel"), this);
-    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
-    buttons->addWidget(cancel);
-    m_okButton = new QPushButton(m_creating ? tr("Add Selected") : tr("Save"), this);
-    m_okButton->setObjectName(QStringLiteral("primaryButton"));
-    m_okButton->setDefault(true);
-    connect(m_okButton, &QPushButton::clicked, this, &CategoryItemPickerDialog::accept);
-    buttons->addWidget(m_okButton);
-    root->addLayout(buttons);
-
-    connect(m_search, &QLineEdit::textChanged, this, &CategoryItemPickerDialog::applySearch);
-    connect(m_list, &QListWidget::itemChanged, this, &CategoryItemPickerDialog::updateCount);
-    if (m_nameEdit) {
-        connect(m_nameEdit, &QLineEdit::textChanged, this, &CategoryItemPickerDialog::updateCount);
-    }
+    connect(m_search, &GlTextInput::textChanged, this, &CategoryItemPickerDialog::applySearch);
+    connect(m_nameEdit, &GlTextInput::textChanged, this, &CategoryItemPickerDialog::updateCount);
+    connect(m_nameEdit, &GlTextInput::editingFinished, this, [this] { m_search->focusInput(); });
     updateCount();
-    (m_creating ? static_cast<QWidget*>(m_nameEdit) : static_cast<QWidget*>(m_search))->setFocus();
-    DialogSizing::applyComfortableSize(this, QSize(580, 640));
+    resize(760, 800);
+    setMinimumSize(640, 600);
+    (m_creating ? m_nameEdit : m_search)->focusInput();
+}
+
+void CategoryItemPickerDialog::toggleRow(int row) {
+    if (row < 0 || row >= m_model->rowCount()) {
+        return;
+    }
+    QStandardItem* item = m_model->item(row);
+    item->setData(item->data(Qt::CheckStateRole).toInt() == Qt::Checked ? Qt::Unchecked : Qt::Checked, Qt::CheckStateRole);
+    updateCount();
+}
+
+void CategoryItemPickerDialog::layoutContent(const QRectF& content, const QRectF& footer) {
+    const qreal ih = m_intro->heightForWidth(content.width()) + 6;
+    m_intro->setRect(QRectF(content.left(), content.top(), content.width(), ih));
+    qreal y = content.top() + ih + 8;
+    if (m_creating) {
+        m_nameLabel->setRect(QRectF(content.left(), y, 70, 38));
+        m_nameEdit->setRect(QRectF(content.left() + 76, y, content.width() - 76, 38));
+        y += 46;
+    }
+    m_search->setRect(QRectF(content.left(), y, content.width(), 38));
+    y += 46;
+    m_countLabel->setRect(QRectF(content.left(), y, content.width(), 24));
+    y += 28;
+    const qreal bottomRows = 8 + 38 + 8 + 24;
+    m_list->setRect(QRectF(content.left(), y, content.width(), std::max<qreal>(120, content.bottom() - bottomRows - y)));
+    const qreal by = content.bottom() - bottomRows + 8;
+    m_selectAll->setRect(QRectF(content.left(), by, 130, 38));
+    m_clear->setRect(QRectF(content.left() + 140, by, 160, 38));
+    m_errorLabel->setRect(QRectF(content.left(), content.bottom() - 24, content.width(), 24));
+    layoutFooter({m_cancelButton, m_okButton}, footer, 140);
 }
 
 QSet<qint64> CategoryItemPickerDialog::selectedItemIds() const {
     QSet<qint64> ids;
-    for (int i = 0; i < m_list->count(); ++i) {
-        const QListWidgetItem* item = m_list->item(i);
-        if (item->checkState() == Qt::Checked) {
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const QStandardItem* item = m_model->item(i);
+        if (item->data(Qt::CheckStateRole).toInt() == Qt::Checked) {
             ids.insert(item->data(kItemIdRole).toLongLong());
         }
     }
@@ -168,9 +177,8 @@ QSet<qint64> CategoryItemPickerDialog::selectedItemIds() const {
 // Search only hides rows in this list; checked state is kept for hidden rows.
 void CategoryItemPickerDialog::applySearch() {
     const QStringList terms = m_search->text().simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    for (int i = 0; i < m_list->count(); ++i) {
-        QListWidgetItem* item = m_list->item(i);
-        const QString haystack = m_playlist->pathAt(item->data(kRowRole).toInt());
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const QString haystack = m_playlist->pathAt(m_model->item(i)->data(kRowRole).toInt());
         bool match = true;
         for (const QString& t : terms) {
             if (!haystack.contains(t, Qt::CaseInsensitive)) {
@@ -178,7 +186,7 @@ void CategoryItemPickerDialog::applySearch() {
                 break;
             }
         }
-        item->setHidden(!match);
+        m_list->setRowHidden(i, !match);
     }
 }
 
@@ -203,7 +211,7 @@ QString CategoryItemPickerDialog::nameError() const {
 
 void CategoryItemPickerDialog::updateCount() {
     const int selected = selectedItemIds().size();
-    m_countLabel->setText(tr("Selected: %1 of %2").arg(selected).arg(m_list->count()));
+    m_countLabel->setText(tr("Selected: %1 of %2").arg(selected).arg(m_model->rowCount()));
     const QString error = nameError();
     m_errorLabel->setText(m_creating && m_nameEdit->text().trimmed().isEmpty() ? QString() : error);
     // An empty selection is allowed when managing (clears the category) but
@@ -219,5 +227,5 @@ void CategoryItemPickerDialog::accept() {
     if (m_creating) {
         m_name = m_nameEdit->text().trimmed();
     }
-    QDialog::accept();
+    GlWindow::accept();
 }

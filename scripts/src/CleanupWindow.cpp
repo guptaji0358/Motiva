@@ -1,6 +1,8 @@
+#include "GlPopups.h"
 #include "CleanupWindow.h"
 
 #include "DialogSizing.h"
+#include "GlUi.h"
 #include "Theme.h"
 #include <QApplication>
 #include <QCloseEvent>
@@ -26,99 +28,99 @@ namespace {
 constexpr const char* kDotYellow = "#d8b01e";
 constexpr const char* kDotOrange = "#d9772b";
 
-bool isOnyx(Theme::AppTheme theme) {
-    return theme == Theme::AppTheme::DarkOnyx || theme == Theme::AppTheme::LightOnyx;
-}
-
-// Thin separator in the theme's border color (Onyx's headerRule is a heavy
-// accent bar - right under a title, too loud between rows).
-QFrame* makeRule(QWidget* parent, const char* name = "cleanupRule") {
-    auto* rule = new QFrame(parent);
-    rule->setObjectName(QLatin1String(name));
-    rule->setFrameShape(QFrame::HLine);
-    rule->setFrameShadow(QFrame::Plain);
-    return rule;
-}
-
-QLabel* makeHeading(const QString& text, QWidget* parent) {
-    auto* label = new QLabel(text, parent);
-    label->setObjectName(QStringLiteral("cleanupHeading"));
-    return label;
-}
-
 constexpr int kMarkSize = 16;
 
-// A small recolored SVG mark (Assets/status/*) as a QLabel.
-QLabel* makeMark(const char* resource, const char* color, QWidget* parent) {
-    auto* mark = new QLabel(parent);
-    mark->setFixedSize(kMarkSize, kMarkSize);
-    mark->setPixmap(Theme::tintedIcon(QLatin1String(resource), QColor(QLatin1String(color)), kMarkSize));
-    return mark;
-}
-
-// `heading` preceded by a colored status dot; the dot is decorative, the
-// heading label keeps the accessible name.
-QWidget* withDot(QLabel* heading, const char* color, QWidget* parent) {
-    auto* box = new QWidget(parent);
-    auto* layout = new QHBoxLayout(box);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(8);
-    layout->addWidget(makeMark(":/status/status-dot.svg", color, box), 0, Qt::AlignVCenter);
-    heading->setParent(box);
-    layout->addWidget(heading, 1);
-    return box;
+QPixmap markPixmap(const char* resource, const QColor& color) {
+    return Theme::tintedIcon(QLatin1String(resource), color, kMarkSize);
 }
 
 } // namespace
 
-CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent) : QDialog(parent), m_manager(manager) {
-    setWindowTitle(tr("Cleanup & Reset"));
+CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent)
+    : GlWindow(tr("Cleanup & Reset"), tr("Manage cache, data and reset options"), parent), m_manager(manager) {
     // A utility window, not a modal step of Settings: closing it just
     // returns to Settings, and Motiva keeps running.
     setModal(false);
-    setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+    GlCanvas* c = canvas();
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
+    m_levels << makeLevelRow(Theme::kStatusSuccess, tr("CACHE"),
+                             tr("Temporary files, the diagnostic log and preview thumbnails."), tr("Delete Cache"),
+                             false, Op::DeleteCache);
+    m_levels << makeLevelRow(kDotYellow, tr("DATA"), tr("Playlists, the .mtv library and saved media references."),
+                             tr("Delete Data"), true, Op::DeleteData);
+    m_levels << makeLevelRow(kDotOrange, tr("CACHE + DATA"),
+                             tr("Removes both cache and application data. Settings and theme are kept."),
+                             tr("Delete Cache + Data"), true, Op::DeleteCacheAndData);
+    // Backups are neither cache nor data: their own row, removed only on request.
+    m_levels << makeLevelRow("#8b6fd6", tr("MEDIA BACKUPS"),
+                             tr("Copies of your media that Motiva made after you turned Backup on. Never part of "
+                                "Cache or Data - removed only here, and only on request."),
+                             tr("Delete Media Backups"), true, Op::DeleteBackups);
+    m_cacheSize = m_levels[0].size;
+    m_dataSize = m_levels[1].size;
+    m_combinedSize = m_levels[2].size;
+    m_backupSize = m_levels[3].size;
 
-    // Header
-    auto* header = new QWidget(this);
-    auto* headerLayout = new QVBoxLayout(header);
-    headerLayout->setContentsMargins(24, 20, 24, 14);
-    headerLayout->setSpacing(4);
-    auto* title = new QLabel(tr("Cleanup & Reset"), header);
-    title->setObjectName(QStringLiteral("appTitle"));
-    QFont titleFont = title->font();
-    titleFont.setBold(true);
-    titleFont.setPointSize(titleFont.pointSize() + 3);
-    title->setFont(titleFont);
-    headerLayout->addWidget(title);
-    auto* subtitle = new QLabel(tr("Manage Motiva's cached files, application data, libraries, and reset options."),
-                                header);
-    subtitle->setObjectName(QStringLiteral("secondaryText"));
-    subtitle->setWordWrap(true);
-    headerLayout->addWidget(subtitle);
-    root->addWidget(header);
-    root->addWidget(makeRule(this, "headerRule"));
+    m_advancedRule = new GlRule(c);
+    m_advancedHeading = new GlLabel(c);
+    m_advancedHeading->setText(tr("ADVANCED"));
+    m_advancedHeading->setBold(true);
+    m_advancedHeading->setCaps(true);
+    m_advancedHeading->setPointSize(9);
+    m_advancedDesc = new GlLabel(c);
+    m_advancedDesc->setText(tr("Individual cleanup operations for data Motiva currently has."));
+    m_advancedDesc->setPointSize(9.5);
+    m_advancedDesc->setTone(GlLabel::Tone::Dim);
+    m_moreButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_moreButton->setText(tr("More…"));
+    connect(m_moreButton, &GlButton::clicked, this, &CleanupWindow::showMoreDialog);
 
-    // Body: the levels, or the progress of a running operation.
-    m_pages = new QStackedWidget(this);
-    m_pages->addWidget(buildLevelsPage());
-    m_pages->addWidget(buildProgressPage());
-    root->addWidget(m_pages, 1);
+    m_dangerCard = new GlPanel(c);
+    m_dangerCard->setBlock(GlPanel::Block::Danger);
+    m_dangerCard->setRadiusPx(16);
+    m_dangerDot = new GlLabel(c);
+    m_dangerDot->setPixmap(markPixmap(":/status/status-dot.svg", QColor(QLatin1String(Theme::kStatusError))));
+    m_dangerHeading = new GlLabel(c);
+    m_dangerHeading->setText(tr("DANGER ZONE"));
+    m_dangerHeading->setBold(true);
+    m_dangerHeading->setCaps(true);
+    m_dangerHeading->setPointSize(9);
+    m_dangerHeading->setColor(QColor(QLatin1String(Theme::kStatusError)));
+    m_dangerDesc = new GlLabel(c);
+    m_dangerDesc->setText(tr("Return Motiva to a fresh-install state: settings, theme, playlists, library, "
+                             "recovery state, cache and Windows integration. Motiva restarts afterwards."));
+    m_dangerDesc->setWordWrap(true);
+    m_dangerDesc->setPointSize(9.5);
+    m_dangerDesc->setTone(GlLabel::Tone::Dim);
+    m_dangerDesc->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_factoryButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_factoryButton->setText(tr("Factory Reset"));
+    connect(m_factoryButton, &GlButton::clicked, this, [this] {
+        if (confirm(Op::FactoryReset)) {
+            runWithProgress(Op::FactoryReset);
+        }
+    });
 
-    // Footer
-    root->addWidget(makeRule(this));
-    auto* footer = new QHBoxLayout();
-    footer->setContentsMargins(24, 12, 24, 14);
-    auto* safeNote = new QLabel(tr("Motiva-owned data only · Original media files are safe"), this);
-    safeNote->setObjectName(QStringLiteral("secondaryText"));
-    footer->addWidget(safeNote, 1);
-    m_closeButton = new QPushButton(tr("Close"), this);
-    connect(m_closeButton, &QPushButton::clicked, this, &QDialog::close);
-    footer->addWidget(m_closeButton);
-    root->addLayout(footer);
+    // Progress page.
+    m_progressTitle = new GlLabel(c);
+    m_progressTitle->setText(tr("Cleaning Motiva…"));
+    m_progressTitle->setBold(true);
+    m_progressTitle->setPointSize(13);
+    m_progressStatus = new GlLabel(c);
+    m_progressStatus->setWordWrap(true);
+    m_progressStatus->setPointSize(10.5);
+    m_progressStatus->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_progressButton = new GlButton(c, GlButton::Kind::Primary);
+    connect(m_progressButton, &GlButton::clicked, this, &CleanupWindow::onProgressButton);
+
+    // Footer.
+    m_safeNote = new GlLabel(c);
+    m_safeNote->setText(tr("Motiva-owned data only · Original media files are safe"));
+    m_safeNote->setPointSize(9.5);
+    m_safeNote->setTone(GlLabel::Tone::Dim);
+    m_closeButton = new GlButton(c, GlButton::Kind::Secondary);
+    m_closeButton->setText(tr("Close"));
+    connect(m_closeButton, &GlButton::clicked, this, &QDialog::close);
 
     connect(m_manager, &CleanupManager::sizesReady, this, &CleanupWindow::onSizesReady);
     connect(m_manager, &CleanupManager::stepStarted, this, [this](int i) {
@@ -133,151 +135,123 @@ CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent) : QDialog
         }
     });
     connect(m_manager, &CleanupManager::finished, this, &CleanupWindow::onOperationFinished);
-    applyThemeStyle();
-    DialogSizing::applyComfortableSize(this, QSize(640, 690));
+    showPage(0);
+    resize(860, 760);
+    setMinimumSize(720, 640);
 }
 
-QWidget* CleanupWindow::buildLevelsPage() {
-    auto* page = new QWidget(this);
-    auto* col = new QVBoxLayout(page);
-    col->setContentsMargins(24, 16, 24, 16);
-    col->setSpacing(0);
-
-    col->addWidget(makeLevelRow(Theme::kStatusSuccess, tr("CACHE"),
-                                tr("Temporary files, the diagnostic log and preview thumbnails."), &m_cacheSize,
-                                tr("Delete Cache"), Op::DeleteCache));
-    col->addWidget(makeRule(page));
-    col->addWidget(makeLevelRow(kDotYellow, tr("DATA"),
-                                tr("Playlists, the .mtv library and saved media references."), &m_dataSize,
-                                tr("Delete Data"), Op::DeleteData));
-    col->addWidget(makeRule(page));
-    col->addWidget(makeLevelRow(kDotOrange, tr("CACHE + DATA"),
-                                tr("Removes both cache and application data. Settings and theme are kept."),
-                                &m_combinedSize, tr("Delete Cache + Data"), Op::DeleteCacheAndData));
-    // Backups are neither cache nor data: their own row, removed only on request.
-    col->addWidget(makeRule(page));
-    col->addWidget(makeLevelRow("#8b6fd6", tr("MEDIA BACKUPS"),
-                                tr("Copies of your media that Motiva made after you turned Backup on. Never part of "
-                                   "Cache or Data - removed only here, and only on request."),
-                                &m_backupSize, tr("Delete Media Backups"), Op::DeleteBackups));
-
-    col->addSpacing(14);
-    col->addWidget(makeRule(page));
-    col->addSpacing(12);
-
-    // Advanced
-    auto* advanced = new QHBoxLayout();
-    auto* advancedText = new QVBoxLayout();
-    advancedText->setSpacing(3);
-    advancedText->addWidget(makeHeading(tr("ADVANCED"), page));
-    auto* advancedDesc = new QLabel(tr("Individual cleanup operations for data Motiva currently has."), page);
-    advancedDesc->setObjectName(QStringLiteral("secondaryText"));
-    advancedDesc->setWordWrap(true);
-    advancedText->addWidget(advancedDesc);
-    advanced->addLayout(advancedText, 1);
-    auto* more = new QPushButton(tr("More…"), page);
-    connect(more, &QPushButton::clicked, this, &CleanupWindow::showMoreDialog);
-    advanced->addWidget(more, 0, Qt::AlignVCenter);
-    col->addLayout(advanced);
-
-    col->addSpacing(16);
-
-    // Danger zone
-    auto* danger = new QFrame(page);
-    danger->setObjectName(QStringLiteral("cleanupDangerCard"));
-    auto* dangerLayout = new QHBoxLayout(danger);
-    dangerLayout->setContentsMargins(14, 12, 14, 12);
-    dangerLayout->setSpacing(12);
-    auto* dangerText = new QVBoxLayout();
-    dangerText->setSpacing(3);
-    auto* dangerTitle = new QLabel(tr("DANGER ZONE"), danger);
-    dangerTitle->setObjectName(QStringLiteral("cleanupDangerHeading"));
-    dangerTitle->setAccessibleName(tr("DANGER ZONE"));
-    dangerText->addWidget(withDot(dangerTitle, Theme::kStatusError, danger));
-    auto* dangerDesc = new QLabel(tr("Return Motiva to a fresh-install state: settings, theme, playlists, library, "
-                                     "recovery state, cache and Windows integration. Motiva restarts afterwards."),
-                                  danger);
-    dangerDesc->setObjectName(QStringLiteral("secondaryText"));
-    dangerDesc->setWordWrap(true);
-    dangerText->addWidget(dangerDesc);
-    dangerLayout->addLayout(dangerText, 1);
-    auto* factory = new QPushButton(tr("Factory Reset"), danger);
-    factory->setObjectName(QStringLiteral("factoryResetButton"));
-    connect(factory, &QPushButton::clicked, this, [this] {
-        if (confirm(Op::FactoryReset)) {
-            runWithProgress(Op::FactoryReset);
-        }
-    });
-    dangerLayout->addWidget(factory, 0, Qt::AlignVCenter);
-    col->addWidget(danger);
-
-    col->addStretch();
-    return page;
-}
-
-QWidget* CleanupWindow::makeLevelRow(const char* dotColor, const QString& title, const QString& description,
-                                     QLabel** sizeLabel, const QString& buttonText, Op op) {
-    auto* row = new QWidget(this);
-    auto* layout = new QHBoxLayout(row);
-    layout->setContentsMargins(0, 12, 0, 12);
-    layout->setSpacing(16);
-
-    auto* text = new QVBoxLayout();
-    text->setSpacing(3);
-    auto* heading = makeHeading(title, row);
-    heading->setAccessibleName(title);
-    text->addWidget(withDot(heading, dotColor, row));
-    auto* desc = new QLabel(description, row);
-    desc->setObjectName(QStringLiteral("secondaryText"));
-    desc->setWordWrap(true);
-    text->addWidget(desc);
-    *sizeLabel = new QLabel(tr("Size: calculating…"), row);
-    text->addWidget(*sizeLabel);
-    layout->addLayout(text, 1);
-
-    auto* button = new QPushButton(buttonText, row);
-    // The safe level keeps the normal button look; anything that removes
-    // user data gets the destructive accent.
-    if (op != Op::DeleteCache) {
-        button->setObjectName(QStringLiteral("dangerButton"));
-    }
-    button->setMinimumWidth(170);
-    connect(button, &QPushButton::clicked, this, [this, op] {
+CleanupWindow::LevelRow CleanupWindow::makeLevelRow(const char* dotColor, const QString& title,
+                                                    const QString& description, const QString& buttonText,
+                                                    bool destructive, Op op) {
+    GlCanvas* c = canvas();
+    LevelRow r;
+    r.dot = new GlLabel(c);
+    r.dot->setPixmap(markPixmap(":/status/status-dot.svg", QColor(QLatin1String(dotColor))));
+    r.heading = new GlLabel(c);
+    r.heading->setText(title);
+    r.heading->setAccessibleName(title);
+    r.heading->setBold(true);
+    r.heading->setCaps(true);
+    r.heading->setPointSize(9);
+    r.desc = new GlLabel(c);
+    r.desc->setText(description);
+    r.desc->setWordWrap(true);
+    r.desc->setPointSize(9.5);
+    r.desc->setTone(GlLabel::Tone::Dim);
+    r.desc->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    r.size = new GlLabel(c);
+    r.size->setText(tr("Size: calculating…"));
+    r.size->setPointSize(10);
+    r.button = new GlButton(c, GlButton::Kind::Secondary);
+    r.button->setText(buttonText);
+    Q_UNUSED(destructive); // the destructive look is carried by the confirmation box
+    connect(r.button, &GlButton::clicked, this, [this, op] {
         if (confirm(op)) {
             runWithProgress(op);
         }
     });
-    layout->addWidget(button, 0, Qt::AlignVCenter);
-    return row;
+    r.rule = new GlRule(c);
+    return r;
 }
 
-QWidget* CleanupWindow::buildProgressPage() {
-    auto* page = new QWidget(this);
-    auto* col = new QVBoxLayout(page);
-    col->setContentsMargins(24, 18, 24, 16);
-    col->setSpacing(8);
-    m_progressTitle = new QLabel(tr("Cleaning Motiva…"), page);
-    m_progressTitle->setObjectName(QStringLiteral("sectionLabel"));
-    QFont f = m_progressTitle->font();
-    f.setBold(true);
-    m_progressTitle->setFont(f);
-    col->addWidget(m_progressTitle);
-    m_stepsLayout = new QVBoxLayout();
-    m_stepsLayout->setSpacing(8);
-    col->addLayout(m_stepsLayout);
-    col->addSpacing(6);
-    m_progressStatus = new QLabel(page);
-    m_progressStatus->setWordWrap(true);
-    col->addWidget(m_progressStatus);
-    col->addStretch();
-    auto* buttons = new QHBoxLayout();
-    buttons->addStretch();
-    m_progressButton = new QPushButton(page);
-    m_progressButton->setObjectName(QStringLiteral("primaryButton"));
-    connect(m_progressButton, &QPushButton::clicked, this, &CleanupWindow::onProgressButton);
-    buttons->addWidget(m_progressButton);
-    col->addLayout(buttons);
-    return page;
+void CleanupWindow::showPage(int page) {
+    m_page = page;
+    const bool levels = page == 0;
+    for (LevelRow& r : m_levels) {
+        for (GlItem* it : QList<GlItem*>{r.dot, r.heading, r.desc, r.size, r.button, r.rule}) {
+            it->setVisible(levels);
+        }
+    }
+    for (GlItem* it : QList<GlItem*>{m_advancedRule, m_advancedHeading, m_advancedDesc, m_moreButton, m_dangerCard,
+                                     m_dangerDot, m_dangerHeading, m_dangerDesc, m_factoryButton}) {
+        it->setVisible(levels);
+    }
+    m_progressTitle->setVisible(!levels);
+    m_progressStatus->setVisible(!levels);
+    m_progressButton->setVisible(!levels);
+    for (int i = 0; i < m_stepRows.size(); ++i) {
+        const bool on = !levels && i < m_stepCount;
+        m_stepIcons[i]->setVisible(on);
+        m_stepRows[i]->setVisible(on);
+        m_stepDetails[i]->setVisible(on && !m_stepDetails[i]->text().isEmpty());
+    }
+    canvas()->relayout();
+}
+
+void CleanupWindow::layoutContent(const QRectF& content, const QRectF& footer) {
+    m_safeNote->setRect(QRectF(footer.left() + 12, footer.top() + 12, footer.width() - 150, 26));
+    m_closeButton->setRect(QRectF(footer.right() - 120, footer.top() + 6, 120, 40));
+    if (m_page == 0) {
+        const qreal btnW = 190;
+        qreal y = content.top();
+        for (int i = 0; i < m_levels.size(); ++i) {
+            LevelRow& r = m_levels[i];
+            const qreal textW = content.width() - btnW - 40;
+            const qreal descH = std::max<qreal>(20, r.desc->heightForWidth(textW - 28) + 2);
+            const qreal rowH = 10 + 24 + descH + 24 + 10;
+            r.dot->setRect(QRectF(content.left(), y + 10, 18, 24));
+            r.heading->setRect(QRectF(content.left() + 28, y + 10, textW - 28, 24));
+            r.desc->setRect(QRectF(content.left() + 28, y + 34, textW - 28, descH));
+            r.size->setRect(QRectF(content.left() + 28, y + 34 + descH, textW - 28, 24));
+            r.button->setRect(QRectF(content.right() - btnW, y + rowH / 2 - 20, btnW, 40));
+            y += rowH;
+            r.rule->setRect(QRectF(content.left(), y, content.width(), 1));
+            y += 2;
+        }
+        y += 10;
+        m_advancedHeading->setRect(QRectF(content.left(), y, content.width() - btnW - 20, 22));
+        m_advancedDesc->setRect(QRectF(content.left(), y + 22, content.width() - btnW - 20, 22));
+        m_moreButton->setRect(QRectF(content.right() - 130, y + 4, 130, 38));
+        m_advancedRule->setRect(QRectF(content.left(), y - 6, content.width(), 1));
+        y += 62;
+        const qreal descW = content.width() - btnW - 40 - 28;
+        const qreal dh = std::max<qreal>(22, m_dangerDesc->heightForWidth(descW) + 2);
+        const QRectF card(content.left(), y, content.width(), 16 + 24 + dh + 16);
+        m_dangerCard->setRect(card);
+        m_dangerDot->setRect(QRectF(card.left() + 20, card.top() + 14, 18, 24));
+        m_dangerHeading->setRect(QRectF(card.left() + 46, card.top() + 14, card.width() - 260, 24));
+        m_dangerDesc->setRect(QRectF(card.left() + 46, card.top() + 40, descW, dh));
+        m_factoryButton->setRect(QRectF(card.right() - 20 - 170, card.center().y() - 20, 170, 40));
+    } else {
+        m_progressTitle->setRect(QRectF(content.left(), content.top(), content.width(), 30));
+        qreal y = content.top() + 44;
+        for (int i = 0; i < m_stepCount; ++i) {
+            const qreal tw = content.width() - 30;
+            const qreal th = std::max<qreal>(22, m_stepRows[i]->heightForWidth(tw) + 2);
+            m_stepIcons[i]->setRect(QRectF(content.left(), y + 3, 20, 20));
+            m_stepRows[i]->setRect(QRectF(content.left() + 30, y, tw, th));
+            y += th;
+            if (m_stepDetails[i]->isVisible()) {
+                const qreal dh = std::max<qreal>(18, m_stepDetails[i]->heightForWidth(tw) + 2);
+                m_stepDetails[i]->setRect(QRectF(content.left() + 30, y, tw, dh));
+                y += dh;
+            }
+            y += 10;
+        }
+        const qreal sh = m_progressStatus->text().isEmpty() ? 0 : m_progressStatus->heightForWidth(content.width()) + 6;
+        m_progressStatus->setRect(QRectF(content.left(), y + 8, content.width(), std::max<qreal>(0, sh)));
+        m_progressButton->setRect(QRectF(content.right() - 230, content.bottom() - 48, 230, 48));
+    }
 }
 
 void CleanupWindow::present() {
@@ -292,7 +266,7 @@ void CleanupWindow::present() {
 }
 
 void CleanupWindow::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    GlWindow::showEvent(event);
     if (!m_positioned) {
         // Centered on Motiva's main window when it is on screen, otherwise
         // on Settings (Motiva may be running from the tray).
@@ -361,40 +335,6 @@ bool CleanupWindow::eventFilter(QObject* watched, QEvent* event) {
         return true;
     default:
         return false;
-    }
-}
-
-void CleanupWindow::applyThemeStyle() {
-    const Theme::AppTheme theme = Theme::currentTheme();
-    m_styledTheme = theme;
-    const Theme::ThemePalette& p = Theme::themePalette(theme);
-    const int radius = isOnyx(theme) ? 2 : 8;
-    const QString error = QLatin1String(Theme::kStatusError);
-    // Only headings, the danger zone and the destructive-button accent are
-    // local; everything else (fonts, base button look, hover/pressed/focus,
-    // rules, secondary text) comes from the app-wide theme stylesheet.
-    setStyleSheet(QStringLiteral(R"(
-QFrame#cleanupRule { background: %2; border: none; max-height: 1px; min-height: 1px; }
-QLabel#cleanupHeading { font-weight: 600; letter-spacing: 0.5px; }
-QLabel#cleanupDangerHeading { color: %4; font-weight: 600; letter-spacing: 0.5px; }
-QFrame#cleanupDangerCard { background: %1; border: 1px solid %4; border-radius: %3px; }
-QPushButton#dangerButton, QPushButton#factoryResetButton { color: %4; border: 1px solid %4; }
-QPushButton#dangerButton:hover, QPushButton#factoryResetButton:hover { background: %4; color: #ffffff; }
-QPushButton#dangerButton:pressed, QPushButton#factoryResetButton:pressed { background: %4; color: #ffffff; }
-QPushButton#dangerButton:disabled, QPushButton#factoryResetButton:disabled { color: %5; border-color: %2; background: transparent; }
-)")
-                      .arg(p.panelBg.name(QColor::HexArgb), p.border.name(QColor::HexArgb))
-                      .arg(radius)
-                      .arg(error, p.textDisabled.name(QColor::HexArgb)));
-}
-
-void CleanupWindow::changeEvent(QEvent* event) {
-    QDialog::changeEvent(event);
-    // setStyleSheet() itself raises PaletteChange - only restyle when the
-    // Motiva theme really changed, or this would recurse forever.
-    if ((event->type() == QEvent::PaletteChange || event->type() == QEvent::ThemeChange) &&
-        Theme::currentTheme() != m_styledTheme) {
-        applyThemeStyle();
     }
 }
 
@@ -530,10 +470,10 @@ bool CleanupWindow::confirm(Op op) {
         break;
     }
 
-    QMessageBox box(icon, title, text, QMessageBox::NoButton, this);
+    GlMessageBox box(icon, title, text, QMessageBox::NoButton, this);
     box.setInformativeText(info);
-    QPushButton* cancel = box.addButton(QMessageBox::Cancel);
-    QPushButton* proceed = box.addButton(action, QMessageBox::DestructiveRole);
+    auto* cancel = box.addButton(QMessageBox::Cancel);
+    auto* proceed = box.addButton(action, QMessageBox::DestructiveRole);
     box.setDefaultButton(cancel);
     box.setEscapeButton(cancel);
     box.exec();
@@ -544,38 +484,34 @@ void CleanupWindow::runWithProgress(Op op) {
     if (m_manager->isBusy() || m_running) {
         return;
     }
-    // Fresh step list for this operation.
-    for (QLabel* row : std::as_const(m_stepRows)) {
-        row->parentWidget()->deleteLater(); // the row container (icon + text)
-    }
-    m_stepRows.clear();
-    m_stepIcons.clear();
     m_stepLabels = m_manager->stepLabels(op);
-    for (int i = 0; i < m_stepLabels.size(); ++i) {
-        auto* container = new QWidget(m_pages->widget(1));
-        auto* rowLayout = new QHBoxLayout(container);
-        rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->setSpacing(10);
-        auto* icon = new QLabel(container);
-        icon->setFixedSize(kMarkSize, kMarkSize);
-        rowLayout->addWidget(icon, 0, Qt::AlignTop);
-        auto* row = new QLabel(container);
+    m_stepCount = int(m_stepLabels.size());
+    GlCanvas* c = canvas();
+    while (m_stepRows.size() < m_stepCount) {
+        auto* icon = new GlLabel(c);
+        auto* row = new GlLabel(c);
         row->setWordWrap(true);
-        // Auto-detection misses rich text that doesn't start with a tag.
-        row->setTextFormat(Qt::RichText);
-        rowLayout->addWidget(row, 1);
-        m_stepsLayout->addWidget(container);
-        m_stepRows << row;
+        row->setPointSize(10.5);
+        row->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        auto* detail = new GlLabel(c);
+        detail->setWordWrap(true);
+        detail->setPointSize(9);
+        detail->setTone(GlLabel::Tone::Dim);
+        detail->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         m_stepIcons << icon;
+        m_stepRows << row;
+        m_stepDetails << detail;
+    }
+    for (int i = 0; i < m_stepCount; ++i) {
+        m_stepDetails[i]->setText(QString());
         setStepRow(i, StepMark::Pending, Theme::kStatusNeutral, QString());
     }
     m_progressTitle->setText(op == Op::FactoryReset ? tr("Resetting Motiva…") : tr("Cleaning Motiva…"));
     m_progressStatus->clear();
-    m_progressStatus->setStyleSheet(QString());
     m_progressButton->setText(op == Op::FactoryReset ? tr("Restart Motiva") : tr("Back to Cleanup"));
     m_progressButton->setEnabled(false);
     m_closeButton->setEnabled(false);
-    m_pages->setCurrentIndex(1);
+    showPage(1);
 
     m_running = true;
     m_runningOp = op;
@@ -595,19 +531,20 @@ void CleanupWindow::setStepRow(int index, StepMark mark, const char* color, cons
     case StepMark::Succeeded: resource = ":/status/check.svg"; markName = tr("Done"); break;
     case StepMark::Failed: resource = ":/status/cross.svg"; markName = tr("Failed"); break;
     }
-    // Neutral pending/running marks follow the label's palette color.
-    const QColor markColor = color ? QColor(QLatin1String(color)) : palette().color(QPalette::WindowText);
-    m_stepIcons[index]->setPixmap(Theme::tintedIcon(QLatin1String(resource), markColor, kMarkSize));
-
-    QString text = m_stepLabels[index].toHtmlEscaped();
-    if (!detail.isEmpty()) {
-        text += QStringLiteral("<br><span style=\"font-size:small\">%1</span>")
-                    .arg(detail.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
+    const GlUi::Style st = GlUi::Style::current();
+    const QColor markColor = color ? QColor(QLatin1String(color)) : st.text;
+    m_stepIcons[index]->setPixmap(markPixmap(resource, markColor));
+    m_stepRows[index]->setText(m_stepLabels[index]);
+    if (color) {
+        m_stepRows[index]->setColor(QColor(QLatin1String(color)));
+    } else {
+        m_stepRows[index]->setTone(GlLabel::Tone::Normal);
     }
-    m_stepRows[index]->setText(text);
+    m_stepDetails[index]->setText(detail);
+    m_stepDetails[index]->setVisible(m_page == 1 && index < m_stepCount && !detail.isEmpty());
     m_stepRows[index]->setAccessibleName(detail.isEmpty() ? QStringLiteral("%1 %2").arg(markName, m_stepLabels[index])
                                                           : QStringLiteral("%1 %2: %3").arg(markName, m_stepLabels[index], detail));
-    m_stepRows[index]->setStyleSheet(color ? QStringLiteral("color: %1;").arg(QLatin1String(color)) : QString());
+    canvas()->relayout();
 }
 
 void CleanupWindow::onOperationFinished(Op op, bool allOk) {
@@ -620,7 +557,7 @@ void CleanupWindow::onOperationFinished(Op op, bool allOk) {
         m_progressStatus->setText(op == Op::FactoryReset
                                       ? tr("Cleanup complete. Motiva will now restart with its default settings.")
                                       : tr("Cleanup complete."));
-        m_progressStatus->setStyleSheet(QStringLiteral("color: %1;").arg(QLatin1String(Theme::kStatusSuccess)));
+        m_progressStatus->setColor(QColor(QLatin1String(Theme::kStatusSuccess)));
     } else {
         m_progressStatus->setText(op == Op::FactoryReset
                                       ? tr("Some items could not be removed (see above). Motiva will restart so "
@@ -628,14 +565,15 @@ void CleanupWindow::onOperationFinished(Op op, bool allOk) {
                                            "whatever is holding those files.")
                                       : tr("Some items could not be removed (see above). Everything else was "
                                            "cleaned. Close whatever is using those files and try again."));
-        m_progressStatus->setStyleSheet(QStringLiteral("color: %1;").arg(QLatin1String(Theme::kStatusError)));
+        m_progressStatus->setColor(QColor(QLatin1String(Theme::kStatusError)));
     }
     m_progressButton->setEnabled(true);
-    m_progressButton->setFocus();
+    canvas()->setFocusedItem(m_progressButton);
     // After a Factory Reset the footer Close (like closing the window)
     // restarts Motiva - see closeEvent().
     m_restartPending = op == Op::FactoryReset;
     m_closeButton->setEnabled(true);
+    canvas()->relayout();
 }
 
 void CleanupWindow::onProgressButton() {
@@ -644,54 +582,85 @@ void CleanupWindow::onProgressButton() {
         m_manager->requestRestart();
         return;
     }
-    m_pages->setCurrentIndex(0);
+    showPage(0);
     m_manager->refreshSizes();
 }
 
+namespace {
+// "More cleanup options": one row per operation that has something to do.
+class MoreDialog : public GlWindow {
+public:
+    struct Row {
+        GlLabel* title;
+        GlLabel* desc;
+        GlLabel* status;
+        GlButton* button;
+    };
+    MoreDialog(QWidget* parent) : GlWindow(QObject::tr("More Cleanup Options"), QObject::tr("Individual operations"), parent) {
+        setAttribute(Qt::WA_DeleteOnClose);
+        m_close = new GlButton(canvas(), GlButton::Kind::Secondary);
+        m_close->setText(QObject::tr("Close"));
+        connect(m_close, &GlButton::clicked, this, &QDialog::close);
+        resize(760, 520);
+        setMinimumSize(640, 360);
+    }
+    Row& addRow(const QString& title, const QString& description, const QString& status, const QString& button) {
+        GlCanvas* c = canvas();
+        Row r;
+        r.title = new GlLabel(c);
+        r.title->setText(title);
+        r.title->setBold(true);
+        r.title->setPointSize(10.5);
+        r.desc = new GlLabel(c);
+        r.desc->setText(description);
+        r.desc->setWordWrap(true);
+        r.desc->setPointSize(9.5);
+        r.desc->setTone(GlLabel::Tone::Dim);
+        r.desc->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        r.status = new GlLabel(c);
+        r.status->setText(status);
+        r.status->setPointSize(9.5);
+        r.status->setVisible(!status.isEmpty());
+        r.button = new GlButton(c, GlButton::Kind::Secondary);
+        r.button->setText(button);
+        m_rows.push_back(r);
+        return m_rows.last();
+    }
+    void layoutContent(const QRectF& content, const QRectF& footer) override {
+        qreal y = content.top();
+        const qreal btnW = 150;
+        for (Row& r : m_rows) {
+            const qreal tw = content.width() - btnW - 24;
+            const qreal dh = std::max<qreal>(18, r.desc->heightForWidth(tw) + 2);
+            const qreal sh = r.status->isVisible() ? 22 : 0;
+            r.title->setRect(QRectF(content.left(), y, tw, 24));
+            r.desc->setRect(QRectF(content.left(), y + 24, tw, dh));
+            r.status->setRect(QRectF(content.left(), y + 24 + dh, tw, sh));
+            const qreal h = 24 + dh + sh + 12;
+            r.button->setRect(QRectF(content.right() - btnW, y + h / 2 - 22, btnW, 40));
+            y += h + 10;
+        }
+        layoutFooter({m_close}, footer, 120);
+    }
+
+private:
+    QList<Row> m_rows;
+    GlButton* m_close = nullptr;
+};
+} // namespace
+
 void CleanupWindow::showMoreDialog() {
-    auto* dialog = new QDialog(this);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowTitle(tr("More Cleanup Options"));
-    dialog->setMinimumWidth(520);
-    auto* root = new QVBoxLayout(dialog);
-    root->setContentsMargins(20, 18, 20, 18);
-    root->setSpacing(10);
-
-    auto* heading = new QLabel(tr("More cleanup options"), dialog);
-    heading->setObjectName(QStringLiteral("sectionLabel"));
-    QFont f = heading->font();
-    f.setBold(true);
-    heading->setFont(f);
-    root->addWidget(heading);
-
+    auto* dialog = new MoreDialog(this);
     // Only operations whose data/state actually exists right now.
     auto addRow = [&](const QString& title, const QString& description, const QString& status,
                       const QString& buttonText, Op op) {
-        auto* row = new QHBoxLayout();
-        auto* text = new QVBoxLayout();
-        text->setSpacing(2);
-        auto* t = new QLabel(title, dialog);
-        QFont bf = t->font();
-        bf.setBold(true);
-        t->setFont(bf);
-        text->addWidget(t);
-        auto* d = new QLabel(description, dialog);
-        d->setObjectName(QStringLiteral("secondaryText"));
-        d->setWordWrap(true);
-        text->addWidget(d);
-        if (!status.isEmpty()) {
-            text->addWidget(new QLabel(status, dialog));
-        }
-        row->addLayout(text, 1);
-        auto* button = new QPushButton(buttonText, dialog);
-        connect(button, &QPushButton::clicked, dialog, [this, dialog, op] {
+        MoreDialog::Row& r = dialog->addRow(title, description, status, buttonText);
+        QObject::connect(r.button, &GlButton::clicked, dialog, [this, dialog, op] {
             if (confirm(op)) {
                 dialog->close();
                 runWithProgress(op);
             }
         });
-        row->addWidget(button, 0, Qt::AlignVCenter);
-        root->addLayout(row);
     };
 
     if (m_sizes.recoveryPresent) {
@@ -719,13 +688,5 @@ void CleanupWindow::showMoreDialog() {
         addRow(tr("Remove old version data"), tr("Recovery state left by Motiva builds from before the rename."),
                sizeText(m_sizes.legacyBytes), tr("Remove"), Op::RemoveLegacyData);
     }
-
-    root->addStretch();
-    auto* close = new QPushButton(tr("Close"), dialog);
-    connect(close, &QPushButton::clicked, dialog, &QDialog::close);
-    auto* footer = new QHBoxLayout();
-    footer->addStretch();
-    footer->addWidget(close);
-    root->addLayout(footer);
     dialog->show();
 }

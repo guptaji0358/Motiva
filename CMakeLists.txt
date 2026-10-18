@@ -30,6 +30,12 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/Theme.cpp
     scripts/src/ThemeCustomization.cpp
     scripts/src/GlUi.cpp
+    scripts/src/GlPopups.cpp
+    scripts/src/GlWindow.cpp
+    scripts/src/GlColor.cpp
+    scripts/include/GlColor.h
+    scripts/include/GlWindow.h
+    scripts/include/GlPopups.h
     scripts/include/GlUi.h
     scripts/src/ThemeEditorDialog.cpp
     scripts/include/ThemeEditorDialog.h

@@ -23,6 +23,23 @@ to `deployment/resources/Qt/`; check the installer/MSIX file list too).
 accent presets, WCAG contrast fixes), `ThemeEditorDialog`, persisted as JSON in
 `themeEditor/<Theme>/colors` via `SettingsManager::themeOverrides`.
 
+## Current status (2026-10-18c, dialogs + popups on the GL UI)
+
+`GlWindow` (`GlWindow.{h,cpp}`) is the base for utility windows (title strip,
+content panel, footer helper, borderless hit-testing, rounded corners) with
+`GlStack` for top-to-bottom row layout and shared delegates (`GlTextDelegate`,
+`GlCheckRowDelegate`, `GlTableDelegate`). Converted onto it: Backup, Cleanup
+(+ "More"), Theme editor (+ `GlColorDialog`, contrast-fix list in `GlColor.*`),
+Category filter / item picker, Find File / Find All (`MediaRecovery.cpp`) and
+Wallpaper Flow (chrome only: the node diagram is still a `FlowView`
+QGraphicsView child widget laid over the canvas). `GlPopups.{h,cpp}`:
+`GlMenu` (QMenu-shaped popup, raster-painted, used by item/playlist/category
+menus AND the tray: tray context is `activated(Context)` -> `m_trayMenu->popup`)
+and `GlMessageBox` (QMessageBox / QInputDialog-shaped; `getText`, `getItem`).
+Still native: QFileDialog pickers (OS dialogs), the system tray icon itself.
+Recovery dialogs were built but not exercised (no missing files to test with).
+Unused now but still compiled: `DropZoneWidget`, `IconButton`, `CategoryTreePicker`.
+
 ## Current status (2026-10-18b, Settings + Playlists windows on the GL UI)
 
 `Settings` and `Playlists` are now borderless GL windows (same `GlCanvas`,

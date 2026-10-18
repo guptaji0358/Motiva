@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QOpenGLWidget>
 #include <QPixmap>
 #include <QRectF>
@@ -61,7 +62,7 @@ QFont uiFont(qreal pointSize, bool bold = false);
 // handleFrameHitTest answers WM_NCHITTEST: resize edges, caption over
 // `captionRect` wherever no interactive item sits, client elsewhere.
 bool handleFrameHitTest(QWidget* window, GlCanvas* canvas, const QRectF& captionRect, const void* nativeMsg,
-                        qintptr* result);
+                        qintptr* result, bool resizable = true);
 // Windows 11 rounded corners for a borderless window.
 void applyRoundedCorners(QWidget* window);
 
@@ -73,6 +74,7 @@ class GlItem : public QObject {
     Q_OBJECT
 public:
     explicit GlItem(GlCanvas* canvas);
+    ~GlItem() override;
 
     QRectF rect() const { return m_rect; }
     void setRect(const QRectF& r);
@@ -125,11 +127,11 @@ public:
     virtual void focusChanged(bool /*focused*/) {}
 
 protected:
-    GlCanvas* canvas() const { return m_canvas; }
+    GlCanvas* canvas() const { return m_canvas.data(); }
 
 private:
     friend class GlCanvas;
-    GlCanvas* m_canvas;
+    QPointer<GlCanvas> m_canvas;
     QRectF m_rect;
     QRectF m_clip;
     QString m_toolTip;
@@ -146,7 +148,7 @@ private:
 class GlPanel : public GlItem {
     Q_OBJECT
 public:
-    enum class Block { None, Accent, Accent2, Warning };
+    enum class Block { None, Accent, Accent2, Warning, Danger };
     explicit GlPanel(GlCanvas* canvas);
     void setBlock(Block b) { m_block = b; update(); }
     void setRadiusPx(qreal r) { m_radius = r; update(); }
@@ -174,6 +176,8 @@ public:
     void setAlignment(Qt::Alignment a);
     void setCaps(bool caps); // letter-spaced small caps look for section tags
     void setWordWrap(bool wrap) { m_wrap = wrap; update(); }
+    // Height this label needs for `width` when word-wrapped.
+    qreal heightForWidth(qreal width) const;
 
     void paint(QPainter& p, const GlUi::Style& s) override;
 
@@ -237,6 +241,33 @@ private:
     bool m_selected = false;
     bool m_alignLeft = false;
     bool m_tint = true;
+};
+
+// Thin horizontal separator line.
+class GlRule : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlRule(GlCanvas* canvas) : GlItem(canvas) {}
+    void paint(QPainter& p, const GlUi::Style& s) override;
+};
+
+// Determinate progress bar with centered text.
+class GlProgressBar : public GlItem {
+    Q_OBJECT
+public:
+    explicit GlProgressBar(GlCanvas* canvas);
+    void setRange(int lo, int hi) { m_min = lo; m_max = std::max(lo + 1, hi); update(); }
+    void setValue(int v) { m_value = v; update(); }
+    void setText(const QString& t) { m_text = t; update(); }
+    // Unknown total: a sweeping segment instead of a filled portion.
+    void setIndeterminate(bool on) { m_indeterminate = on; update(); }
+    bool advance(qreal dt) override;
+    void paint(QPainter& p, const GlUi::Style& s) override;
+
+private:
+    int m_min = 0, m_max = 100, m_value = 0;
+    bool m_indeterminate = false;
+    QString m_text;
 };
 
 // Row controls. Each draws its own label on the left and the control on the
@@ -522,6 +553,7 @@ signals:
     void currentRowChanged(int row);
     void activated(int row);            // Enter
     void doubleClicked(int row);
+    void clicked(int row);              // every press on a row (even the current one)
     void contextMenuRequested(const QPointF& canvasPos, const QPoint& global, int row); // row -1 = empty area
     void reorderRequested(int fromRow, int insertPos);
 
