@@ -1099,8 +1099,13 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     qreal y = inner.top();
     // Header: name + summary left, "Use this playlist" right.
     const qreal toggleW = std::min<qreal>(320, inner.width() * 0.42);
-    m_nameLabel->setRect(QRectF(inner.left(), y, inner.width() - toggleW - 10, 26));
-    m_summaryLabel->setRect(QRectF(inner.left(), y + 26, inner.width() - toggleW - 10, 20));
+    // Item search sits right after the name, before the "Use this playlist" toggle.
+    const qreal leftArea = inner.width() - toggleW - 10;
+    const qreal searchW = std::clamp(leftArea * 0.5, 150.0, 300.0);
+    const qreal nameW = std::max<qreal>(100, leftArea - searchW - 12);
+    m_nameLabel->setRect(QRectF(inner.left(), y, nameW, 26));
+    m_summaryLabel->setRect(QRectF(inner.left(), y + 26, nameW, 20));
+    m_itemSearch->setRect(QRectF(inner.left() + nameW + 12, y + 6, std::min(searchW, leftArea - nameW - 12), 34));
     m_activeCheck->setRect(QRectF(inner.right() - toggleW, y + 2, toggleW, 44));
     y += 56;
     // Category row.
@@ -1112,14 +1117,13 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     cx += 38 + 8;
     m_buildCategoryButton->setRect(QRectF(cx, y, 156, 34));
     cx += 156 + 12;
-    m_includeSubCheck->setRect(QRectF(cx, y - 5, std::max<qreal>(0, inner.right() - cx), 44));
-    m_includeSubCheck->setVisible(inner.right() - cx > 200);
-    y += rowH + 6;
-    // Search + arrange row.
+    // Arrange sits at the right end of this row (the search moved up beside the name).
     const qreal arrangeW = 130;
     m_arrangeCombo->setRect(QRectF(inner.right() - arrangeW, y, arrangeW, 34));
     m_arrangeLabel->setRect(QRectF(inner.right() - arrangeW - 8 - 80, y, 80, 34));
-    m_itemSearch->setRect(QRectF(inner.left(), y, std::max<qreal>(120, inner.width() - arrangeW - 8 - 80 - 14), 34));
+    const qreal subW = inner.right() - arrangeW - 8 - 80 - 12 - cx;
+    m_includeSubCheck->setRect(QRectF(cx, y - 5, std::max<qreal>(0, subW), 44));
+    m_includeSubCheck->setVisible(subW > 200);
     y += rowH + 6;
 
     // Reserve space from the bottom first.
