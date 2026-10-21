@@ -19,7 +19,6 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
-class IconButton;
 class QTimer;
 class QToolButton;
 

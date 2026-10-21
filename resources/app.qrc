@@ -72,6 +72,10 @@
         <file alias="status/warning.svg">../Assets/status/warning.svg</file>
         <file alias="status/info.svg">../Assets/status/info.svg</file>
         <file alias="playlist/playlist-add.svg">../Assets/playlist/playlist-add.svg</file>
+        <file alias="playlist/new-image.svg">../Assets/playlist/new-image.svg</file>
+        <file alias="playlist/new-video.svg">../Assets/playlist/new-video.svg</file>
+        <file alias="playlist/new-mixed.svg">../Assets/playlist/new-mixed.svg</file>
+        <file alias="playlist/add-media.svg">../Assets/playlist/add-media.svg</file>
         <file alias="playlist/video-badge.svg">../Assets/playlist/video-badge.svg</file>
         <file alias="playlist/dark/add.svg">../Assets/playlist/dark/add.svg</file>
         <file alias="playlist/dark/add-disabled.svg">../Assets/playlist/dark/add-disabled.svg</file>

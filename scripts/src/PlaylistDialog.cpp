@@ -6,7 +6,6 @@
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
 #include "CategoryFilterDialog.h"
-#include "CategoryTreePicker.h"
 #include "CategoryItemPickerDialog.h"
 #include "FlowDialog.h"
 #include "GlUi.h"
@@ -44,7 +43,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QAction>
-#include "IconButton.h"
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -520,15 +518,15 @@ bool PlaylistView::handleKey(QKeyEvent* event) {
 void PlaylistDialog::applyThemedIcons() {
     const QString v = Theme::iconVariant(Theme::currentTheme());
     const auto icon = [&v](const char* n) { return QIcon(QStringLiteral(":/playlist/%1/%2.svg").arg(v, QLatin1String(n))); };
-    if (m_addButton) {
-        m_addButton->setIcon(icon("add"));
-    }
-    // The New Playlist buttons use the shared (theme-independent) playlist-add badge.
-    const QIcon createIcon(QStringLiteral(":/playlist/playlist-add.svg"));
-    for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton}) {
+    // Header action buttons: monochrome line icons, tinted with the button's text color.
+    const std::pair<GlButton*, const char*> headerIcons[] = {{m_newImageButton, ":/playlist/new-image.svg"},
+                                                              {m_newVideoButton, ":/playlist/new-video.svg"},
+                                                              {m_newMixedButton, ":/playlist/new-mixed.svg"},
+                                                              {m_addButton, ":/playlist/add-media.svg"}};
+    for (const auto& [b, path] : headerIcons) {
         if (b) {
-            b->setIcon(createIcon);
-            b->setTintIcon(false); // the badge keeps its own colors
+            b->setIcon(QIcon(QLatin1String(path)));
+            b->setTintIcon(true);
         }
     }
     if (m_buildCategoryButton) {
@@ -978,7 +976,7 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     // Title strip.
     const QRectF strip(m, m, W - 2 * m, 46);
     m_titlePanel->setRect(strip);
-    m_titleLabel->setRect(QRectF(strip.left() + 20, strip.top() + 8, 220, 30));
+    m_titleLabel->setRect(QRectF(strip.left() + 20, strip.top() + 8, 110, 30));
     const qreal bw = 36, bh = 30, by = strip.top() + 8;
     qreal x = strip.right() - 10 - bw;
     m_closeButton->setRect(QRectF(x, by, bw, bh));
@@ -987,22 +985,20 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     x -= bw + 2;
     m_minButton->setRect(QRectF(x, by, bw, bh));
 
-    // Toolbar.
-    const QRectF tool(m, strip.bottom() + 8, W - 2 * m, 52);
-    m_toolbarPanel->setRect(tool);
-    qreal tx = tool.left() + 12;
-    const qreal ty = tool.top() + 10, th = 32;
-    const auto place = [&](GlButton* b, qreal w) {
-        b->setRect(QRectF(tx, ty, w, th));
-        tx += w + 8;
-    };
-    place(m_newImageButton, 148);
-    place(m_newVideoButton, 148);
-    place(m_newMixedButton, 148);
-    tx += 10;
-    place(m_addButton, 140);
-    m_exportButton->setRect(QRectF(tool.right() - 12 - 38, ty - 1, 38, 34));
-    m_importButton->setRect(QRectF(tool.right() - 12 - 38 - 8 - 38, ty - 1, 38, 34));
+    // Header actions sit in the title strip, between the title and the window buttons.
+    m_toolbarPanel->setVisible(false);
+    const qreal gap = 8, th = 30, ty = strip.top() + 8;
+    qreal tx = strip.left() + 20 + 110 + 10;
+    const qreal iconW = 36;
+    const qreal rightEdge = m_minButton->rect().left() - 10;
+    m_exportButton->setRect(QRectF(rightEdge - iconW, ty, iconW, th));
+    m_importButton->setRect(QRectF(rightEdge - 2 * iconW - gap, ty, iconW, th));
+    const qreal avail = (rightEdge - 2 * iconW - gap) - 14 - tx;
+    const qreal bw4 = std::clamp((avail - 3 * gap) / 4, 96.0, 150.0);
+    for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton, m_addButton}) {
+        b->setRect(QRectF(tx, ty, bw4, th));
+        tx += bw4 + gap;
+    }
 
     // Footer.
     const QRectF footer(m, H - m - 52, W - 2 * m, 52);
@@ -1011,7 +1007,7 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     m_libraryLabel->setRect(QRectF(footer.left() + 8, footer.top() + 12, std::max<qreal>(80, footer.width() - 430), 28));
 
     // Body: sidebar + editor.
-    const qreal bodyTop = tool.bottom() + 8;
+    const qreal bodyTop = strip.bottom() + 8;
     const qreal bodyBottom = footer.top() - 8;
     const qreal sideW = 264;
     const QRectF side(m, bodyTop, sideW, bodyBottom - bodyTop);

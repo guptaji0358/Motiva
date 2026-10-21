@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QSvgRenderer>
 #include <QColor>
 #include <QElapsedTimer>
 #include <QIcon>

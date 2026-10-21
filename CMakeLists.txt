@@ -40,16 +40,10 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/ThemeEditorDialog.cpp
     scripts/include/ThemeEditorDialog.h
     scripts/include/Theme.h
-    scripts/src/CategoryTreePicker.cpp
-    scripts/include/CategoryTreePicker.h
-    scripts/src/IconButton.cpp
-    scripts/include/IconButton.h
     scripts/src/MotivaToolTip.cpp
     scripts/include/MotivaToolTip.h
     scripts/src/MainWindow.cpp
     scripts/include/MainWindow.h
-    scripts/src/DropZoneWidget.cpp
-    scripts/include/DropZoneWidget.h
     scripts/src/SettingsDialog.cpp
     scripts/include/SettingsDialog.h
     scripts/src/ThemeTransitionOverlay.cpp

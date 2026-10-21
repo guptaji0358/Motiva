@@ -4,7 +4,6 @@
 #include "PlaylistModel.h"
 #include "DialogSizing.h"
 #include "Theme.h"
-#include "IconButton.h"
 #include "PlaylistDialog.h"
 
 #include <QAction>

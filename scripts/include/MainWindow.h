@@ -16,8 +16,6 @@
 #include "SettingsManager.h"
 #include "RecoveryState.h"
 #include "InstanceIpc.h"
-#include "DropZoneWidget.h"
-#include "IconButton.h"
 
 class QVideoWidget;
 class GlCanvas;
