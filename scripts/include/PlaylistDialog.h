@@ -73,6 +73,7 @@ signals:
     void showNowRequested(int row);
     void removeRequested(int row);
     void itemDoubleClicked(int sourceRow);
+    void itemPreviewRequested(int sourceRow); // Shift+click
     void itemContextMenu(const QPoint& global, int sourceRow); // -1 = none
     void selectionChanged();
 
@@ -173,6 +174,8 @@ private:
     void onImport();
     void onExport();
     void onAddMedia();
+    void onAddFolder();
+    void previewImage(int row);
     void onRemove();
     void onClear();
     void onMove(int delta);
@@ -264,6 +267,7 @@ private:
     GlLabel* m_arrangeLabel = nullptr;
     GlDropdown* m_arrangeCombo = nullptr;
     GlButton* m_flowButton = nullptr;
+    GlButton* m_addFolderButton = nullptr;
     GlTextInput* m_itemSearch = nullptr;
     QTimer* m_itemSearchTimer = nullptr;
     QTimer* m_filterTimer = nullptr; // coalesces re-filtering after playlist changes

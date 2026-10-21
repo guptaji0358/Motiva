@@ -2580,6 +2580,12 @@ void GlItemView::mousePressAt(const QPointF& p) {
     }
     m_pressRow = rowAt(p);
     m_pressPos = p;
+    if (m_pressRow >= 0 && (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier)) {
+        const int row = m_pressRow;
+        m_pressRow = -1; // not the start of a drag
+        emit shiftClicked(row);
+        return;
+    }
     if (m_pressRow >= 0) {
         setCurrentRow(m_pressRow, false);
         emit clicked(m_pressRow);

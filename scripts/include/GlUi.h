@@ -555,6 +555,7 @@ signals:
     void activated(int row);            // Enter
     void doubleClicked(int row);
     void clicked(int row);              // every press on a row (even the current one)
+    void shiftClicked(int row);         // Shift+press on a row (big preview); no selection change
     void contextMenuRequested(const QPointF& canvasPos, const QPoint& global, int row); // row -1 = empty area
     void reorderRequested(int fromRow, int insertPos);
 

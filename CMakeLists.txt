@@ -87,9 +87,11 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/CategoryFilterDialog.cpp
     scripts/src/CategoryItemPickerDialog.cpp
     scripts/src/FlowDialog.cpp
+    scripts/src/MediaPreview.cpp
     scripts/include/CategoryFilterDialog.h
     scripts/include/CategoryItemPickerDialog.h
     scripts/include/FlowDialog.h
+    scripts/include/MediaPreview.h
     scripts/src/LocalBackupProvider.cpp
     scripts/include/LocalBackupProvider.h
     scripts/include/BackupProvider.h

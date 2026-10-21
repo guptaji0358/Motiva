@@ -1,5 +1,6 @@
 #include "GlPopups.h"
 #include "PlaylistDialog.h"
+#include "MediaPreview.h"
 #include "NotificationManager.h"
 #include "BackupManager.h"
 #include "MediaRecovery.h"
@@ -23,6 +24,9 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCollator>
+#include <QDirIterator>
+#include <QImageReader>
+#include <QWindow>
 #include <QDialog>
 #include <QComboBox>
 #include <QDir>
@@ -391,6 +395,7 @@ PlaylistView::PlaylistView(GlCanvas* canvas, QObject* parent) : QObject(parent) 
         }
     });
     connect(m_item, &GlItemView::doubleClicked, this, [this](int vr) { emit itemDoubleClicked(sourceRow(vr)); });
+    connect(m_item, &GlItemView::shiftClicked, this, [this](int vr) { emit itemPreviewRequested(sourceRow(vr)); });
     connect(m_item, &GlItemView::activated, this, [this](int vr) { emit showNowRequested(sourceRow(vr)); });
     connect(m_item, &GlItemView::currentRowChanged, this, [this](int) { emit selectionChanged(); });
     connect(m_item, &GlItemView::contextMenuRequested, this, [this](const QPointF&, const QPoint& global, int vr) {
@@ -522,7 +527,9 @@ void PlaylistDialog::applyThemedIcons() {
     const std::pair<GlButton*, const char*> headerIcons[] = {{m_newImageButton, ":/playlist/new-image.svg"},
                                                               {m_newVideoButton, ":/playlist/new-video.svg"},
                                                               {m_newMixedButton, ":/playlist/new-mixed.svg"},
-                                                              {m_addButton, ":/playlist/add-media.svg"}};
+                                                              {m_addButton, ":/playlist/add-media.svg"},
+                                                              {m_flowButton, ":/playlist/flow.svg"},
+                                                              {m_addFolderButton, ":/playlist/add-folder.svg"}};
     for (const auto& [b, path] : headerIcons) {
         if (b) {
             b->setIcon(QIcon(QLatin1String(path)));
@@ -585,6 +592,19 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     connect(newVideoShortcut, &QShortcut::activated, this, [this] {
         if (!isTextInputFocused()) {
             createPlaylist(true);
+        }
+    });
+
+    auto* flowShortcut = new QShortcut(QKeySequence(Qt::Key_F5), this);
+    connect(flowShortcut, &QShortcut::activated, this, [this] {
+        if (current() && !isTextInputFocused()) {
+            openFlow();
+        }
+    });
+    auto* addFolderShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O), this);
+    connect(addFolderShortcut, &QShortcut::activated, this, [this] {
+        if (current() && !isTextInputFocused()) {
+            onAddFolder();
         }
     });
 
@@ -843,8 +863,15 @@ void PlaylistDialog::buildUi() {
             onShowNow();
         }
     });
+    connect(m_view, &PlaylistView::itemPreviewRequested, this, [this](int row) { previewImage(row); });
     connect(m_view, &PlaylistView::itemContextMenu, this,
-            [this](const QPoint& global, int row) { showItemMenu(global, row); });
+            [this](const QPoint& global, int row) {
+                if (row >= 0 && (QGuiApplication::keyboardModifiers() & Qt::ControlModifier)) {
+                    previewImage(row); // Ctrl+right-click: same big view as Shift+click
+                    return;
+                }
+                showItemMenu(global, row);
+            });
     connect(m_view, &PlaylistView::selectionChanged, this, &PlaylistDialog::updateUi);
 
     m_hintLabel = makeLabel(tr("Right-click an item for more actions  •  Drag items to set the order (Arrange: None)  •  "
@@ -852,9 +879,13 @@ void PlaylistDialog::buildUi() {
                             9, true);
     m_showNowButton = makeButton(GlButton::Kind::Secondary, tr("Show Now"), tr("Show Now"),
                                  tr("Make the selected item the current one (Enter)"), [this] { onShowNow(); });
-    m_flowButton = makeButton(GlButton::Kind::Secondary, tr("Wallpaper Flow…"), tr("Wallpaper Flow"),
-                              tr("See and edit the order in which this playlist changes the wallpaper, as a diagram"),
+    m_flowButton = makeButton(GlButton::Kind::Icon, QString(), tr("Wallpaper Flow"),
+                              tr("Wallpaper Flow (F5): see and edit the order in which this playlist changes the "
+                                 "wallpaper, as a diagram"),
                               [this] { openFlow(); });
+    m_addFolderButton = makeButton(GlButton::Kind::Secondary, tr("Add Folder…"), tr("Add Folder"),
+                                   tr("Add every supported file in a folder and its subfolders (Ctrl+Shift+O)"),
+                                   [this] { onAddFolder(); });
     m_clearButton = makeButton(GlButton::Kind::Secondary, tr("Clear"), tr("Clear"),
                                tr("Remove every item from this playlist. No files are deleted."), [this] { onClear(); });
 
@@ -993,7 +1024,9 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     const qreal rightEdge = m_minButton->rect().left() - 10;
     m_exportButton->setRect(QRectF(rightEdge - iconW, ty, iconW, th));
     m_importButton->setRect(QRectF(rightEdge - 2 * iconW - gap, ty, iconW, th));
-    const qreal avail = (rightEdge - 2 * iconW - gap) - 14 - tx;
+    m_flowButton->setRect(QRectF(rightEdge - 3 * iconW - 2 * gap, ty, iconW, th));
+    m_flowButton->setVisible(pl != nullptr);
+    const qreal avail = (rightEdge - 3 * iconW - 2 * gap) - 14 - tx;
     const qreal bw4 = std::clamp((avail - 3 * gap) / 4, 96.0, 150.0);
     for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton, m_addButton}) {
         b->setRect(QRectF(tx, ty, bw4, th));
@@ -1032,7 +1065,7 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     const QList<GlItem*> editorItems = {m_nameLabel, m_summaryLabel, m_activeCheck, m_categoryPicker,
                                         m_categoryMenuButton, m_buildCategoryButton, m_includeSubCheck, m_arrangeLabel,
                                         m_arrangeCombo, m_itemSearch, m_view->item(), m_showingLabel, m_hintLabel,
-                                        m_showNowButton, m_flowButton, m_clearButton, m_rotationLabel, m_unlockCheck,
+                                        m_showNowButton, m_addFolderButton, m_clearButton, m_rotationLabel, m_unlockCheck,
                                         m_startCheck, m_intervalCheck, m_intervalCombo, m_imageNote, m_videoNote};
     for (GlItem* it : editorItems) {
         it->setVisible(has);
@@ -1128,7 +1161,7 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     }
     // Action row.
     m_showNowButton->setRect(QRectF(inner.left(), bottom - 36, 120, 34));
-    m_flowButton->setRect(QRectF(inner.left() + 128, bottom - 36, 170, 34));
+    m_addFolderButton->setRect(QRectF(inner.left() + 128, bottom - 36, 140, 34));
     m_clearButton->setRect(QRectF(inner.right() - 100, bottom - 36, 100, 34));
     bottom -= 42;
     // The hint line only when the grid keeps a comfortable height.
@@ -1986,6 +2019,50 @@ void PlaylistDialog::onAddMedia() {
         QString(), filter);
     if (!files.isEmpty()) {
         addFilesTo(m->id(), files);
+    }
+}
+
+void PlaylistDialog::onAddFolder() {
+    PlaylistModel* m = current();
+    if (!m) {
+        return;
+    }
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, tr("Add a Folder to \"%1\"").arg(m->name()), QString(), QFileDialog::ShowDirsOnly);
+    if (dir.isEmpty()) {
+        return;
+    }
+    QStringList files;
+    QDirIterator it(dir, QDir::Files | QDir::Readable, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString path = it.next();
+        if (m->acceptsFile(path)) {
+            files << path;
+        }
+    }
+    if (files.isEmpty()) {
+        announce(int(Notification::Kind::Warning), tr("Nothing Added"),
+                 tr("No supported files were found in that folder or its subfolders."),
+                 QStringLiteral("playlist-add-none:%1").arg(m->id()), QString());
+        return;
+    }
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(files.begin(), files.end(), [&collator](const QString& a, const QString& b) {
+        return collator.compare(a, b) < 0;
+    });
+    addFilesTo(m->id(), files);
+}
+
+void PlaylistDialog::previewImage(int row) {
+    PlaylistModel* m = current();
+    if (!m || row < 0 || row >= m->count()) {
+        return;
+    }
+    const QString error = MediaPreview::show(m->pathAt(row), this);
+    if (!error.isEmpty()) {
+        showNotice(error);
     }
 }
 

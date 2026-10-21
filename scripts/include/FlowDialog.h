@@ -54,6 +54,7 @@ signals:
     // Nodes were moved on the canvas: LAYOUT only, the sequence is unchanged.
     void nodesMoved(const QHash<qint64, QPointF>& positions);
     void nodeActivated(qint64 itemId);
+    void nodePreviewRequested(qint64 itemId); // Shift+click: big view
     void zoomChanged();
 
 protected:
@@ -93,6 +94,7 @@ public:
     // scopeItems() returns the playlist_items ids that belong in the diagram.
     FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const QString& scopeName, ScopeProvider scopeItems,
                QWidget* parent = nullptr);
+    ~FlowDialog() override;
 
     // Re-reads the scope and playlist (after media was added elsewhere).
     void refresh();
@@ -174,7 +176,7 @@ private:
     GlLabel* m_zoomLabel = nullptr;
     GlLabel* m_gridLabel = nullptr;
     GlLabel* m_columnsLabel = nullptr;
-    GlDropdown* m_columnsCombo = nullptr;
+    GlButton* m_columnsCombo = nullptr;
     GlLabel* m_rowsLabel = nullptr;
     GlButton* m_gridResetButton = nullptr;
     QAction* m_zoomInAction = nullptr;

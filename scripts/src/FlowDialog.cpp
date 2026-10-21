@@ -1,5 +1,7 @@
 #include "GlPopups.h"
+#include <QLinearGradient>
 #include "FlowDialog.h"
+#include "MediaPreview.h"
 #include "PlaylistLibrary.h"
 #include "PlaylistModel.h"
 #include "DialogSizing.h"
@@ -398,6 +400,13 @@ void FlowView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier)) {
+        if (auto* node = qgraphicsitem_cast<FlowNodeItem*>(itemAt(event->pos()))) {
+            emit nodePreviewRequested(node->itemId()); // big view; selection and position stay as they are
+            event->accept();
+            return;
+        }
+    }
     QGraphicsView::mousePressEvent(event);
     m_pressPositions.clear();
     for (FlowNodeItem* n : selectedNodes()) {
@@ -480,7 +489,13 @@ void FlowView::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void FlowView::drawBackground(QPainter* painter, const QRectF& rect) {
     const Theme::ThemePalette& pal = themePal();
-    painter->fillRect(rect, pal.altBg);
+    const QRectF vis = mapToScene(viewport()->rect()).boundingRect(); // whole view, so partial repaints match
+    QLinearGradient g(vis.topLeft(), vis.bottomRight());
+    g.setColorAt(0, pal.altBg);
+    g.setColorAt(1, QColor::fromRgbF(pal.altBg.redF() * 0.75 + pal.accent.redF() * 0.25,
+                                     pal.altBg.greenF() * 0.75 + pal.accent.greenF() * 0.25,
+                                     pal.altBg.blueF() * 0.75 + pal.accent.blueF() * 0.25));
+    painter->fillRect(rect, g);
     if (transform().m11() < 0.45) {
         return;
     }
@@ -537,6 +552,17 @@ FlowDialog::FlowDialog(PlaylistLibrary* library, PlaylistModel* playlist, const 
     QTimer::singleShot(0, this, [this] { fitAll(); });
     resize(1200, 820);
     setMinimumSize(1000, 660);
+}
+
+FlowDialog::~FlowDialog() {
+    // The scene is destroyed after its view; deleting the nodes would otherwise
+    // report a selection change into updateButtons() with the view already gone.
+    if (m_scene) {
+        disconnect(m_scene, nullptr, this, nullptr);
+    }
+    if (m_view) {
+        m_view->setScene(nullptr);
+    }
 }
 
 void FlowDialog::applyDirectionIcons() {
@@ -619,12 +645,7 @@ void FlowDialog::buildUi() {
     m_columnsLabel->setText(tr("Columns"));
     m_columnsLabel->setTone(GlLabel::Tone::Dim);
     m_columnsLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_columnsCombo = new GlDropdown(c);
-    m_columnsCombo->setCompact(true);
-    for (int col = kMinColumns; col <= kMaxColumns; ++col) {
-        m_columnsCombo->addItem(QString::number(col), col);
-    }
-    m_columnsCombo->setCurrentIndex(0);
+    m_columnsCombo = new GlButton(c, GlButton::Kind::Secondary);
     m_columnsCombo->setAccessibleName(tr("Grid columns"));
     m_columnsCombo->setToolTip(tr("How many nodes sit in each row of the layout (default %1). Changing it re-lays out the "
                                   "diagram; the sequence and the zoom are not changed.").arg(kDefaultColumns));
@@ -683,9 +704,22 @@ void FlowDialog::buildUi() {
     connect(m_zoomInButton, &GlButton::clicked, this, &FlowDialog::zoomIn);
     connect(m_zoomOutButton, &GlButton::clicked, this, &FlowDialog::zoomOut);
     connect(m_view, &FlowView::zoomChanged, this, &FlowDialog::updateZoomUi);
-    connect(m_columnsCombo, &GlDropdown::currentIndexChanged, this, [this](int index) {
-        setColumns(m_columnsCombo->currentData().toInt(), /*persist=*/true);
-        Q_UNUSED(index);
+    // A popup menu (own window) instead of an in-canvas dropdown: the diagram is a real child
+    // widget laid over the canvas and would hide a list drawn there.
+    connect(m_columnsCombo, &GlButton::clicked, this, [this] {
+        GlMenu menu(this);
+        for (int col = kMinColumns; col <= kMaxColumns; ++col) {
+            QAction* a = menu.addAction(tr("%1 columns").arg(col));
+            a->setCheckable(true);
+            a->setChecked(col == m_columns);
+            connect(a, &QAction::triggered, this, [this, col] { setColumns(col, /*persist=*/true); });
+        }
+        menu.addSeparator();
+        QAction* reset = menu.addAction(tr("Reset to Default"));
+        reset->setEnabled(m_columns != kDefaultColumns);
+        connect(reset, &QAction::triggered, this, [this] { setColumns(kDefaultColumns, /*persist=*/true); });
+        const QRectF r = m_columnsCombo->rect();
+        menu.exec(canvas()->mapToGlobal(QPoint(int(r.left()), int(r.bottom()) + 4)));
     });
     connect(m_gridResetButton, &GlButton::clicked, this, [this] { setColumns(kDefaultColumns, /*persist=*/true); });
     m_status = new GlLabel(c);
@@ -712,6 +746,16 @@ void FlowDialog::buildUi() {
         m_library->saveFlowPositions(m_playlist->id(), moved);
     });
     connect(m_view, &FlowView::nodeDroppedOnArrow, this, &FlowDialog::dropOnArrow, Qt::QueuedConnection);
+    connect(m_view, &FlowView::nodePreviewRequested, this, [this](qint64 itemId) {
+        const int row = m_playlist->rowOfItem(itemId);
+        if (row < 0) {
+            return;
+        }
+        const QString error = MediaPreview::show(m_playlist->pathAt(row), this);
+        if (!error.isEmpty()) {
+            m_status->setText(error);
+        }
+    });
     connect(m_view, &FlowView::nodeActivated, this, [this](qint64 itemId) {
         const int row = m_playlist->rowOfItem(itemId);
         if (row < 0) {
@@ -770,43 +814,48 @@ void FlowDialog::layoutContent(const QRectF& content, const QRectF& footer) {
     const qreal sh = m_summary->heightForWidth(content.width()) + 6;
     m_summary->setRect(QRectF(content.left(), content.top(), content.width(), sh));
     qreal y = content.top() + sh + 8;
-    // Row 1: sequence actions.
+    // One toolbar row: sequence actions on the left (edit group, then history),
+    // layout options on the right. Zoom lives in the footer, so the diagram
+    // gets the height the second row used to take.
+    const qreal bh = 36;
     qreal x = content.left();
-    const auto place = [&](GlButton* b, qreal w) {
-        b->setRect(QRectF(x, y, w, 38));
-        x += w + 8;
+    const auto place = [&](GlButton* b, qreal w, qreal gap = 6) {
+        b->setRect(QRectF(x, y, w, bh));
+        x += w + gap;
     };
-    place(m_addButton, 130);
-    place(m_arrangeButton, 110);
-    place(m_earlierButton, 110);
-    place(m_laterButton, 100);
-    place(m_removeButton, 100);
-    place(m_undoButton, 90);
-    place(m_redoButton, 90);
-    m_fitButton->setRect(QRectF(content.right() - 80, y, 80, 38));
-    y += 46;
-    // Row 2: auto-organize, grid layout, zoom.
-    m_autoOrganize->setRect(QRectF(content.left() - 14, y - 4, 290, 44));
-    qreal gx = content.left() + 290;
-    m_gridLabel->setRect(QRectF(gx, y, 100, 36));
-    gx += 104;
-    m_columnsLabel->setRect(QRectF(gx, y, 74, 36));
-    gx += 82;
-    m_columnsCombo->setRect(QRectF(gx, y, 86, 36));
-    gx += 96;
-    m_rowsLabel->setRect(QRectF(gx, y, 130, 36));
-    gx += 134;
-    m_gridResetButton->setRect(QRectF(gx, y, 150, 36));
-    m_zoomInButton->setRect(QRectF(content.right() - 40, y, 40, 36));
-    m_zoomLabel->setRect(QRectF(content.right() - 40 - 64, y, 64, 36));
-    m_zoomOutButton->setRect(QRectF(content.right() - 40 - 64 - 44, y, 40, 36));
-    y += 46;
+    place(m_addButton, 104);
+    place(m_arrangeButton, 84, 14);
+    place(m_earlierButton, 80);
+    place(m_laterButton, 72);
+    place(m_removeButton, 82, 14);
+    place(m_undoButton, 64);
+    place(m_redoButton, 64);
+    qreal rx = content.right();
+    rx -= 120;
+    m_columnsCombo->setRect(QRectF(rx, y, 120, bh));
+    rx -= 8 + 196;
+    m_autoOrganize->setRect(QRectF(rx - 14, y - 4, 210, bh + 8));
+    m_gridLabel->setVisible(false);
+    m_rowsLabel->setVisible(false);
+    m_gridResetButton->setVisible(false);
+    m_columnsLabel->setVisible(false);
+    y += bh + 8;
     const qreal statusH = 44;
     const QRectF viewRect(content.left(), y, content.width(), std::max<qreal>(160, content.bottom() - statusH - 6 - y));
     m_view->setGeometry(viewRect.toAlignedRect());
     m_status->setRect(QRectF(content.left(), content.bottom() - statusH, content.width(), statusH));
-    m_savedNote->setRect(QRectF(footer.left() + 12, footer.top() + 12, footer.width() - 160, 26));
     m_closeButton->setRect(QRectF(footer.right() - 130, footer.top() + 6, 130, 40));
+    // Zoom controls sit in the footer, beside Close, where the row was empty.
+    const qreal fy = footer.top() + 6;
+    qreal fx = footer.right() - 130 - 16 - 64;
+    m_fitButton->setRect(QRectF(fx, fy, 64, 40));
+    fx -= 6 + 40;
+    m_zoomInButton->setRect(QRectF(fx, fy, 40, 40));
+    fx -= 58;
+    m_zoomLabel->setRect(QRectF(fx, fy, 58, 40));
+    fx -= 40;
+    m_zoomOutButton->setRect(QRectF(fx, fy, 40, 40));
+    m_savedNote->setRect(QRectF(footer.left() + 12, footer.top() + 12, std::max<qreal>(100, fx - footer.left() - 24), 26));
 }
 
 void FlowDialog::showSelectedNow() {
@@ -1234,13 +1283,13 @@ void FlowDialog::updateGridUi() {
     if (!m_columnsCombo || !m_gridResetButton) {
         return;
     }
-    const int index = m_columnsCombo->findData(m_columns);
-    m_columnsCombo->blockSignals(true);
-    m_columnsCombo->setCurrentIndex(qMax(0, index));
-    m_columnsCombo->blockSignals(false);
     const int items = m_nodes.size();
     const int rows = items == 0 ? 0 : (items + m_columns - 1) / m_columns;
-    m_rowsLabel->setText(items == 0 ? tr("Rows: Auto") : tr("Rows: Auto (%1)").arg(rows));
+    m_columnsCombo->setText(items == 0 ? tr("Grid: %1 cols").arg(m_columns)
+                                       : tr("Grid: %1 × %2").arg(m_columns).arg(rows));
+    m_columnsCombo->setToolTip(tr("Grid layout: %1 columns, %2 (rows are worked out automatically). Click to change the "
+                                  "number of nodes per row (default %3). The sequence and the zoom are not changed.")
+                                   .arg(m_columns).arg(rows == 0 ? tr("no rows yet") : tr("%1 rows").arg(rows)).arg(kDefaultColumns));
     m_gridResetButton->setEnabled(m_columns != kDefaultColumns);
 }
 
