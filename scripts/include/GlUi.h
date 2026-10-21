@@ -126,6 +126,7 @@ public:
     virtual void contextMenuAt(const QPointF&, const QPoint& /*global*/, bool /*fromKeyboard*/) {}
     virtual bool wheelAt(int /*delta*/, const QPointF&) { return false; }
     virtual void focusChanged(bool /*focused*/) {}
+    virtual Qt::CursorShape cursorShape() const { return Qt::PointingHandCursor; } // while hovered
 
 protected:
     GlCanvas* canvas() const { return m_canvas.data(); }

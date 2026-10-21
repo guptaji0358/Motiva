@@ -1138,7 +1138,7 @@ void GlCanvas::updateHover(const QPointF& pt) {
         }
         m_hover = hit;
         if (m_hover) m_hover->m_hovered = true;
-        setCursor(hit && hit->isEnabled() ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        setCursor(hit && hit->isEnabled() ? hit->cursorShape() : Qt::ArrowCursor);
         requestAnimation();
     }
     if (m_hover) {

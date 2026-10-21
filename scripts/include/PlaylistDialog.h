@@ -244,6 +244,8 @@ private:
     GlPanel* m_titlePanel = nullptr;
     GlPanel* m_toolbarPanel = nullptr;
     GlPanel* m_sidebarPanel = nullptr;
+    class GlItem* m_splitHandle = nullptr; // drag to resize the playlist list
+    qreal m_sideWidth = 264;
     GlPanel* m_editorPanel = nullptr;
     GlLabel* m_titleLabel = nullptr;
     GlLabel* m_sidebarHeading = nullptr;

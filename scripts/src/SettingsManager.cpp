@@ -226,6 +226,13 @@ void SettingsManager::setNotifyPlayback(bool enabled) {
     m_settings.setValue("notifications/playback", enabled);
 }
 
+int SettingsManager::playlistSidebarWidth() const {
+    return m_settings.value("playlistWindow/sidebarWidth", 0).toInt();
+}
+void SettingsManager::setPlaylistSidebarWidth(int width) {
+    m_settings.setValue("playlistWindow/sidebarWidth", width);
+}
+
 QByteArray SettingsManager::playlistWindowGeometry() const {
     return m_settings.value("playlistWindow/geometry").toByteArray();
 }

@@ -88,6 +88,8 @@ public:
     // How the Settings window presents its groups: 0 = Tabs (default),
     // 1 = Sidebar, 2 = Grouped page. Presentation only.
     // Playlists window size/position (QWidget::saveGeometry blob); empty = never saved.
+    int playlistSidebarWidth() const; // 0 = default
+    void setPlaylistSidebarWidth(int width);
     QByteArray playlistWindowGeometry() const;
     void setPlaylistWindowGeometry(const QByteArray& geometry);
 

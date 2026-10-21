@@ -139,6 +139,29 @@ void drawGradientChip(QPainter* p, const QRectF& rect, const GlUi::Style& s, con
     p->drawText(rect, Qt::AlignCenter, text);
 }
 
+// Thin draggable divider between the playlist list and the editor.
+class SplitHandle : public GlItem {
+public:
+    explicit SplitHandle(GlCanvas* canvas) : GlItem(canvas) {}
+    std::function<void(qreal)> onDrag;
+    std::function<void()> onDone;
+    bool isInteractive() const override { return true; }
+    Qt::CursorShape cursorShape() const override { return Qt::SizeHorCursor; }
+    void mouseDragTo(const QPointF& p) override { if (onDrag) onDrag(p.x()); }
+    void mouseReleased(const QPointF&) override { if (onDone) onDone(); }
+    void paint(QPainter& p, const GlUi::Style& s) override {
+        const qreal t = std::max(hoverAmount(), pressAmount());
+        if (t < 0.02) return;
+        QColor c = s.accent;
+        c.setAlphaF(0.75 * t);
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF r = rect();
+        p.drawRoundedRect(QRectF(r.center().x() - 1.5, r.center().y() - 24, 3, 48), 1.5, 1.5);
+    }
+};
+
 // The hover-only "Show Now" pill, centered on the bottom of the thumbnail.
 // `cell` is the item's cell rect (canvas coordinates), shared by painting and click hit-testing.
 QRectF showNowRect(const QRectF& cell) {
@@ -752,6 +775,17 @@ void PlaylistDialog::buildUi() {
     m_sidebarHeading->setBold(true);
     m_sidebarHeading->setPointSize(8.5);
     m_sidebarHeading->setTone(GlLabel::Tone::Accent);
+    auto* split = new SplitHandle(m_canvas);
+    split->setAccessibleName(tr("Resize the playlist list"));
+    split->setToolTip(tr("Drag to resize the playlist list"));
+    split->onDrag = [this](qreal x) {
+        m_sideWidth = x - 12 - 5; // 12 = window margin, 5 = half the gap
+        m_canvas->relayout();
+    };
+    split->onDone = [this] {
+        if (m_settings) m_settings->setPlaylistSidebarWidth(int(m_sideWidth));
+    };
+    m_splitHandle = split;
     m_playlistList = new GlItemView(m_canvas);
     m_playlistList->setModel(m_library->listModel());
     m_playlistList->setDelegate(new PlaylistRowDelegate(m_playlistList));
@@ -1079,10 +1113,12 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     // Body: sidebar + editor.
     const qreal bodyTop = strip.bottom() + 8;
     const qreal bodyBottom = footer.top() - 8;
-    const qreal sideW = 264;
+    m_sideWidth = std::clamp<qreal>(m_sideWidth, 200, std::max<qreal>(200, std::min<qreal>(520, W * 0.5)));
+    const qreal sideW = m_sideWidth;
     const QRectF side(m, bodyTop, sideW, bodyBottom - bodyTop);
     const QRectF ed(side.right() + 10, bodyTop, W - m - (side.right() + 10), bodyBottom - bodyTop);
     m_sidebarPanel->setRect(side);
+    m_splitHandle->setRect(QRectF(side.right() - 2, bodyTop, 14, bodyBottom - bodyTop));
     m_editorPanel->setRect(ed);
     m_sidebarHeading->setRect(QRectF(side.left() + 20, side.top() + 18, side.width() - 40, 20));
     m_playlistList->setRect(QRectF(side.left() + 8, side.top() + 44, side.width() - 16, side.height() - 52));
@@ -1379,6 +1415,10 @@ void PlaylistDialog::onRotationEdited() {
 
 void PlaylistDialog::setSettings(SettingsManager* settings) {
     m_settings = settings;
+    if (const int w = m_settings ? m_settings->playlistSidebarWidth() : 0; w >= 200) {
+        m_sideWidth = w;
+        if (m_canvas) m_canvas->relayout();
+    }
     restoreSavedGeometry();
 }
 
