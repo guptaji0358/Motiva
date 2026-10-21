@@ -139,6 +139,13 @@ void drawGradientChip(QPainter* p, const QRectF& rect, const GlUi::Style& s, con
     p->drawText(rect, Qt::AlignCenter, text);
 }
 
+// The hover-only "Show Now" pill, centered on the bottom of the thumbnail.
+// `cell` is the item's cell rect (canvas coordinates), shared by painting and click hit-testing.
+QRectF showNowRect(const QRectF& cell) {
+    const QRectF thumb = cell.adjusted(4, 4, -4, -4).adjusted(8, 8, -8, -36);
+    return QRectF(thumb.center().x() - 48, thumb.bottom() - 40, 96, 30);
+}
+
 // One playlist item as a glass card: thumbnail (cropped to fill, on a
 // near-black media well), order number, a video marker for video items,
 // "Now showing" on the active playlist's current item, and an explicit
@@ -264,6 +271,12 @@ public:
             } else {
                 drawChip(p, chip, QColor(0, 0, 0, 165), label, chipR);
             }
+        }
+
+        if (hovered && available) {
+            QRectF btn = showNowRect(QRectF(option.rect));
+            btn.translate(0, -2); // moves with the hover lift
+            drawGradientChip(p, btn, s, PlaylistDialog::tr("Show Now"));
         }
 
         p->setFont(option.font);
@@ -397,6 +410,13 @@ PlaylistView::PlaylistView(GlCanvas* canvas, QObject* parent) : QObject(parent) 
     connect(m_item, &GlItemView::doubleClicked, this, [this](int vr) { emit itemDoubleClicked(sourceRow(vr)); });
     connect(m_item, &GlItemView::shiftClicked, this, [this](int vr) { emit itemPreviewRequested(sourceRow(vr)); });
     connect(m_item, &GlItemView::activated, this, [this](int vr) { emit showNowRequested(sourceRow(vr)); });
+    connect(m_item, &GlItemView::clicked, this, [this](int vr) {
+        const int src = sourceRow(vr);
+        if (src >= 0 && m_playlist && m_playlist->isAvailable(src) &&
+            showNowRect(m_item->rowRect(vr)).adjusted(-2, -4, 2, 4).contains(m_item->lastPressPos())) {
+            emit showNowRequested(src); // the hover "Show Now" pill
+        }
+    });
     connect(m_item, &GlItemView::currentRowChanged, this, [this](int) { emit selectionChanged(); });
     connect(m_item, &GlItemView::contextMenuRequested, this, [this](const QPointF&, const QPoint& global, int vr) {
         emit itemContextMenu(global, vr >= 0 ? sourceRow(vr) : -1);
@@ -877,8 +897,6 @@ void PlaylistDialog::buildUi() {
     m_hintLabel = makeLabel(tr("Right-click an item for more actions  •  Drag items to set the order (Arrange: None)  •  "
                                "Double-click an item to show it now"),
                             9, true);
-    m_showNowButton = makeButton(GlButton::Kind::Secondary, tr("Show Now"), tr("Show Now"),
-                                 tr("Make the selected item the current one (Enter)"), [this] { onShowNow(); });
     m_flowButton = makeButton(GlButton::Kind::Icon, QString(), tr("Wallpaper Flow"),
                               tr("Wallpaper Flow (F5): see and edit the order in which this playlist changes the "
                                  "wallpaper, as a diagram"),
@@ -1065,7 +1083,7 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     const QList<GlItem*> editorItems = {m_nameLabel, m_summaryLabel, m_activeCheck, m_categoryPicker,
                                         m_categoryMenuButton, m_buildCategoryButton, m_includeSubCheck, m_arrangeLabel,
                                         m_arrangeCombo, m_itemSearch, m_view->item(), m_showingLabel, m_hintLabel,
-                                        m_showNowButton, m_addFolderButton, m_clearButton, m_rotationLabel, m_unlockCheck,
+                                        m_addFolderButton, m_clearButton, m_rotationLabel, m_unlockCheck,
                                         m_startCheck, m_intervalCheck, m_intervalCombo, m_imageNote, m_videoNote};
     for (GlItem* it : editorItems) {
         it->setVisible(has);
@@ -1081,8 +1099,12 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     qreal y = inner.top();
     // Header: name + summary left, "Use this playlist" right.
     const qreal toggleW = std::min<qreal>(320, inner.width() * 0.42);
-    m_nameLabel->setRect(QRectF(inner.left(), y, inner.width() - toggleW - 10, 26));
-    m_summaryLabel->setRect(QRectF(inner.left(), y + 26, inner.width() - toggleW - 10, 20));
+    // "Add Folder" sits in the blank space left of the toggle.
+    const qreal folderW = 140;
+    m_addFolderButton->setRect(QRectF(inner.right() - toggleW - 10 - folderW, y + 7, folderW, 34));
+    const qreal labelW = std::max<qreal>(80, inner.width() - toggleW - folderW - 24);
+    m_nameLabel->setRect(QRectF(inner.left(), y, labelW, 26));
+    m_summaryLabel->setRect(QRectF(inner.left(), y + 26, labelW, 20));
     m_activeCheck->setRect(QRectF(inner.right() - toggleW, y + 2, toggleW, 44));
     y += 56;
     // Category row.
@@ -1160,8 +1182,6 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
         m_missingText->setVisible(false);
     }
     // Action row.
-    m_showNowButton->setRect(QRectF(inner.left(), bottom - 36, 120, 34));
-    m_addFolderButton->setRect(QRectF(inner.left() + 128, bottom - 36, 140, 34));
     m_clearButton->setRect(QRectF(inner.right() - 100, bottom - 36, 100, 34));
     bottom -= 42;
     // The hint line only when the grid keeps a comfortable height.
@@ -2237,7 +2257,6 @@ void PlaylistDialog::updateUi() {
                                    : tr("Change image automatically"));
     m_intervalCombo->setEnabled(m_intervalCheck->isChecked());
 
-    m_showNowButton->setEnabled(row >= 0 && m->isAvailable(row) && (row != currentRow || !m->isActive()));
     updateMissingBanner(row);
     m_clearButton->setEnabled(count > 0);
 

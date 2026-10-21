@@ -537,6 +537,7 @@ public:
     void scrollTo(int row);
     void scrollBy(qreal dy);
     QRectF viewport() const;
+    QPointF lastPressPos() const { return m_pressPos; } // canvas coords of the latest press
 
     bool isInteractive() const override { return true; }
     void paint(QPainter& p, const GlUi::Style& s) override;

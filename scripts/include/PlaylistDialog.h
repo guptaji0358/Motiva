@@ -283,7 +283,6 @@ private:
     GlLabel* m_hintLabel = nullptr;
     GlLabel* m_noticeLabel = nullptr;
     GlButton* m_addButton = nullptr;
-    GlButton* m_showNowButton = nullptr;
     GlButton* m_clearButton = nullptr;
     GlPanel* m_missingBanner = nullptr;
     GlLabel* m_missingTitle = nullptr;
