@@ -79,15 +79,15 @@ Filename: "{app}\Motiva.exe"; Description: "Launch Motiva"; Flags: nowait postin
 
 [Code]
 const
-  // Colours are BGR. Must match the RGB(12,14,30) the control bitmaps are drawn on.
-  clBg      = $1E0E0C;
-  clText    = $FFFFFF;
-  clMuted   = $E6C9BC;
-  clDim     = $A57A6E;
-  clAccent  = $FFC25A;
-  clGood    = $BEE150;
-  clPanel   = $2C1815;
-  clFrame   = $786246;
+  // Colours are BGR. Must match the RGB(30,30,30) the control bitmaps are drawn on.
+  clBg      = $1E1E1E;
+  clText    = $F0F0F0;
+  clMuted   = $9A9A9A;
+  clDim     = $6A6A6A;
+  clAccent  = $5CAE3F;
+  clGood    = $5CAE3F;
+  clPanel   = $262426;
+  clFrame   = $3A3A3A;
   BM_CLICK  = $F5;
 
   BTN_NEXT = 0;
@@ -207,9 +207,9 @@ begin
     B.Canvas.Font.Name := 'Segoe UI Semibold';
     B.Canvas.Font.Size := 10;
     B.Canvas.Brush.Style := bsClear;
-    if State = 3 then B.Canvas.Font.Color := $82705A
+    if State = 3 then B.Canvas.Font.Color := $6A6A6A
     else if (Kind = 0) or (State > 0) then B.Canvas.Font.Color := clWhite
-    else B.Canvas.Font.Color := $F0D8CC;
+    else B.Canvas.Font.Color := $F0F0F0;
     Tw := B.Canvas.TextWidth(BCap[I]);
     Th := B.Canvas.TextHeight(BCap[I]);
     B.Canvas.TextOut((B.Width - Tw) div 2, (B.Height - Th) div 2 - 1, BCap[I]);
@@ -387,7 +387,7 @@ begin
   DirFrame.Parent := OptionsPage.Surface;
   DirFrame.BevelOuter := bvNone;
   DirFrame.ParentBackground := False;
-  DirFrame.Color := $824840;
+  DirFrame.Color := $3A3A3A;
   DirFrame.Left := 0;
   DirFrame.Top := Y;
   DirFrame.Width := W - ScaleX(124);
@@ -913,9 +913,9 @@ begin
     B.Canvas.Font.Name := 'Segoe UI Semibold';
     B.Canvas.Font.Size := 10;
     B.Canvas.Brush.Style := bsClear;
-    if State = 3 then B.Canvas.Font.Color := $82705A
+    if State = 3 then B.Canvas.Font.Color := $6A6A6A
     else if (Kind = 0) or (State > 0) then B.Canvas.Font.Color := clWhite
-    else B.Canvas.Font.Color := $F0D8CC;
+    else B.Canvas.Font.Color := $F0F0F0;
     Tw := B.Canvas.TextWidth(Cap);
     Th := B.Canvas.TextHeight(Cap);
     B.Canvas.TextOut((B.Width - Tw) div 2, (B.Height - Th) div 2 - 1, Cap);
