@@ -1045,8 +1045,8 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     m_flowButton->setRect(QRectF(rightEdge - 3 * iconW - 2 * gap, ty, iconW, th));
     m_flowButton->setVisible(pl != nullptr);
     const qreal avail = (rightEdge - 3 * iconW - 2 * gap) - 14 - tx;
-    const qreal bw4 = std::clamp((avail - 3 * gap) / 4, 96.0, 150.0);
-    for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton, m_addButton}) {
+    const qreal bw4 = std::clamp((avail - 4 * gap) / 5, 90.0, 150.0);
+    for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton, m_addButton, m_addFolderButton}) {
         b->setRect(QRectF(tx, ty, bw4, th));
         tx += bw4 + gap;
     }
@@ -1099,12 +1099,8 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     qreal y = inner.top();
     // Header: name + summary left, "Use this playlist" right.
     const qreal toggleW = std::min<qreal>(320, inner.width() * 0.42);
-    // "Add Folder" sits in the blank space left of the toggle.
-    const qreal folderW = 140;
-    m_addFolderButton->setRect(QRectF(inner.right() - toggleW - 10 - folderW, y + 7, folderW, 34));
-    const qreal labelW = std::max<qreal>(80, inner.width() - toggleW - folderW - 24);
-    m_nameLabel->setRect(QRectF(inner.left(), y, labelW, 26));
-    m_summaryLabel->setRect(QRectF(inner.left(), y + 26, labelW, 20));
+    m_nameLabel->setRect(QRectF(inner.left(), y, inner.width() - toggleW - 10, 26));
+    m_summaryLabel->setRect(QRectF(inner.left(), y + 26, inner.width() - toggleW - 10, 20));
     m_activeCheck->setRect(QRectF(inner.right() - toggleW, y + 2, toggleW, 44));
     y += 56;
     // Category row.
