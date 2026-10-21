@@ -64,8 +64,8 @@
 
 namespace {
 
-constexpr int kCardWidth = 184;
-constexpr int kCardHeight = 158;
+constexpr int kCardWidth = 240;
+constexpr int kCardHeight = 196;
 constexpr int kCardSpacing = 12;
 
 // Orders the cards by file name (natural, case-insensitive: img-2 before
