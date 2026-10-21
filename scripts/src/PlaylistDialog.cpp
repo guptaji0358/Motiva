@@ -143,7 +143,13 @@ void drawGradientChip(QPainter* p, const QRectF& rect, const GlUi::Style& s, con
 // `cell` is the item's cell rect (canvas coordinates), shared by painting and click hit-testing.
 QRectF showNowRect(const QRectF& cell) {
     const QRectF thumb = cell.adjusted(4, 4, -4, -4).adjusted(8, 8, -8, -36);
-    return QRectF(thumb.center().x() - 48, thumb.bottom() - 40, 96, 30);
+    return QRectF(thumb.center().x() - 94, thumb.bottom() - 40, 96, 30); // pairs with removeRect(), centered together
+}
+
+// The hover-only "Remove" pill, beside "Show Now" at the bottom of the thumbnail.
+QRectF removeRect(const QRectF& cell) {
+    const QRectF s = showNowRect(cell);
+    return QRectF(s.right() + 8, s.top(), 84, s.height());
 }
 
 // One playlist item as a glass card: thumbnail (cropped to fill, on a
@@ -277,6 +283,11 @@ public:
             QRectF btn = showNowRect(QRectF(option.rect));
             btn.translate(0, -2); // moves with the hover lift
             drawGradientChip(p, btn, s, PlaylistDialog::tr("Show Now"));
+        }
+        if (hovered) {
+            QRectF btn = removeRect(QRectF(option.rect));
+            btn.translate(0, -2);
+            drawChip(p, btn, QColor(190, 40, 50, 225), PlaylistDialog::tr("Remove"), qMin<qreal>(btn.height() / 2, 4 + 6 * s.radius));
         }
 
         p->setFont(option.font);
@@ -412,9 +423,16 @@ PlaylistView::PlaylistView(GlCanvas* canvas, QObject* parent) : QObject(parent) 
     connect(m_item, &GlItemView::activated, this, [this](int vr) { emit showNowRequested(sourceRow(vr)); });
     connect(m_item, &GlItemView::clicked, this, [this](int vr) {
         const int src = sourceRow(vr);
-        if (src >= 0 && m_playlist && m_playlist->isAvailable(src) &&
-            showNowRect(m_item->rowRect(vr)).adjusted(-2, -4, 2, 4).contains(m_item->lastPressPos())) {
+        if (src < 0 || !m_playlist) {
+            return;
+        }
+        const QRectF cell = m_item->rowRect(vr);
+        const QPointF at = m_item->lastPressPos();
+        if (m_playlist->isAvailable(src) && showNowRect(cell).adjusted(-2, -4, 2, 4).contains(at)) {
             emit showNowRequested(src); // the hover "Show Now" pill
+        } else if (removeRect(cell).adjusted(-2, -4, 2, 4).contains(at)) {
+            // Queued: the row disappears, so let the press finish first.
+            QMetaObject::invokeMethod(this, [this] { emit removeRequested(selectedSourceRow()); }, Qt::QueuedConnection);
         }
     });
     connect(m_item, &GlItemView::currentRowChanged, this, [this](int) { emit selectionChanged(); });
@@ -654,7 +672,7 @@ PlaylistDialog::PlaylistDialog(PlaylistLibrary* library, QWidget* parent)
     });
     selectPlaylist(m_library->selectedId());
     DialogSizing::applyComfortableSize(this, QSize(1180, 780));
-    setMinimumSize(920, 660);
+    setMinimumSize(900, 560);
 }
 
 void PlaylistDialog::buildUi() {
@@ -975,6 +993,7 @@ void PlaylistDialog::buildUi() {
                                "changes only happen while this playlist is the active one."),
                             9, true);
     for (GlToggle* c : {m_unlockCheck, m_startCheck, m_intervalCheck}) {
+        c->setToolTip(m_imageNote->text());
         connect(c, &GlToggle::toggled, this, &PlaylistDialog::onRotationEdited);
     }
     connect(m_intervalCombo, &GlDropdown::currentIndexChanged, this, &PlaylistDialog::onRotationEdited);
@@ -1129,25 +1148,34 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     // Reserve space from the bottom first.
     qreal bottom = inner.bottom();
     const bool video = m_videoSettings;
-    const qreal settingsH = video ? 56 : 128;
-    // Settings block.
+    // Compact rotation settings: one row when wide enough, two otherwise (no heading/note;
+    // the explanation lives in the tooltips) so the cards get the space.
+    const bool wideSettings = inner.width() >= 780;
+    const qreal settingsH = video ? 44 : wideSettings ? 42 : 82;
     const qreal sTop = bottom - settingsH;
+    m_rotationLabel->setVisible(false);
+    m_imageNote->setVisible(false);
     if (video) {
-        m_rotationLabel->setVisible(false);
-        for (GlItem* it : QList<GlItem*>{m_unlockCheck, m_startCheck, m_intervalCheck, m_intervalCombo, m_imageNote}) {
+        for (GlItem* it : QList<GlItem*>{m_unlockCheck, m_startCheck, m_intervalCheck, m_intervalCombo}) {
             it->setVisible(false);
         }
         m_videoNote->setVisible(true);
         m_videoNote->setRect(QRectF(inner.left(), sTop, inner.width(), settingsH));
     } else {
         m_videoNote->setVisible(false);
-        m_rotationLabel->setRect(QRectF(inner.left() + 4, sTop, inner.width(), 18));
-        const qreal half = inner.width() / 2;
-        m_unlockCheck->setRect(QRectF(inner.left(), sTop + 20, half - 6, 40));
-        m_startCheck->setRect(QRectF(inner.left() + half, sTop + 20, half, 40));
-        m_intervalCheck->setRect(QRectF(inner.left(), sTop + 60, 180, 40));
-        m_intervalCombo->setRect(QRectF(inner.left() + 188, sTop + 63, 200, 34));
-        m_imageNote->setRect(QRectF(inner.left() + 4, sTop + 102, inner.width() - 4, 22));
+        if (wideSettings) {
+            const qreal w = (inner.width() - 188 - 200 - 12) / 2;
+            m_unlockCheck->setRect(QRectF(inner.left(), sTop, w, 40));
+            m_startCheck->setRect(QRectF(inner.left() + w + 6, sTop, w, 40));
+            m_intervalCheck->setRect(QRectF(inner.right() - 388, sTop, 180, 40));
+            m_intervalCombo->setRect(QRectF(inner.right() - 200, sTop + 3, 200, 34));
+        } else {
+            const qreal half = inner.width() / 2;
+            m_unlockCheck->setRect(QRectF(inner.left(), sTop, half - 6, 40));
+            m_startCheck->setRect(QRectF(inner.left() + half, sTop, half, 40));
+            m_intervalCheck->setRect(QRectF(inner.left(), sTop + 40, 180, 40));
+            m_intervalCombo->setRect(QRectF(inner.left() + 188, sTop + 43, 200, 34));
+        }
     }
     bottom = sTop - 8;
     // Notice (inline feedback line).
@@ -1181,18 +1209,17 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
         m_missingTitle->setVisible(false);
         m_missingText->setVisible(false);
     }
-    // Action row.
-    m_clearButton->setRect(QRectF(inner.right() - 100, bottom - 36, 100, 34));
-    bottom -= 42;
+    // "Showing N items" with Clear at the right end of the same line.
+    m_clearButton->setRect(QRectF(inner.right() - 84, bottom - 30, 84, 28));
+    m_showingLabel->setRect(QRectF(inner.left() + 4, bottom - 28, inner.width() - 96, 24));
+    bottom -= 34;
     // The hint line only when the grid keeps a comfortable height.
-    const bool showHint = (bottom - 20 - 22) - y > 300;
+    const bool showHint = (bottom - 20) - y > 360;
     m_hintLabel->setVisible(showHint);
     if (showHint) {
         m_hintLabel->setRect(QRectF(inner.left() + 4, bottom - 18, inner.width() - 4, 18));
-        bottom -= 20;
+        bottom -= 22;
     }
-    m_showingLabel->setRect(QRectF(inner.left() + 4, bottom - 18, inner.width() - 4, 18));
-    bottom -= 22;
     // The grid fills the rest.
     m_view->item()->setRect(QRectF(inner.left(), y, inner.width(), std::max<qreal>(60, bottom - y)));
 }

@@ -89,7 +89,7 @@ bool handleFrameHitTest(QWidget* w, GlCanvas* canvas, const QRectF& captionRect,
     const LONG py = GET_Y_LPARAM(msg->lParam) - wr.top;
     const qreal dpr = w->devicePixelRatioF();
     const LONG ww = wr.right - wr.left, hh = wr.bottom - wr.top;
-    const LONG edge = LONG(std::lround(7 * dpr));
+    const LONG edge = LONG(std::lround(9 * dpr));
     if (resizable && !w->isMaximized()) {
         const bool l = px < edge, r = px >= ww - edge, t = py < edge, b = py >= hh - edge;
         if (t && l) { *result = HTTOPLEFT; return true; }
