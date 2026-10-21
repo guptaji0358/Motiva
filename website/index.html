@@ -94,9 +94,9 @@
             <div class="desktop-taskbar" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
           </div>
           <figure class="float-window">
-            <img src="Assets/screenshots/main-darkaurora.webp" width="1084" height="888"
-                 alt="The Motiva main window showing a preview of a video, the Play, Open Video and Remove Video buttons and the Set as Wallpaper button.">
-            <figcaption>Motiva window (real screenshot)</figcaption>
+            <img src="Assets/screenshots/v2-main-darkaurora.svg" width="1100" height="720"
+                 alt="Illustration of the Motiva 2.0 main window with a media preview, playback buttons and the Set as Wallpaper button.">
+            <figcaption>Motiva 2.0 main window (illustration)</figcaption>
           </figure>
           <span class="badge-illustration">Desktop is an illustration</span>
         </div>
@@ -202,9 +202,9 @@
     <section class="section" id="screenshots" aria-labelledby="shots-title">
       <div class="container">
         <header class="section-head reveal">
-          <p class="eyebrow">Demo &amp; screenshots</p>
+          <p class="eyebrow">Interface</p>
           <h2 id="shots-title">See Motiva in action</h2>
-          <p class="section-lead">Real screenshots of the app. They show a sample aurora GIF that was generated for these captures — your own media appears in its place.</p>
+          <p class="section-lead">Illustrations of the Motiva 2.0 interface, drawn with sample aurora artwork. The real app shows your own media in its place.</p>
         </header>
 
         <div class="shots reveal" data-tabs>
@@ -213,29 +213,44 @@
             <button role="tab" id="tab-light-aurora" aria-controls="panel-light-aurora" aria-selected="false" tabindex="-1" type="button">Light Aurora<small>Main window</small></button>
             <button role="tab" id="tab-dark-onyx" aria-controls="panel-dark-onyx" aria-selected="false" tabindex="-1" type="button">Dark Onyx<small>Main window</small></button>
             <button role="tab" id="tab-light-onyx" aria-controls="panel-light-onyx" aria-selected="false" tabindex="-1" type="button">Light Onyx<small>Main window</small></button>
+            <button role="tab" id="tab-playlists" aria-controls="panel-playlists" aria-selected="false" tabindex="-1" type="button">Playlists<small>Categories &amp; cards</small></button>
+            <button role="tab" id="tab-flow" aria-controls="panel-flow" aria-selected="false" tabindex="-1" type="button">Wallpaper Flow<small>Reorder visually</small></button>
+            <button role="tab" id="tab-themes" aria-controls="panel-themes" aria-selected="false" tabindex="-1" type="button">Themes<small>Built-in + editor</small></button>
             <button role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false" tabindex="-1" type="button">Settings<small>Playback, power, integration</small></button>
             <button role="tab" id="tab-explorer" aria-controls="panel-explorer" aria-selected="false" tabindex="-1" type="button">Explorer menu<small>Illustration</small></button>
           </div>
 
           <div class="shot-stage">
             <figure class="shot-panel" role="tabpanel" id="panel-dark-aurora" aria-labelledby="tab-dark-aurora" tabindex="0">
-              <div class="window-frame"><img src="Assets/screenshots/main-darkaurora.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Dark Aurora theme: video preview, playback buttons and the Set as Wallpaper button."></div>
+              <div class="window-frame"><img src="Assets/screenshots/v2-main-darkaurora.svg" width="1100" height="720" alt="Illustration of the main window in the Dark Aurora theme."></div>
               <figcaption>Dark Aurora — the default look.</figcaption>
             </figure>
             <figure class="shot-panel" role="tabpanel" id="panel-light-aurora" aria-labelledby="tab-light-aurora" tabindex="0" hidden>
-              <div class="window-frame"><img src="Assets/screenshots/main-lightaurora.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Light Aurora theme with a light interface."></div>
+              <div class="window-frame"><img src="Assets/screenshots/v2-main-lightaurora.svg" width="1100" height="720" loading="lazy" alt="Illustration of the main window in the Light Aurora theme."></div>
               <figcaption>Light Aurora.</figcaption>
             </figure>
             <figure class="shot-panel" role="tabpanel" id="panel-dark-onyx" aria-labelledby="tab-dark-onyx" tabindex="0" hidden>
-              <div class="window-frame"><img src="Assets/screenshots/main-darkonyx.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Dark Onyx theme with a black interface and a green accent."></div>
-              <figcaption>Dark Onyx.</figcaption>
+              <div class="window-frame"><img src="Assets/screenshots/v2-main-darkonyx.svg" width="1100" height="720" loading="lazy" alt="Illustration of the main window in the Dark Onyx theme."></div>
+              <figcaption>Dark Onyx — sharp corners, black surfaces, green accent.</figcaption>
             </figure>
             <figure class="shot-panel" role="tabpanel" id="panel-light-onyx" aria-labelledby="tab-light-onyx" tabindex="0" hidden>
-              <div class="window-frame"><img src="Assets/screenshots/main-lightonyx.webp" width="1084" height="888" loading="lazy" alt="Motiva in the Light Onyx theme."></div>
+              <div class="window-frame"><img src="Assets/screenshots/v2-main-lightonyx.svg" width="1100" height="720" loading="lazy" alt="Illustration of the main window in the Light Onyx theme."></div>
               <figcaption>Light Onyx.</figcaption>
             </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-playlists" aria-labelledby="tab-playlists" tabindex="0" hidden>
+              <div class="window-frame"><img src="Assets/screenshots/v2-playlists.svg" width="1100" height="720" loading="lazy" alt="Illustration of the Playlists window with a playlist list, category chips and a grid of media cards."></div>
+              <figcaption>Playlists — image, video and mixed playlists with nested categories.</figcaption>
+            </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-flow" aria-labelledby="tab-flow" tabindex="0" hidden>
+              <div class="window-frame"><img src="Assets/screenshots/v2-flow.svg" width="1100" height="720" loading="lazy" alt="Illustration of the Wallpaper Flow editor showing numbered media nodes joined by arrows."></div>
+              <figcaption>Wallpaper Flow — drag nodes to reorder a playlist, with undo and redo.</figcaption>
+            </figure>
+            <figure class="shot-panel" role="tabpanel" id="panel-themes" aria-labelledby="tab-themes" tabindex="0" hidden>
+              <div class="window-frame"><img src="Assets/screenshots/v2-themes.svg" width="1100" height="720" loading="lazy" alt="Illustration of the four Motiva themes beside the theme editor."></div>
+              <figcaption>Four themes and a theme editor with accent presets and contrast fixes.</figcaption>
+            </figure>
             <figure class="shot-panel" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" tabindex="0" hidden>
-              <div class="window-frame"><img src="Assets/screenshots/settings-darkaurora.png" width="1109" height="538" loading="lazy" alt="The Motiva Settings window: scaling, monitor, volume, mute and loop, start with Windows, show video on battery, theme, and the Windows Integration options."></div>
+              <div class="window-frame"><img src="Assets/screenshots/v2-settings.svg" width="1100" height="720" loading="lazy" alt="Illustration of the Settings window with a sidebar and playback options."></div>
               <figcaption>Settings — display, playback, power and Windows integration.</figcaption>
             </figure>
             <figure class="shot-panel" role="tabpanel" id="panel-explorer" aria-labelledby="tab-explorer" tabindex="0" hidden>
