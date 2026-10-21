@@ -1,215 +1,150 @@
-# Video Wallpaper
+# Motiva
 
-A native Windows desktop application (C++ / Qt 6 / Win32) that plays an MP4
-file continuously **behind the desktop icons**, like a live/video wallpaper.
-No Electron, no browser, no fake fullscreen window.
+**Live video wallpapers for Windows.** Motiva is a native Windows application
+(C++ / Qt 6 / Win32 / DirectComposition) that plays videos, GIFs and image
+slideshows **behind your desktop icons**. No Electron, no browser, no fake
+fullscreen window.
 
-**Status: not yet reliable.** The attach mechanics (finding/creating a host
-window, reparenting, sizing) work, but live testing surfaced real bugs: the
-video can stay invisible until something nudges Explorer/DWM (e.g. pressing
-the Windows key), and when it does appear it can cover the taskbar and
-desktop icons instead of sitting behind them. Root cause and current
-understanding are tracked in [`CLAUDE.md`](CLAUDE.md) — read that before
-touching `WindowsDesktopWallpaper.cpp`.
+Current release: **v2.0.0** - see the
+[Releases page](https://github.com/guptaji0358/Motiva/releases) for the installer.
+Website: the [`website/`](website) folder (static HTML/CSS/JS).
+
+## What's new in v2.0.0
+
+- **GPU-drawn interface.** The main window, Settings, Playlists and every
+  utility window are drawn by one OpenGL canvas with an animated background,
+  borderless rounded windows and live theming.
+- **Playlists.** Image, video and **mixed** playlists, stored in a local
+  SQLite library (`.mtv`). Image playlists rotate on unlock, Windows start or
+  an interval; video playlists advance when a video ends.
+- **Categories.** Per-playlist categories, either rule-based or hand-picked,
+  with nesting ("include subcategories"). Activate a category as the wallpaper
+  scope.
+- **Wallpaper Flow.** A node diagram for reordering a playlist, with undo/redo,
+  zoom, keyboard shortcuts and A-Z / Z-A arrangement.
+- **Theme editor.** Four built-in themes (Dark/Light Aurora, Dark/Light Onyx)
+  plus per-color customization, accent presets and automatic WCAG contrast fixes.
+- **Windows Explorer menu.** A cascading *Motiva* right-click menu: set as
+  background, add to a playlist, or create a new one.
+- **Missing-media recovery.** *Find File* and *Find All at Once* locate moved
+  files in a single pass over your drives.
+- **Optional local media backup**, off by default, plus a **Cleanup & Reset**
+  window (cache, data, factory reset).
+- **Unified notifications.** In-app toasts and, when Motiva is in the
+  background, Windows notifications; all configurable.
+- **Faster, sturdier startup.** The UI appears immediately; desktop attach,
+  media restore and Explorer hand-offs run afterwards. A second launch hands
+  off to the running instance instead of silently exiting.
+- Tabbed / sidebar / grouped **Settings** layouts and a custom Motiva tooltip.
+
+## Features
+
+- Video wallpapers (MP4, MKV, MOV, AVI, WMV, OGV), animated GIFs and still images
+- Drag and drop, *Open Video*, or paste a direct http(s) link (`Ctrl+V`)
+- All monitors, primary only, or a specific monitor; Fill / Fit / Stretch / Original scaling
+- Play, pause, mute, volume and loop controls
+- *Show video on battery* setting; images can be kept on battery
+- Recovers on its own after an Explorer restart
+- Steps aside when you choose a normal wallpaper with *Set as desktop background*
+- Start with Windows, Start Menu entry, system tray control
+- Everything stays on your PC: no account, no cloud, no telemetry
 
 ## How the desktop integration works
 
-All of the Win32-specific logic lives in
-[`scripts/include/WindowsDesktopWallpaper.h`](scripts/include/WindowsDesktopWallpaper.h)/
-[`scripts/src/WindowsDesktopWallpaper.cpp`](scripts/src/WindowsDesktopWallpaper.cpp) and
-nowhere else in the codebase.
+All raw Win32 desktop logic lives in
+[`WindowsDesktopWallpaper`](scripts/src/WindowsDesktopWallpaper.cpp) and nowhere else.
 
-### Finding the right window to attach to
+1. Motiva finds the window that owns the desktop icons (`SHELLDLL_DefView`,
+   usually under `Progman`). On current Windows 11 builds no standalone
+   icon-less `WorkerW` exists, so the render window attaches to `Progman`
+   directly.
+2. The render window is a **plain native Win32 window** (not a `QWidget`),
+   created with `WS_EX_NOREDIRECTIONBITMAP` and presented through
+   **DirectComposition + Direct3D 11** (`D3DWallpaperRenderer`).
+3. It is parented to `Progman` and placed in the z-slot **directly behind
+   `SHELLDLL_DefView`** with `SetWindowPos(hwnd, shellDefView, ...)`, once, with
+   no later z-order upkeep. Icons and the taskbar stay on top.
+4. Attach runs on a worker thread so the UI never blocks. Results are discarded
+   if an Explorer restart has since moved the *attach generation* on.
+5. "Active" is only reported after frames are actually being presented, not
+   merely after `SetParent` succeeded.
+6. Explorer restarts are detected through the `TaskbarCreated` broadcast and
+   recovered automatically. A second launch of Motiva also triggers recovery
+   as a safety net.
+7. Motiva never changes your wallpaper setting. If Explorer's own wallpaper
+   changes while Motiva is active, it detaches so the new picture is visible.
+8. A fresh launch never re-attaches on its own: only an explicit
+   *Set as Wallpaper* action activates the wallpaper.
 
-1. `Progman` (the desktop process) is sent the undocumented message
-   `0x052C` (tried with both known wParam/lParam variants), which asks
-   Explorer to spawn a `WorkerW` window as a sibling of itself, hosting the
-   desktop icons (`SHELLDLL_DefView`).
-2. `EnumWindows` finds the top-level window that currently owns a
-   `SHELLDLL_DefView` child (normally `Progman` itself, sometimes a
-   `WorkerW`, depending on Explorer build).
-3. We look for a **plausibly desktop-sized** (≥200×200px) `WorkerW` sibling
-   with no `SHELLDLL_DefView` of its own — the plain window Explorer
-   renders directly beneath the icon layer. The size check matters:
-   Windows reuses the `WorkerW` window class for small, unrelated utility
-   windows (observed at a fixed 166×47px, always invisible) that are not
-   part of the desktop at all, and a naive "first WorkerW sibling" search
-   can attach into one of those and fail.
-4. If no such sibling exists — observed on this Windows 11 25H2 build:
-   Explorer never creates a standalone icon-less `WorkerW` via the classic
-   message at all — we fall back to attaching directly to the icon owner
-   itself (typically `Progman`), which is already correctly sized to the
-   desktop.
-
-### Attaching without breaking anything
-
-5. Before `SetParent`, the render window's topmost z-order state is
-   explicitly cleared via `SetWindowPos(..., HWND_NOTOPMOST, ...)`, its
-   style/ex-style are overwritten outright to `WS_CHILD | WS_VISIBLE` / `0`,
-   and the calling thread is temporarily switched to
-   `DPI_AWARENESS_CONTEXT_SYSTEM_AWARE` for the call (Explorer's shell
-   windows are System-DPI-aware; a Per-Monitor-V2-aware caller hits
-   `ERROR_INVALID_PARAMETER` from `SetParent` otherwise).
-6. **Z-order placement is the trickiest part, and the one most likely to
-   need adjusting on a different Windows build.** When falling back to
-   attaching directly into `Progman` (step 4), simply pushing the render
-   window to the bottom of Progman's children (`HWND_BOTTOM`) turned out to
-   place it *below* whatever this Windows build actually uses to paint the
-   classic wallpaper backdrop — the window attached successfully with zero
-   API errors, yet rendered completely invisibly. The fix, confirmed by
-   testing all three z-order positions:
-   - `HWND_BOTTOM` → invisible (below the backdrop paint)
-   - top of z-order (SetParent's default) → visible, but covers the icons
-   - **`SetWindowPos(hwnd, shellDefViewHandle, ...)`** → visible *and*
-     behind the icons
-
-   Using the icon view's own handle as `hwndInsertAfter` places our window
-   in the exact z-slot immediately behind the icons, displacing whatever
-   used to occupy that slot rather than guessing a fixed position. This is
-   the actual fix that makes the wallpaper visible; see
-   `AttachToDesktop()`'s comments for the full reasoning.
-7. If Explorer restarts (crash, "Restart Explorer" from Task Manager, shell
-   update), our window loses its parent. `WallpaperManager` polls every 3
-   seconds (`checkWorkerWHealth`) and automatically reattaches.
-
-If attaching ever fails outright, **the render window is kept hidden**
-rather than falling back to a normal top-level/fullscreen window. A
-visible-but-unattached window would just be the "fake fullscreen wallpaper"
-this project explicitly avoids, so failure surfaces as an error message
-(with details written to `%TEMP%\VideoWallpaper.log`) instead.
-
-### Rendering pipeline
-
-`WallpaperWindow` is a **plain native Win32 window** (own registered window
-class, own `WndProc`) — not a `QWidget`. This was a deliberate, tested
-decision: a `QWidget` whose `HWND` gets reparented into `WorkerW`/`Progman`
-via raw `SetParent` never actually had its `paintEvent` invoked in testing —
-Qt's QPA layer tracks its own idea of a window's top-level/child status and
-backing store, none of which are told about a reparent performed behind
-Qt's back, and its paint dispatch silently swallowed every `WM_PAINT` as a
-result (confirmed with instrumentation: frame-ready notifications and
-forced `InvalidateRect`/`UpdateWindow` calls arrived fine, but `paintEvent`
-was never called, with or without also calling `QWidget::show()`). Owning
-the window class and `WndProc` directly sidesteps that entirely — `WM_PAINT`
-is handled with raw GDI (`StretchDIBits`), independent of Qt.
-
-Qt is still used for everything else: decoding (`VideoPlayer`, a
-`QMediaPlayer`/`QVideoSink` pipeline) and the in-app preview (`MainWindow`
-paints `QImage`s from the same `VideoPlayer` into a `QLabel`, which is a
-normal, never-reparented Qt widget and has no such issue).
-
-Only **one** decode pipeline runs regardless of how many monitors are
-covered. Each decoded frame is converted to a `QImage` once and shared (via
-`std::shared_ptr`) with every per-monitor `WallpaperWindow`, which paints it
-scaled to its own monitor rect according to the selected scaling mode
-(Fill / Fit / Stretch / Original). This avoids decoding the same video
-multiple times for multi-monitor "All monitors" mode.
+If attaching fails, the render window stays hidden instead of becoming a fake
+fullscreen window.
 
 ## Project layout
 
 ```
 Motiva/
 ├── scripts/
-│   ├── main/
-│   │   └── main.cpp                 - entry point, tray/autostart flag handling
-│   ├── src/
-│   │   ├── MainWindow.cpp           - UI + in-app preview
-│   │   ├── SettingsDialog.cpp       - settings window
-│   │   ├── VideoPlayer.cpp          - QMediaPlayer/QVideoSink decode pipeline
-│   │   ├── WallpaperWindow.cpp      - plain native Win32 render window (one per monitor)
-│   │   ├── WallpaperManager.cpp     - orchestrates player + windows + Win32 attach
-│   │   ├── WindowsDesktopWallpaper.cpp - ALL raw Win32 desktop integration
-│   │   └── SettingsManager.cpp      - QSettings (registry) persistence
-│   └── include/
-│       └── *.h                      - one header per implementation file above
-├── resources/
-│   ├── app.manifest                 - per-monitor DPI awareness
-│   └── app.rc
+│   ├── main/main.cpp        - entry point, single-instance lock, logging
+│   ├── src/                 - implementation (UI, playlists, library, wallpaper, Win32)
+│   └── include/             - headers
+├── resources/               - app.rc, manifest, Qt resources
+├── Assets/                  - icons and artwork, organised by feature
+├── installer/               - Inno Setup script and build pipeline
+├── website/                 - project website
 ├── CMakeLists.txt
 └── README.md
 ```
 
+Key components: `GlUi` / `GlWindow` / `GlPopups` (GL UI toolkit),
+`PlaylistLibrary` / `LibraryDatabase` (SQLite library), `PlaylistDialog`,
+`FlowDialog`, `ThemeEditorDialog`, `NotificationManager`, `CleanupManager`,
+`BackupManager`, `MediaRecovery`, `WallpaperManager`, `D3DWallpaperRenderer`,
+`WindowsDesktopWallpaper`. [`CLAUDE.md`](CLAUDE.md) holds detailed development
+notes and history.
+
 ## Building
 
-Requires Qt 6 (Widgets, Multimedia, MultimediaWidgets) and a matching MinGW
-or MSVC toolchain, plus CMake + Ninja.
+Requires Qt 6 (Widgets, Multimedia, OpenGL, OpenGLWidgets, SQL), the MinGW
+toolchain that ships with your Qt install, CMake and Ninja.
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="<path-to-Qt>/6.x/mingw_64" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-> Use the exact MinGW toolchain that ships with your Qt install (e.g.
-> `<Qt>/Tools/mingw1310_64`), not an unrelated system MinGW/MSYS2 install -
-> mixing MinGW runtime versions produces `undefined reference to
-> '__imp___argc'`-style link errors because the prebuilt Qt static import
-> libraries were built against a specific MinGW CRT.
+> Use the exact MinGW toolchain bundled with Qt (e.g. `<Qt>/Tools/mingw1310_64`),
+> not an unrelated MSYS2 install; mixed CRTs cause `__imp___argc` link errors.
 
-Deploy the Qt runtime next to the executable for a redistributable build:
+Build the installer (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
-```bash
-<path-to-Qt>/6.x/mingw_64/bin/windeployqt6.exe --release build/VideoWallpaper.exe
+```powershell
+installer\build-installer.ps1
 ```
 
-## Settings & autostart
+This deploys the Qt runtime (including `Qt6OpenGL.dll` and
+`Qt6OpenGLWidgets.dll`) and writes `release\MotivaSetup.exe`.
 
-All settings (video path, volume, mute, loop, scaling, monitor selection,
-autostart) are stored via `QSettings` in
-`HKCU\Software\VideoWallpaper\VideoWallpaper` - no account, no cloud, no
-network access required.
+## Settings, storage and privacy
 
-"Start with Windows" writes/removes a value under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at the exe
-with a `--autostart` flag; on autostart the app restores the previously
-selected wallpaper directly to the tray without showing the main window.
-
-## What was verified during development
-
-Built and iterated directly against a real Windows 11 (build 26200 / 25H2)
-machine — a very recent build whose desktop compositing differs from older
-Windows 10/11 releases in ways that broke the classic technique's usual
-assumptions and required real debugging (not just following a known
-recipe):
-
-- The app builds and links cleanly, launches, loads and probes a real MP4
-  (h264/aac, 1080p) via the ffmpeg-backed Qt Multimedia pipeline.
-- The render pipeline (native `WndProc` + `StretchDIBits`) was verified to
-  paint real video frames correctly, isolated from the desktop-attach logic
-  entirely, before diagnosing the attach issue itself.
-- `SetParent` into a decoy `WorkerW`, DPI-awareness mismatches, and
-  leftover Qt window-style bits were each found and fixed (see git history
-  / code comments in `AttachToDesktop()`).
-- The final, confirmed-working fix: attaching into `Progman` and placing
-  the render window's z-order immediately behind the icon view
-  (`SHELLDLL_DefView`) via `SetWindowPos(hwnd, shellDefViewHwnd, ...)`,
-  rather than `HWND_BOTTOM`. **Confirmed visually via screenshot**: video
-  plays as the desktop background with every icon fully visible on top.
-- **Still worth doing:** test with 2+ monitors of different resolutions,
-  restart `explorer.exe` while the wallpaper is active and confirm
-  `checkWorkerWHealth` reattaches correctly (it currently checks
-  `GetParent()` validity but does not yet re-resolve the
-  `shellDefView`-relative z-order target - worth double-checking after a
-  real Explorer restart), and exercise Remove Wallpaper to confirm the
-  normal desktop is restored cleanly.
+- Preferences: `HKCU\Software\Motiva` (via `QSettings`)
+- Playlist library: a `.mtv` SQLite file in your local app data
+- Log: `%TEMP%\Motiva.log`
+- Nothing leaves your PC. Optional media backups are copied to local app data
+  only when you turn them on, and originals are only ever read.
 
 ## Known limitations
 
-- The undocumented `0x052C` WorkerW technique is what every known video
-  wallpaper tool on Windows uses (there is no public API for this); it has
-  been stable since Windows 7 but is not a documented contract. This
-  project's own testing already found one real behavioral difference on a
-  very recent Windows 11 build (no standalone icon-less `WorkerW` ever
-  gets created, and the naive "bottom of z-order" placement is invisible)
-  - a future Windows update could change this further and require another
-    small fix to `WindowsDesktopWallpaper.cpp`. If the wallpaper ever goes
-    invisible again despite `AttachToDesktop` reporting success, re-check
-    the z-order placement first (see the reasoning in step 6 above) before
-    assuming it's a rendering bug.
-- Explorer restart recovery is polling-based (3s interval) rather than
-  event-driven, since there is no notification API for "WorkerW
-  recreated".
-- "Original" scaling centers the video at native resolution but does not
-  currently offer a way to pan a video larger than the monitor.
-- Automatic pause-on-idle (to save CPU/GPU when e.g. the workstation is
-  locked) is not implemented; play/pause is currently only user- and
-  tray-triggered.
+- Motiva relies on Explorer's undocumented desktop hierarchy, as every Windows
+  video-wallpaper tool does. A future Windows update could need a small fix in
+  `WindowsDesktopWallpaper.cpp`.
+- Developed and tested on Windows 11; multi-monitor setups with different
+  resolutions have had limited testing.
+- The GL interface has no screen-reader support yet, and there is no
+  reduced-motion setting.
+- Automatic pause on idle or lock is not implemented.
+- Video and wallpaper animation use more power than a static wallpaper; use
+  *Show video on battery* to control this on laptops.
+
+## License and credits
+
+Copyright &copy; Robin Gupta. RGS&trade;. Built with Claude.

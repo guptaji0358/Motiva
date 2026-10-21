@@ -7,7 +7,7 @@
      The ONLY place to change distribution links. Binaries are distributed via
      GitHub Releases, never stored in this website.
      releaseUrl: the "Download for Windows" target. Direct link to the installer asset on the repository's
-     latest release (tag v1.0.0 published). Keep the asset name in sync with the
+     latest release (tag v2.0.0 published). Keep the asset name in sync with the
      file attached to the release. */
   var GITHUB_URL = 'https://github.com/guptaji0358/Motiva';
   var CONFIG = {

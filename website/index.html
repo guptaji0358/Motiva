@@ -36,6 +36,7 @@
           <li><a href="#how-it-works">How It Works</a></li>
           <li><a href="#screenshots">Screenshots</a></li>
           <li><a href="#windows">Windows</a></li>
+          <li><a href="#why">Why Motiva</a></li>
           <li><a href="#download">Download</a></li>
           <li><a href="https://github.com/guptaji0358/Motiva" rel="noopener" target="_blank" class="nav-external" data-github>GitHub<img src="Assets/icons/external.svg" alt="" width="14" height="14"></a></li>
         </ul>
@@ -60,7 +61,7 @@
           <p class="eyebrow" data-anim="hero" style="--d:0ms">Windows video wallpaper</p>
           <h1 id="hero-title" data-anim="hero" style="--d:80ms">Bring <span class="grad-text">motion</span> to your&nbsp;desktop.</h1>
           <p class="lead" data-anim="hero" style="--d:160ms">
-            Motiva is a native Windows application that plays videos and GIFs as a live wallpaper,
+            Motiva is a native Windows application that plays videos, GIFs and image playlists as a live wallpaper,
             behind your desktop icons — no browser, no fake fullscreen window.
           </p>
           <div class="hero-actions" data-anim="hero" style="--d:240ms">
@@ -71,7 +72,8 @@
           </div>
           <ul class="hero-facts" data-anim="hero" style="--d:320ms" aria-label="Key facts">
             <li>Native C++ / Qt&nbsp;6</li>
-            <li>Video &amp; GIF</li>
+            <li>Video, GIF &amp; images</li>
+            <li>Version 2.0</li>
             <li>Per-user install</li>
           </ul>
         </div>
@@ -107,7 +109,7 @@
         <header class="section-head reveal">
           <p class="eyebrow">Features</p>
           <h2 id="features-title">Everything Motiva does today</h2>
-          <p class="section-lead">A focused set of features, all built into the current version.</p>
+          <p class="section-lead">Everything below ships in Motiva 2.0.</p>
         </header>
 
         <ul class="feature-grid">
@@ -119,7 +121,19 @@
             <p>Use an animated GIF as your wallpaper exactly like a video file.</p></li>
           <li class="card reveal"><img class="icon" src="Assets/icons/formats.svg" alt="" width="44" height="44">
             <h3>Multiple media formats</h3>
-            <p>MP4, MKV, MOV, AVI, WMV, OGV and GIF. Video formats depend on the media backend Motiva ships with.</p></li>
+            <p>MP4, MKV, MOV, AVI, WMV, OGV, GIF and still images. Video formats depend on the media backend Motiva ships with.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/folder.svg" alt="" width="44" height="44">
+            <h3>Playlists</h3>
+            <p>Image, video and mixed playlists that rotate on unlock, at Windows start or on an interval, or advance when a video ends.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/sparkle.svg" alt="" width="44" height="44">
+            <h3>Categories &amp; Wallpaper Flow</h3>
+            <p>Group a playlist into nested categories, then reorder it visually in the Flow editor with undo, redo and zoom.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/search.svg" alt="" width="44" height="44">
+            <h3>Find missing files</h3>
+            <p>Moved or renamed a file? <em>Find All at Once</em> searches your drives in a single pass and relinks what it finds.</p></li>
+          <li class="card reveal"><img class="icon" src="Assets/icons/recovery.svg" alt="" width="44" height="44">
+            <h3>Optional local backup</h3>
+            <p>Off by default. Turn it on to keep a local copy of your media, and clean up cache or data from one window.</p></li>
           <li class="card reveal"><img class="icon" src="Assets/icons/drag-drop.svg" alt="" width="44" height="44">
             <h3>Drag &amp; drop</h3>
             <p>Drop a local video or GIF onto the window, or use <em>Open Video</em> to browse for one.</p></li>
@@ -128,13 +142,13 @@
             <p>Paste a direct http(s) link to a video file — or press <kbd>Ctrl</kbd>+<kbd>V</kbd> in the window.</p></li>
           <li class="card reveal"><img class="icon" src="Assets/icons/explorer.svg" alt="" width="44" height="44">
             <h3>File Explorer integration</h3>
-            <p>Optionally add <em>Set as background</em> to the right-click menu of supported media files.</p></li>
+            <p>Optionally add a <em>Motiva</em> right-click menu to media files: set as background or add to any playlist.</p></li>
           <li class="card reveal"><img class="icon" src="Assets/icons/battery.svg" alt="" width="44" height="44">
             <h3>Battery control</h3>
             <p>A <em>Show video on battery</em> setting lets you choose whether the video keeps playing on battery power.</p></li>
           <li class="card reveal"><img class="icon" src="Assets/icons/themes.svg" alt="" width="44" height="44">
-            <h3>Four themes</h3>
-            <p>Dark Aurora, Light Aurora, Dark Onyx and Light Onyx — switch any time in Settings.</p></li>
+            <h3>Four themes + editor</h3>
+            <p>Dark Aurora, Light Aurora, Dark Onyx and Light Onyx — then tune any color in the built-in theme editor, with automatic contrast fixes.</p></li>
           <li class="card reveal"><img class="icon" src="Assets/icons/recovery.svg" alt="" width="44" height="44">
             <h3>Explorer recovery</h3>
             <p>If Windows Explorer restarts, Motiva re-attaches the wallpaper on its own.</p></li>
@@ -270,7 +284,7 @@
           <article class="card reveal">
             <img class="icon" src="Assets/icons/video.svg" alt="" width="44" height="44">
             <h3>DirectComposition &amp; Direct3D 11</h3>
-            <p>Frames are decoded with Qt Multimedia and presented through DirectComposition using Direct3D 11.</p>
+            <p>Frames are decoded with Qt Multimedia and presented through DirectComposition using Direct3D 11. The app's own interface is GPU-drawn with OpenGL.</p>
           </article>
           <article class="card reveal">
             <img class="icon" src="Assets/icons/recovery.svg" alt="" width="44" height="44">
@@ -290,6 +304,25 @@
       </div>
     </section>
 
+    <!-- ============================== Why I made Motiva ============================== -->
+    <section class="section" id="why" aria-labelledby="why-title">
+      <div class="container">
+        <header class="section-head reveal">
+          <p class="eyebrow">The story</p>
+          <h2 id="why-title">Why I made Motiva</h2>
+        </header>
+
+        <div class="why reveal">
+          <p class="why-lead">I wanted my desktop to feel alive without making my PC feel slow.</p>
+          <p>Live wallpapers on Windows usually mean a heavy app, a browser engine running in the background, or a video window faking its way to fullscreen and covering your icons and taskbar. I wanted the real thing: a video that sits genuinely <em>behind</em> the desktop icons, where a wallpaper belongs.</p>
+          <p>So I built Motiva as a native Windows application. It attaches to the actual desktop layer, draws through DirectComposition and Direct3D 11, steps aside when you pick a normal wallpaper, and recovers by itself when Explorer restarts.</p>
+          <p>It started as a single video playing behind the icons. Over time it grew into what you see in version 2.0: playlists, categories, a visual Flow editor, themes you can edit and tools to find missing files. Everything stays on your own PC — no account, no cloud, no tracking.</p>
+          <p>I made Motiva for people who like a desktop that moves, and who want it to stay simple, fast and respectful of their machine. I built it with Claude as my pair-programmer, and I'm still improving it.</p>
+          <p class="why-sign">— Robin Gupta</p>
+        </div>
+      </div>
+    </section>
+
     <!-- ============================== Download ============================== -->
     <section class="section download" id="download" aria-labelledby="dl-title">
       <div class="container">
@@ -298,7 +331,7 @@
             <img class="download-logo" src="Assets/logo/motiva-logo.svg" alt="" width="72" height="72">
             <p class="eyebrow">For users</p>
             <h2 id="dl-title">Download for Windows</h2>
-            <p class="section-lead">Get the latest Motiva release for Windows. Version <strong>1.0.0</strong></p>
+            <p class="section-lead">Get the latest Motiva release for Windows. Version <strong>2.0.0</strong></p>
             <div class="hero-actions">
               <a class="btn btn-primary btn-lg" href="#download" rel="noopener" data-download-main>
                 <img src="Assets/icons/download.svg" alt="" width="20" height="20"><span>Download for Windows</span>
@@ -355,6 +388,7 @@
           <li><a href="#how-it-works">How It Works</a></li>
           <li><a href="#screenshots">Screenshots</a></li>
           <li><a href="#windows">Windows</a></li>
+          <li><a href="#why">Why Motiva</a></li>
           <li><a href="#download">Download</a></li>
           <li><a href="https://github.com/guptaji0358/Motiva" rel="noopener" target="_blank" data-github>GitHub</a></li>
         </ul>
