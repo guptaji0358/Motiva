@@ -2451,10 +2451,10 @@ QRectF GlItemView::cellRect(int vi) const {
     if (m_mode == Mode::List) {
         return QRectF(vp.left(), vp.top() + row * (m_cell.height() + m_spacing) - m_scrollY, vp.width(), m_cell.height());
     }
-    const qreal gridW = cols * (m_cell.width() + m_spacing) - m_spacing;
-    const qreal x0 = vp.left() + std::max<qreal>(0, (vp.width() - gridW) / 2);
-    return QRectF(x0 + col * (m_cell.width() + m_spacing), vp.top() + row * (m_cell.height() + m_spacing) - m_scrollY,
-                  m_cell.width(), m_cell.height());
+    // Cells stretch to share the leftover width, so the last column never leaves a blank strip.
+    const qreal w = std::max<qreal>(m_cell.width(), (vp.width() + m_spacing) / cols - m_spacing);
+    return QRectF(vp.left() + col * (w + m_spacing), vp.top() + row * (m_cell.height() + m_spacing) - m_scrollY,
+                  w, m_cell.height());
 }
 
 QRectF GlItemView::rowRect(int row) const {
