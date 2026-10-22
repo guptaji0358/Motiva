@@ -230,12 +230,25 @@ procedure NextClick(Sender: TObject); begin NavClick(BTN_NEXT); end;
 procedure BackClick(Sender: TObject); begin NavClick(BTN_BACK); end;
 procedure CancelClick(Sender: TObject); begin NavClick(BTN_CANCEL); end;
 
+var
+  BrowseProxy: TNewButton;
+  BrowseBusy: Boolean;
+
+// Runs from a real button OnClick (see BrowseProxy), never from the UI timer
+// callback: the folder dialog (and its "Make New Folder") runs a nested modal
+// loop, and doing that inside the native timer callback crashed the setup.
 procedure BrowseClick(Sender: TObject);
 var S: String;
 begin
-  S := DirEditBox.Text;
-  if BrowseForFolder('Choose where to install Motiva', S, True) then
-    DirEditBox.Text := S;
+  if BrowseBusy then Exit;
+  BrowseBusy := True;
+  try
+    S := DirEditBox.Text;
+    if BrowseForFolder('Choose where to install Motiva', S, True) then
+      DirEditBox.Text := S;
+  finally
+    BrowseBusy := False;
+  end;
 end;
 
 function MakeButton(Parent: TWinControl; Kind: Integer): TBitmapImage;
@@ -412,6 +425,16 @@ begin
   BImg[BTN_BROWSE].Top := Y;
   BCap[BTN_BROWSE] := 'Browse...';
   BShown[BTN_BROWSE] := '';
+
+  // Off-screen native button that owns the real OnClick for Browse.
+  BrowseProxy := TNewButton.Create(WizardForm);
+  BrowseProxy.Parent := OptionsPage.Surface;
+  BrowseProxy.Left := -3000;
+  BrowseProxy.Top := 0;
+  BrowseProxy.Width := ScaleX(10);
+  BrowseProxy.Height := ScaleY(10);
+  BrowseProxy.TabStop := False;
+  BrowseProxy.OnClick := @BrowseClick;
 end;
 
 // Fill = two rounded caps + a stretched middle, so the ends stay round at any width.
@@ -609,7 +632,8 @@ begin
         if Clicked and BNative[I].Enabled then NavClick(I);
       end;
     if (OptionsPage <> nil) and (WizardForm.CurPageID = OptionsPage.ID) then
-      if ClickEdge(BTN_BROWSE, BImg[BTN_BROWSE]) then BrowseClick(nil);
+      if ClickEdge(BTN_BROWSE, BImg[BTN_BROWSE]) and (not BrowseBusy) then
+        PostMessage(BrowseProxy.Handle, BM_CLICK, 0, 0);
     if (PowerPage <> nil) and (WizardForm.CurPageID = PowerPage.ID) then begin
       if ClickEdge(4, ChkImg[0]) then ToggleCheck(0);
       if ClickEdge(6, PowerLbl) then ToggleCheck(0);
