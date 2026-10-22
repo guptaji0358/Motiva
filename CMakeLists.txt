@@ -143,6 +143,17 @@ if(MSVC)
     target_link_options(Motiva PRIVATE "/MANIFESTUAC:level='asInvoker' uiAccess='false'")
 endif()
 
+# --- Explorer helper DLL (v2.1: folder "Motiva" menu only for folders that
+# contain images). Qt-free COM server implementing IExplorerCommandState; built
+# with the normal build, shipped beside Motiva.exe (resources/bin/).
+add_library(MotivaShell SHARED scripts/shell/MotivaShell.cpp)
+target_link_libraries(MotivaShell PRIVATE ole32 shell32 uuid)
+if(MINGW)
+    target_link_options(MotivaShell PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
+set_target_properties(MotivaShell PROPERTIES PREFIX "")
+add_dependencies(Motiva MotivaShell)
+
 # --- Deployment-root launcher (see the "Organize Final Deployment
 # Output" task / deploy/Deploy.ps1) ---
 # A tiny, Qt-free native executable - EXCLUDE_FROM_ALL so a plain

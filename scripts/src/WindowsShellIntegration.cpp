@@ -50,7 +50,7 @@ constexpr const char* kLegacyVerbs[] = {"MotivaSetBackground", "MotivaAddToPlayl
 // ECF_SEPARATORBEFORE: a separator above "Create New Playlist...".
 constexpr DWORD kSeparatorBefore = 0x20;
 
-enum class MenuKind { Video, Image, Background };
+enum class MenuKind { Video, Image, Background, Folder };
 
 QString kindName(MenuKind kind) {
     switch (kind) {
@@ -58,6 +58,8 @@ QString kindName(MenuKind kind) {
         return QStringLiteral("Video");
     case MenuKind::Image:
         return QStringLiteral("Image");
+    case MenuKind::Folder:
+        return QStringLiteral("Folder");
     default:
         return QStringLiteral("Background");
     }
@@ -176,6 +178,58 @@ bool writeCreateNewEntry(MenuKind kind, const QString& exePath, bool separator) 
                         separator ? kSeparatorBefore : 0, true);
 }
 
+// --- Folder menu (v2.1) ---
+// Per-user COM server (MotivaShell.dll) that tells Explorer whether the
+// folder verb is shown; see scripts/shell/MotivaShell.cpp.
+constexpr const char* kFolderStateClsid = "{7B3F0C52-5E1A-4D3B-9A44-6C2D8E1F0B97}";
+constexpr const char* kFolderVerbPath = "Software\\Classes\\Directory\\shell\\Motiva";
+
+QString folderClsidPath() {
+    return QLatin1String(kClassesRoot) + QStringLiteral("CLSID\\") + QLatin1String(kFolderStateClsid);
+}
+
+// The helper DLL lives with the real binary (resources/bin) or beside the exe.
+QString shellDllPath(const QString& exePath) {
+    const QDir dir = QFileInfo(exePath).absoluteDir();
+    const QString deployed = dir.filePath(QStringLiteral("resources/bin/MotivaShell.dll"));
+    return QFileInfo::exists(deployed) ? deployed : dir.filePath(QStringLiteral("MotivaShell.dll"));
+}
+
+bool removeFolderMenu() {
+    bool ok = deleteTree(QLatin1String(kFolderVerbPath));
+    ok = deleteTree(hkcu(menuKeyName(MenuKind::Folder))) && ok;
+    ok = deleteTree(folderClsidPath()) && ok;
+    return ok;
+}
+
+// "Motiva > Add to playlist" on folders that directly contain an image. If
+// the helper DLL is missing the verb is NOT registered (it could not be
+// hidden for image-less folders, and a menu that always shows is wrong).
+bool registerFolderMenu(const QString& exePath, const QStringList& imageExtensions, const QString& icon) {
+    const QString dll = shellDllPath(exePath);
+    if (imageExtensions.isEmpty() || !QFileInfo::exists(dll)) {
+        qWarning() << "[ShellIntegration] Folder menu skipped (helper DLL or image list missing):" << dll;
+        return removeFolderMenu();
+    }
+    QStringList dotExts;
+    for (const QString& ext : imageExtensions) {
+        dotExts << QLatin1Char('.') + ext.toLower();
+    }
+    bool ok = writeKey(folderClsidPath(), {{nullptr, QStringLiteral("Motiva folder menu state")},
+                                           {L"ImageExtensions", dotExts.join(QLatin1Char(';'))}});
+    ok = writeKey(folderClsidPath() + QStringLiteral("\\InprocServer32"),
+                  {{nullptr, QDir::toNativeSeparators(dll)}, {L"ThreadingModel", QStringLiteral("Apartment")}}) && ok;
+    ok = writeKey(hkcu(menuKeyName(MenuKind::Folder)) + QStringLiteral("\\shell\\02AddToPlaylist"),
+                  {{L"MUIVerb", QStringLiteral("Add to playlist")},
+                   {L"ExtendedSubCommandsKey", playlistsKeyName(MenuKind::Image)}}) && ok;
+    ok = writeKey(QLatin1String(kFolderVerbPath),
+                  {{L"MUIVerb", QStringLiteral("Motiva")},
+                   {L"Icon", icon},
+                   {L"ExtendedSubCommandsKey", menuKeyName(MenuKind::Folder)},
+                   {L"CommandStateHandler", QLatin1String(kFolderStateClsid)}}) && ok;
+    return ok;
+}
+
 } // namespace
 
 // A target is runnable only if Qt's DLLs can be found for it: either the
@@ -264,7 +318,8 @@ bool RemoveStartMenuShortcut() {
 }
 
 bool RegisterExplorerMenu(const QString& exePath, const QStringList& videoExtensions,
-                          const QStringList& imageExtensions, const QStringList& backgroundOnlyExtensions) {
+                          const QStringList& imageExtensions, const QStringList& backgroundOnlyExtensions,
+                          bool folderMenu) {
     if (!isRunnableTarget(exePath)) {
         qWarning() << "[ShellIntegration] Refusing to register Explorer menu: not a runnable deployment:" << exePath;
         UnregisterExplorerMenu();
@@ -305,6 +360,7 @@ bool RegisterExplorerMenu(const QString& exePath, const QStringList& videoExtens
         }
     }
     ok = removeMotivaVerbs(keep) && ok;
+    ok = (folderMenu ? registerFolderMenu(exePath, imageExtensions, icon) : removeFolderMenu()) && ok;
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return ok;
 }
@@ -340,6 +396,7 @@ bool UpdateExplorerPlaylistMenu(const QString& exePath, const QVector<ExplorerPl
 
 bool UnregisterExplorerMenu() {
     bool ok = removeMotivaVerbs();
+    ok = removeFolderMenu() && ok;
     for (MenuKind kind : {MenuKind::Video, MenuKind::Image, MenuKind::Background}) {
         ok = deleteTree(hkcu(menuKeyName(kind))) && ok;
         ok = deleteTree(hkcu(playlistsKeyName(kind))) && ok;

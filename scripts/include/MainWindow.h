@@ -244,7 +244,7 @@ private:
     // Runs `fn` now, or - if deferred startup hasn't finished - right after
     // it does (IPC hand-offs from a second launch must not race the restore).
     void runAfterStartup(std::function<void()> fn);
-    void createPlaylistFromExplorer(const QString& path, bool video);
+    void createPlaylistFromExplorer(const QStringList& files, bool video, const QString& suggestedName = QString());
     void showExplorerPlaylistError(const QString& message);
 
     std::unique_ptr<WallpaperManager> m_manager;

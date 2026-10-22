@@ -58,8 +58,16 @@ struct ExplorerPlaylist {
 // existing playlist entries in place (see UpdateExplorerPlaylistMenu) and
 // makes sure "Create New Playlist..." exists. Removes Motiva entries from
 // extensions no longer listed, and the legacy flat verbs. Idempotent.
+//
+// folderMenu (v2.1): also registers "Motiva > Add to playlist" on FOLDERS
+// (Directory\shell\Motiva). It is shown only for a folder that directly
+// contains at least one image: MotivaShell.dll (IExplorerCommandState,
+// registered per-user as a CLSID, CommandStateHandler on the verb) hides it
+// otherwise. Skipped if MotivaShell.dll is missing. The command carries the
+// folder path ("%1"); the app adds every image directly inside it.
 bool RegisterExplorerMenu(const QString& exePath, const QStringList& videoExtensions,
-                          const QStringList& imageExtensions, const QStringList& backgroundOnlyExtensions);
+                          const QStringList& imageExtensions, const QStringList& backgroundOnlyExtensions,
+                          bool folderMenu = true);
 
 // Rewrites the "Add to playlist" submenus from the current library: image
 // files list image playlists, video files list video playlists (in library

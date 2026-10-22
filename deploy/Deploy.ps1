@@ -89,6 +89,10 @@ foreach ($dir in @($OutDir, $resourcesDir, $binDir, $qtDllDir, $pluginsDir)) {
 # --- The two executables ---
 Copy-Item $launcherExe (Join-Path $OutDir "Motiva.exe") -Force
 Copy-Item $realExe (Join-Path $binDir "Motiva.exe") -Force
+$shellDll = Join-Path $BuildDir "MotivaShell.dll"
+if (Test-Path $shellDll) {
+    Copy-Item $shellDll (Join-Path $binDir "MotivaShell.dll") -Force
+}
 
 # Tells Qt's OWN plugin loader (independent of the OS DLL search PATH
 # the launcher sets up) where to find platforms/styles/imageformats/...

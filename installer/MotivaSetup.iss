@@ -851,6 +851,9 @@ begin
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.Image');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.ImagePlaylists');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.Background');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Motiva.ExplorerMenu.Folder');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Directory\shell\Motiva');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\CLSID\{7B3F0C52-5E1A-4D3B-9A44-6C2D8E1F0B97}');
   RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Motiva');
 end;
 

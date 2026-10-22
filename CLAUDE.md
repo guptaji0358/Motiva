@@ -2,6 +2,25 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (v2.1, folder context menu)
+
+Right-clicking a FOLDER shows `Motiva > Add to playlist > <image playlists> /
+Create New Playlist...` only when the folder directly contains an image
+(no sub-folder search). Static verbs can't inspect contents, so
+`scripts/shell/MotivaShell.cpp` builds `MotivaShell.dll` (Qt-free, per-user
+COM server, `IExplorerCommandState`, ships in `resources/bin/`); the verb
+`Directory\shell\Motiva` has `CommandStateHandler={7B3F0C52-...}` and the
+CLSID key holds `ImageExtensions` (written by
+`WindowsShellIntegration::registerFolderMenu` from the app's image list).
+No DLL = no folder verb. The command reuses `--add-to-playlist-id/-new-playlist`
+with the folder path; `MainWindow::onAddToPlaylistReceived` expands a
+directory to its images (natural order; new playlist is named after the folder).
+Verified: DLL GetState (image/no-image/image-only-in-subfolder) via a harness.
+NOT verified in real Explorer: that it honours CommandStateHandler together
+with ExtendedSubCommandsKey (needs the user's right-click check after
+re-toggling Explorer integration in Settings). Explorer locks the DLL while
+loaded, so updating it may need an Explorer restart.
+
 ## Current status (2026-10-18, GPU-drawn main window + theme editor)
 
 **Main window is now GL-drawn** (`GlUi.{h,cpp}`): one `QOpenGLWidget` (`GlCanvas`)
