@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a0a16"/><stop offset="1" stop-color="#150f2e"/></linearGradient>
+    <linearGradient id="ttl" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c5cff"><animate attributeName="stop-color" values="#7c5cff;#22d3ee;#ff6bd6;#7c5cff" dur="8s" repeatCount="indefinite"/></stop>
+      <stop offset="1" stop-color="#22d3ee"><animate attributeName="stop-color" values="#22d3ee;#ff6bd6;#7c5cff;#22d3ee" dur="8s" repeatCount="indefinite"/></stop>
+    </linearGradient>
+    <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="55"/></filter>
+    <filter id="glow" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <clipPath id="c"><rect width="1200" height="360" rx="22"/></clipPath>
+  </defs>
+  <g clip-path="url(#c)">
+    <rect width="1200" height="360" fill="url(#bg)"/>
+    <g filter="url(#blur)" opacity=".75">
+      <circle r="130" fill="#7c5cff"><animate attributeName="cx" values="180;520;180" dur="14s" repeatCount="indefinite"/><animate attributeName="cy" values="80;260;80" dur="11s" repeatCount="indefinite"/></circle>
+      <circle r="120" fill="#22d3ee"><animate attributeName="cx" values="980;640;980" dur="16s" repeatCount="indefinite"/><animate attributeName="cy" values="280;60;280" dur="13s" repeatCount="indefinite"/></circle>
+      <circle r="100" fill="#ff6bd6"><animate attributeName="cx" values="600;900;300;600" dur="19s" repeatCount="indefinite"/><animate attributeName="cy" values="320;120;300;320" dur="17s" repeatCount="indefinite"/></circle>
+    </g>
+    <path d="M0 60H1200M0 120H1200M0 180H1200M0 240H1200M0 300H1200" stroke="#fff" stroke-opacity=".05"/>
+    <g fill="#fff">
+      <circle cx="90" cy="70" r="2"><animate attributeName="opacity" values=".1;.9;.1" dur="3s" repeatCount="indefinite"/></circle>
+      <circle cx="300" cy="300" r="2"><animate attributeName="opacity" values=".1;.9;.1" dur="4s" repeatCount="indefinite"/></circle>
+      <circle cx="1090" cy="90" r="2"><animate attributeName="opacity" values=".1;.9;.1" dur="3.5s" repeatCount="indefinite"/></circle>
+      <circle cx="860" cy="310" r="2"><animate attributeName="opacity" values=".1;.9;.1" dur="5s" repeatCount="indefinite"/></circle>
+      <circle cx="1000" cy="200" r="1.6"><animate attributeName="opacity" values=".1;.8;.1" dur="2.6s" repeatCount="indefinite"/></circle>
+      <circle cx="150" cy="210" r="1.6"><animate attributeName="opacity" values=".1;.8;.1" dur="3.8s" repeatCount="indefinite"/></circle>
+    </g>
+    <text x="600" y="190" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-weight="800" font-size="120" letter-spacing="24" fill="url(#ttl)" filter="url(#glow)">MOTIVA</text>
+    <g font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" fill="#d9d6ff" text-anchor="middle" letter-spacing="2">
+      <text x="600" y="256">Your desktop, alive.<animate attributeName="opacity" values="0;1;1;0;0;0;0;0;0" keyTimes="0;.05;.28;.33;.4;.5;.6;.8;1" dur="12s" repeatCount="indefinite"/></text>
+      <text x="600" y="256">Video wallpapers, behind your icons.<animate attributeName="opacity" values="0;0;0;1;1;0;0;0;0" keyTimes="0;.3;.34;.38;.6;.66;.7;.8;1" dur="12s" repeatCount="indefinite"/></text>
+      <text x="600" y="256">Native C++ · No Electron · No telemetry.<animate attributeName="opacity" values="0;0;0;0;0;0;1;1;0" keyTimes="0;.3;.5;.6;.64;.66;.72;.95;1" dur="12s" repeatCount="indefinite"/></text>
+    </g>
+  </g>
+  <rect x="1" y="1" width="1198" height="358" rx="22" fill="none" stroke="#7c5cff" stroke-opacity=".35"/>
+</svg>

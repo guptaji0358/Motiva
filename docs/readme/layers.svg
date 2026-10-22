@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" width="900" height="460">
+  <defs>
+    <linearGradient id="vid" x1="0" y1="0" x2="1" y2="0" spreadMethod="reflect">
+      <stop offset="0" stop-color="#7c5cff"/><stop offset=".5" stop-color="#22d3ee"/><stop offset="1" stop-color="#ff6bd6"/>
+      <animate attributeName="x1" values="0;1;0" dur="6s" repeatCount="indefinite"/>
+      <animate attributeName="x2" values="1;2;1" dur="6s" repeatCount="indefinite"/>
+    </linearGradient>
+    <filter id="gl" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="14"/></filter>
+  </defs>
+  <rect width="900" height="460" rx="20" fill="#0c0b18"/>
+  <g font-family="Segoe UI,Helvetica,Arial,sans-serif" fill="#e6e4ff" text-anchor="middle">
+    <g transform="translate(450 365)">
+      <path d="M-280 0 L0 -64 L280 0 L0 64Z" fill="#23223a" stroke="#4a4870"/>
+      <text y="5" font-size="15" fill="#9d9bc4">Windows' own wallpaper, untouched</text>
+    </g>
+    <g transform="translate(450 235)">
+      <animateTransform attributeName="transform" type="translate" values="450 235;450 227;450 235" dur="4s" repeatCount="indefinite"/>
+      <path d="M-280 0 L0 -64 L280 0 L0 64Z" fill="#7c5cff" opacity=".55" filter="url(#gl)"/>
+      <path d="M-280 0 L0 -64 L280 0 L0 64Z" fill="url(#vid)" stroke="#fff" stroke-opacity=".5"/>
+      <polygon points="-196,-9 -196,9 -181,0" fill="#fff"/>
+      <text y="6" font-size="16" font-weight="700" fill="#fff">MOTIVA video</text>
+    </g>
+    <g transform="translate(450 105)">
+      <animateTransform attributeName="transform" type="translate" values="450 105;450 93;450 105" dur="4s" begin="-1s" repeatCount="indefinite"/>
+      <path d="M-280 0 L0 -64 L280 0 L0 64Z" fill="#fff" fill-opacity=".06" stroke="#bdb8ff" stroke-opacity=".6" stroke-dasharray="6 6">
+        <animate attributeName="stroke-dashoffset" values="0;24" dur="1.5s" repeatCount="indefinite"/>
+      </path>
+      <rect x="-150" y="-12" width="22" height="22" rx="6" fill="#ffd166"/>
+      <rect x="-100" y="-34" width="22" height="22" rx="6" fill="#4ade80"/>
+      <rect x="90" y="-30" width="22" height="22" rx="6" fill="#60a5fa"/>
+      <rect x="140" y="-8" width="22" height="22" rx="6" fill="#f472b6"/>
+      <text y="30" font-size="15" fill="#c9c6f5">Icons, taskbar, windows</text>
+    </g>
+  </g>
+</svg>

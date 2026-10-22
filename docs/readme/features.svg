@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+  </defs>
+  <rect width="1200" height="440" rx="20" fill="#0a0a16"/>
+  <g font-family="Segoe UI,Helvetica,Arial,sans-serif">
+    <g>
+      <rect x="30" y="30" width="360" height="180" rx="18" fill="#12111f" stroke="#2c2a4a" stroke-width="1.5"><animate attributeName="stroke" values="#2c2a4a;#7c5cff;#2c2a4a" dur="5s" repeatCount="indefinite"/></rect>
+      <circle cx="80" cy="85" r="22" fill="url(#g)"><animate attributeName="r" values="22;26;22" dur="3s" repeatCount="indefinite"/></circle>
+      <polygon points="74,75 74,95 91,85" fill="#fff"/>
+      <text x="120" y="92" font-size="22" font-weight="700" fill="#fff">Truly native</text>
+      <text x="60" y="140" font-size="15" fill="#a9a6d0">Win32 + DirectComposition + D3D11.</text>
+      <text x="60" y="165" font-size="15" fill="#a9a6d0">One small .exe, not a web view.</text>
+    </g>
+    <g>
+      <rect x="420" y="30" width="360" height="180" rx="18" fill="#12111f" stroke="#2c2a4a" stroke-width="1.5"><animate attributeName="stroke" values="#2c2a4a;#7c5cff;#2c2a4a" dur="5s" begin="-1s" repeatCount="indefinite"/></rect>
+      <rect x="458" y="63" width="44" height="44" rx="12" fill="url(#g)"><animate attributeName="rx" values="12;22;12" dur="3s" repeatCount="indefinite"/></rect>
+      <text x="520" y="92" font-size="22" font-weight="700" fill="#fff">Behind your icons</text>
+      <text x="450" y="140" font-size="15" fill="#a9a6d0">Parented to Progman, one z-slot</text>
+      <text x="450" y="165" font-size="15" fill="#a9a6d0">behind the icon layer. Stays clickable.</text>
+    </g>
+    <g>
+      <rect x="810" y="30" width="360" height="180" rx="18" fill="#12111f" stroke="#2c2a4a" stroke-width="1.5"><animate attributeName="stroke" values="#2c2a4a;#7c5cff;#2c2a4a" dur="5s" begin="-2s" repeatCount="indefinite"/></rect>
+      <rect x="846" y="66" width="40" height="30" rx="5" fill="url(#g)"/>
+      <rect x="852" y="104" width="28" height="4" rx="2" fill="#7c5cff"><animate attributeName="width" values="10;28;10" dur="2.5s" repeatCount="indefinite"/></rect>
+      <text x="900" y="92" font-size="22" font-weight="700" fill="#fff">GPU-drawn UI</text>
+      <text x="840" y="140" font-size="15" fill="#a9a6d0">One OpenGL canvas, shader</text>
+      <text x="840" y="165" font-size="15" fill="#a9a6d0">background, live theming.</text>
+    </g>
+    <g>
+      <rect x="30" y="230" width="360" height="180" rx="18" fill="#12111f" stroke="#2c2a4a" stroke-width="1.5"><animate attributeName="stroke" values="#2c2a4a;#7c5cff;#2c2a4a" dur="5s" begin="-3s" repeatCount="indefinite"/></rect>
+      <rect x="58" y="268" width="44" height="10" rx="5" fill="url(#g)"><animate attributeName="width" values="44;28;44" dur="3s" repeatCount="indefinite"/></rect>
+      <rect x="58" y="284" width="44" height="10" rx="5" fill="url(#g)" opacity=".7"><animate attributeName="width" values="30;44;30" dur="3s" repeatCount="indefinite"/></rect>
+      <rect x="58" y="300" width="44" height="10" rx="5" fill="url(#g)" opacity=".4"><animate attributeName="width" values="44;24;44" dur="3s" repeatCount="indefinite"/></rect>
+      <text x="120" y="292" font-size="22" font-weight="700" fill="#fff">Smart playlists</text>
+      <text x="60" y="340" font-size="15" fill="#a9a6d0">Image, video and mixed. Nested</text>
+      <text x="60" y="365" font-size="15" fill="#a9a6d0">categories. Wallpaper Flow.</text>
+    </g>
+    <g>
+      <rect x="420" y="230" width="360" height="180" rx="18" fill="#12111f" stroke="#2c2a4a" stroke-width="1.5"><animate attributeName="stroke" values="#2c2a4a;#7c5cff;#2c2a4a" dur="5s" begin="-4s" repeatCount="indefinite"/></rect>
+      <circle cx="480" cy="285" r="20" fill="none" stroke="url(#g)" stroke-width="6" stroke-dasharray="90 40">
+        <animateTransform attributeName="transform" type="rotate" from="0 480 285" to="360 480 285" dur="3s" repeatCount="indefinite"/>
+      </circle>
+      <text x="520" y="292" font-size="22" font-weight="700" fill="#fff">Self-healing</text>
+      <text x="450" y="340" font-size="15" fill="#a9a6d0">Survives Explorer restarts and</text>
+      <text x="450" y="365" font-size="15" fill="#a9a6d0">steps aside when you ask it to.</text>
+    </g>
+    <g>
+      <rect x="810" y="230" width="360" height="180" rx="18" fill="#12111f" stroke="#2c2a4a" stroke-width="1.5"><animate attributeName="stroke" values="#2c2a4a;#7c5cff;#2c2a4a" dur="5s" begin="-5s" repeatCount="indefinite"/></rect>
+      <path d="M868 262l22 8v16c0 14-10 24-22 28-12-4-22-14-22-28v-16z" fill="url(#g)"><animate attributeName="opacity" values="1;.6;1" dur="3s" repeatCount="indefinite"/></path>
+      <text x="910" y="292" font-size="22" font-weight="700" fill="#fff">Private</text>
+      <text x="840" y="340" font-size="15" fill="#a9a6d0">No account, no cloud, no telemetry.</text>
+      <text x="840" y="365" font-size="15" fill="#a9a6d0">Originals are only ever read.</text>
+    </g>
+  </g>
+</svg>

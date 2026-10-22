@@ -1,10 +1,6 @@
 <div align="center">
 
-<img src="Assets/application/motiva_logo.png" width="112" alt="Motiva logo" />
-
-# M O T I V A
-
-### Your desktop, alive.
+<img src="docs/readme/banner.svg" alt="Motiva - Your desktop, alive." width="100%" />
 
 **Video, GIF and image-slideshow wallpapers for Windows, running *behind* your icons.**<br/>
 Native C++ · Qt 6 · Win32 · DirectComposition · a GPU-drawn UI. No Electron. No browser. No fake fullscreen window.
@@ -18,29 +14,21 @@ Native C++ · Qt 6 · Win32 · DirectComposition · a GPU-drawn UI. No Electron.
 
 [**Download**](https://github.com/guptaji0358/Motiva/releases) &nbsp;·&nbsp; [**Website**](website) &nbsp;·&nbsp; [**How it works**](#under-the-hood) &nbsp;·&nbsp; [**Build it**](#building)
 
-</div>
-
 <br/>
 
-```text
-  ┌──────────────────────────────────────────────┐
-  │  🗂  icons, taskbar, your windows            │   ← still yours, always on top
-  ├──────────────────────────────────────────────┤
-  │  🎬  M O T I V A   (DirectComposition)       │   ← the video lives here
-  ├──────────────────────────────────────────────┤
-  │  🖼  Windows' own wallpaper                  │   ← untouched, never overwritten
-  └──────────────────────────────────────────────┘
-```
+<img src="docs/readme/divider.svg" width="100%" alt="" />
+
+<img src="docs/readme/layers.svg" alt="Layer diagram: icons on top, Motiva video in the middle, Windows wallpaper at the bottom" width="760" />
+
+<sub>Three layers. Motiva lives in the middle, so your icons stay on top.</sub>
+
+</div>
 
 ## Why it feels different
 
-| | |
-|---|---|
-| ⚡ **Truly native** | One small `.exe`. A plain Win32 render window presented through DirectComposition + Direct3D 11, not a web view in disguise. |
-| 🧩 **Sits where wallpapers belong** | Parented to `Progman`, one z-slot behind the icon layer. Icons and taskbar stay on top and fully clickable. |
-| 🎛 **A UI drawn on the GPU** | The whole interface is one OpenGL canvas with an animated shader background, rounded borderless windows and live theming. |
-| 🔒 **Yours alone** | No account, no cloud, no telemetry. Originals are only ever *read*. |
-| 🛟 **Hard to break** | Survives Explorer restarts, steps aside when you pick a normal wallpaper, and never re-grabs your desktop on its own. |
+<img src="docs/readme/features.svg" alt="Truly native, behind your icons, GPU-drawn UI, smart playlists, self-healing, private" width="100%" />
+
+<img src="docs/readme/divider.svg" width="100%" alt="" />
 
 ## Feature tour
 
