@@ -12,7 +12,7 @@ Native C++ · Qt 6 · Win32 · DirectComposition · a GPU-drawn UI. No Electron.
 [![C++](https://img.shields.io/badge/C%2B%2B-Qt%206-41CD52?style=for-the-badge&logo=qt&logoColor=white)](#building)
 [![Privacy](https://img.shields.io/badge/telemetry-none-2ea44f?style=for-the-badge)](#privacy-by-design)
 
-[**Download**](https://github.com/guptaji0358/Motiva/releases) &nbsp;·&nbsp; [**Website**](website) &nbsp;·&nbsp; [**How it works**](#under-the-hood) &nbsp;·&nbsp; [**Build it**](#building)
+[**Download**](https://github.com/guptaji0358/Motiva/releases) &nbsp;·&nbsp; [**Website**](https://robinlab.pages.dev/projects/Motiva/) &nbsp;·&nbsp; [**How it works**](#under-the-hood) &nbsp;·&nbsp; [**Build it**](#building)
 
 <br/>
 
