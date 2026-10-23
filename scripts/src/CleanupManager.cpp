@@ -1,5 +1,7 @@
 #include "CleanupManager.h"
 #include "BackupManager.h"
+#include "CloudManager.h"
+#include <QDirIterator>
 #include "LibraryDatabase.h"
 #include "LocalBackupProvider.h"
 #include "PlaylistLibrary.h"
@@ -85,8 +87,22 @@ QStringList CleanupManager::legacyFiles() {
     return {dir + QStringLiteral("/recovery-state.json"), dir + QStringLiteral("/recovery-state.json.tmp")};
 }
 
+QString CleanupManager::cloudCacheDirectory() {
+    return QDir::cleanPath(CloudManager::cacheRoot());
+}
+
+// Exact files currently inside the cloud cache (enumerated, never a tree delete).
+QStringList CleanupManager::cloudCacheFiles() {
+    QStringList files;
+    QDirIterator it(cloudCacheDirectory(), QDir::Files | QDir::Hidden | QDir::NoSymLinks, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        files << it.next();
+    }
+    return files;
+}
+
 QStringList CleanupManager::approvedRoots() {
-    QStringList roots{libraryDirectory(), QFileInfo(RecoveryState::stateFilePath()).absolutePath()};
+    QStringList roots{libraryDirectory(), QFileInfo(RecoveryState::stateFilePath()).absolutePath(), cloudCacheDirectory()};
     const QString legacy = legacyDirectory();
     if (!legacy.isEmpty()) {
         roots << legacy;
@@ -171,6 +187,10 @@ void CleanupManager::removeEmptyOwnedDir(const QString& dir) {
     }
     const QString clean = QDir::cleanPath(QFileInfo(dir).absoluteFilePath());
     bool ok = false;
+    const QString cloudRoot = cloudCacheDirectory();
+    if (clean.compare(cloudRoot, Qt::CaseInsensitive) == 0 || clean.startsWith(cloudRoot + QLatin1Char('/'), Qt::CaseInsensitive)) {
+        ok = true;
+    }
     for (const QString& a : std::as_const(allowed)) {
         ok = ok || clean.compare(QDir::cleanPath(a), Qt::CaseInsensitive) == 0;
     }
@@ -227,6 +247,9 @@ void CleanupManager::refreshSizes() {
         s.backupItems = backupStats.complete;
         s.unusedBackups = backupStats.unused;
         s.backupBytes = LocalBackupProvider().usedBytes();
+        const QStringList cloud = cloudCacheFiles();
+        s.cloudFiles = cloud.size();
+        s.cloudBytes = totalSize(cloud);
         const QFileInfo log(logFilePath());
         s.logPresent = log.isFile();
         s.logBytes = s.logPresent ? log.size() : 0;
@@ -328,6 +351,30 @@ QVector<CleanupManager::Step> CleanupManager::buildSteps(Operation op) {
     }
 
     switch (op) {
+    case Operation::DeleteCloudCache: {
+        // Only files Motiva downloaded from cloud storage; the originals in the
+        // cloud are never touched. Playlists that use them will show them as missing.
+        steps.push_back({tr("Stopping any running cloud download"), false, [] {
+                             CloudManager::instance()->cancelDownloads();
+                             return QString();
+                         }});
+        steps.push_back({tr("Deleting downloaded cloud files"), true, [] { return removeOwnedFiles(cloudCacheFiles()); }});
+        steps.push_back({tr("Removing empty cloud folders"), true, [] {
+                             QStringList dirs;
+                             QDirIterator it(cloudCacheDirectory(), QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+                                             QDirIterator::Subdirectories);
+                             while (it.hasNext()) {
+                                 dirs << it.next();
+                             }
+                             std::sort(dirs.begin(), dirs.end(), [](const QString& a, const QString& b) { return a.size() > b.size(); });
+                             for (const QString& d : std::as_const(dirs)) {
+                                 removeEmptyOwnedDir(d);
+                             }
+                             removeEmptyOwnedDir(cloudCacheDirectory());
+                             return QString();
+                         }});
+        break;
+    }
     case Operation::DeleteBackups: {
         // Explicit, and the only thing besides "unused backups" that removes
         // copies. Original media is never touched - only Motiva's own copies.

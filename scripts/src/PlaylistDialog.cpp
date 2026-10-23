@@ -1,5 +1,6 @@
 #include "GlPopups.h"
 #include "PlaylistDialog.h"
+#include "CloudWindow.h"
 #include "MediaPreview.h"
 #include "NotificationManager.h"
 #include "BackupManager.h"
@@ -956,6 +957,10 @@ void PlaylistDialog::buildUi() {
     m_addFolderButton = makeButton(GlButton::Kind::Secondary, tr("Add Folder…"), tr("Add Folder"),
                                    tr("Add every supported file in a folder and its subfolders (Ctrl+Shift+O)"),
                                    [this] { onAddFolder(); });
+    m_cloudButton = makeButton(GlButton::Kind::Secondary, tr("Cloud…"), tr("Add from Cloud"),
+                               tr("Add wallpapers from OneDrive, Google Drive or Dropbox. They are saved on this PC, "
+                                  "so the playlist keeps working offline."),
+                               [this] { onAddFromCloud(); });
     m_clearButton = makeButton(GlButton::Kind::Secondary, tr("Clear"), tr("Clear"),
                                tr("Remove every item from this playlist. No files are deleted."), [this] { onClear(); });
 
@@ -1098,8 +1103,8 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     m_flowButton->setRect(QRectF(rightEdge - 3 * iconW - 2 * gap, ty, iconW, th));
     m_flowButton->setVisible(pl != nullptr);
     const qreal avail = (rightEdge - 3 * iconW - 2 * gap) - 14 - tx;
-    const qreal bw4 = std::clamp((avail - 4 * gap) / 5, 90.0, 150.0);
-    for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton, m_addButton, m_addFolderButton}) {
+    const qreal bw4 = std::clamp((avail - 5 * gap) / 6, 80.0, 150.0);
+    for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton, m_addButton, m_addFolderButton, m_cloudButton}) {
         b->setRect(QRectF(tx, ty, bw4, th));
         tx += bw4 + gap;
     }
@@ -1138,7 +1143,7 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     const QList<GlItem*> editorItems = {m_nameLabel, m_summaryLabel, m_activeCheck, m_categoryPicker,
                                         m_categoryMenuButton, m_buildCategoryButton, m_includeSubCheck, m_arrangeLabel,
                                         m_arrangeCombo, m_itemSearch, m_view->item(), m_showingLabel, m_hintLabel,
-                                        m_addFolderButton, m_clearButton, m_rotationLabel, m_unlockCheck,
+                                        m_addFolderButton, m_cloudButton, m_clearButton, m_rotationLabel, m_unlockCheck,
                                         m_startCheck, m_intervalCheck, m_intervalCombo, m_imageNote, m_videoNote};
     for (GlItem* it : editorItems) {
         it->setVisible(has);
@@ -2140,6 +2145,31 @@ void PlaylistDialog::onAddFolder() {
         return collator.compare(a, b) < 0;
     });
     addFilesTo(m->id(), files);
+}
+
+void PlaylistDialog::onAddFromCloud() {
+    PlaylistModel* m = current();
+    if (!m) {
+        return;
+    }
+    if (!m_cloudWindow) {
+        m_cloudWindow = new CloudWindow(this);
+        // Downloaded (cached, local) copies go into whichever playlist the window was opened for.
+        connect(m_cloudWindow, &CloudWindow::filesReady, this, [this](const QStringList& files) {
+            if (m_cloudTargetId > 0) {
+                addFilesTo(m_cloudTargetId, files);
+            }
+        });
+    }
+    m_cloudTargetId = m->id();
+    const bool video = m->isVideo(), mixed = m->isMixed();
+    m_cloudWindow->setTarget(m->name(), [video, mixed](const QString& fileName) {
+        const QString ext = QFileInfo(fileName).suffix().toLower();
+        const bool isVideo = VideoPlayer::supportedVideoExtensions().contains(ext);
+        const bool isImage = VideoPlayer::supportedStaticImageExtensions().contains(ext);
+        return mixed ? (isVideo || isImage) : video ? isVideo : isImage;
+    });
+    m_cloudWindow->present();
 }
 
 void PlaylistDialog::previewImage(int row) {

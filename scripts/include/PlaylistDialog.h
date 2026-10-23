@@ -9,6 +9,7 @@
 #include "LibraryDatabase.h" // PlaylistFilterInfo
 
 class BackupManager;
+class CloudWindow;
 class QAction;
 class GlMenu;
 class PlaylistLibrary;
@@ -175,6 +176,7 @@ private:
     void onExport();
     void onAddMedia();
     void onAddFolder();
+    void onAddFromCloud();
     void previewImage(int row);
     void onRemove();
     void onClear();
@@ -270,6 +272,9 @@ private:
     GlDropdown* m_arrangeCombo = nullptr;
     GlButton* m_flowButton = nullptr;
     GlButton* m_addFolderButton = nullptr;
+    GlButton* m_cloudButton = nullptr;
+    CloudWindow* m_cloudWindow = nullptr;
+    qint64 m_cloudTargetId = 0;
     GlTextInput* m_itemSearch = nullptr;
     QTimer* m_itemSearchTimer = nullptr;
     QTimer* m_filterTimer = nullptr; // coalesces re-filtering after playlist changes

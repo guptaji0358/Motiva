@@ -52,6 +52,8 @@ public:
         // Media backups are separate from cache and data: only these two
         // ever remove them, and only when the user asks.
         DeleteBackups,
+        // Wallpapers downloaded from cloud storage (CloudManager's cache).
+        DeleteCloudCache,
         // "More..." operations
         ResetRecoveryHistory,
         ClearLog,
@@ -68,6 +70,8 @@ public:
         qint64 logBytes = -1;
         qint64 recoveryBytes = -1;  // recovery-state.json (+ .tmp)
         qint64 legacyBytes = -1;
+        qint64 cloudBytes = -1;     // downloaded cloud files
+        int cloudFiles = 0;
         qint64 backupBytes = -1;   // everything under the backup folder
         int backupItems = 0;       // media with a valid backup
         int unusedBackups = 0;     // backups whose media is in no playlist any more
@@ -139,6 +143,8 @@ private:
     static QStringList libraryFiles();
     static QStringList recoveryFiles();
     static QStringList staleTempFiles();
+    static QString cloudCacheDirectory();
+    static QStringList cloudCacheFiles();
     static QString legacyDirectory();
     static QStringList legacyFiles();
     static qint64 totalSize(const QStringList& paths);

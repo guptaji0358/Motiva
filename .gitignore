@@ -3,3 +3,4 @@ deployment/
 *.log
 CLAUDE.md
 release/
+third_party/rclone/rclone.exe

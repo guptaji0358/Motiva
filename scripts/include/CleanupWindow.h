@@ -64,11 +64,12 @@ private:
     bool m_positioned = false;
     int m_page = 0; // 0 = cleanup levels, 1 = progress
 
-    QList<LevelRow> m_levels; // Cache, Data, Cache + Data, Media Backups
+    QList<LevelRow> m_levels; // Cache, Data, Cache + Data, Media Backups, Cloud Downloads
     GlLabel* m_cacheSize = nullptr;
     GlLabel* m_dataSize = nullptr;
     GlLabel* m_combinedSize = nullptr;
     GlLabel* m_backupSize = nullptr;
+    GlLabel* m_cloudSize = nullptr;
     GlRule* m_advancedRule = nullptr;
     GlLabel* m_advancedHeading = nullptr;
     GlLabel* m_advancedDesc = nullptr;

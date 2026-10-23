@@ -56,10 +56,15 @@ CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent)
                              tr("Copies of your media that Motiva made after you turned Backup on. Never part of "
                                 "Cache or Data - removed only here, and only on request."),
                              tr("Delete Media Backups"), true, Op::DeleteBackups);
+    m_levels << makeLevelRow("#3aa6d8", tr("CLOUD DOWNLOADS"),
+                             tr("Wallpapers Motiva downloaded from OneDrive, Google Drive or Dropbox. Your files in the "
+                                "cloud are not touched; playlists using these copies will show them as missing."),
+                             tr("Delete Cloud Downloads"), true, Op::DeleteCloudCache);
     m_cacheSize = m_levels[0].size;
     m_dataSize = m_levels[1].size;
     m_combinedSize = m_levels[2].size;
     m_backupSize = m_levels[3].size;
+    m_cloudSize = m_levels[4].size;
 
     m_advancedRule = new GlRule(c);
     m_advancedHeading = new GlLabel(c);
@@ -136,8 +141,8 @@ CleanupWindow::CleanupWindow(CleanupManager* manager, QWidget* parent)
     });
     connect(m_manager, &CleanupManager::finished, this, &CleanupWindow::onOperationFinished);
     showPage(0);
-    resize(860, 760);
-    setMinimumSize(720, 640);
+    resize(860, 840);
+    setMinimumSize(720, 700);
 }
 
 CleanupWindow::LevelRow CleanupWindow::makeLevelRow(const char* dotColor, const QString& title,
@@ -362,6 +367,8 @@ void CleanupWindow::onSizesReady(const CleanupManager::Sizes& sizes) {
                               ? tr("Size: no backups stored")
                               : sizeText(sizes.backupBytes) +
                                     (sizes.backupItems > 0 ? tr("  \u2022  %1 media files").arg(sizes.backupItems) : QString()));
+    m_cloudSize->setText(sizes.cloudBytes <= 0 ? tr("Size: nothing downloaded")
+                                               : sizeText(sizes.cloudBytes) + tr("  •  %1 files").arg(sizes.cloudFiles));
     m_combinedSize->setText(sizes.cacheBytes < 0 || sizes.dataBytes < 0 ? sizeText(-1)
                                                                         : sizeText(sizes.cacheBytes + sizes.dataBytes));
 }
@@ -412,6 +419,14 @@ bool CleanupWindow::confirm(Op op) {
                    .arg(mediaSafe);
         action = tr("Factory Reset");
         icon = QMessageBox::Critical;
+        break;
+    case Op::DeleteCloudCache:
+        title = tr("Delete Cloud Downloads");
+        text = tr("Delete the wallpapers downloaded from cloud storage?");
+        info = tr("Removed: the local copies Motiva downloaded from OneDrive, Google Drive or Dropbox. Nothing in your "
+                  "cloud is touched, and you stay signed in. Playlist items that use these copies will show as "
+                  "missing until you download them again.\n\nThis action cannot be undone.");
+        action = tr("Delete Cloud Downloads");
         break;
     case Op::DeleteBackups:
         title = tr("Delete Media Backups");

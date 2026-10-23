@@ -2,6 +2,58 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-23b, Cloud window on the GL UI)
+
+`CloudWindow` is now a `GlWindow` (same public API: `setTarget/present/filesReady`;
+CloudManager/RcloneRunner untouched). Four pages (Accounts / Browse / Sync /
+Backup & Restore, `GlButton::Kind::Tab` row) + an always-visible transfer panel
+(`GlProgressBar`, detail line, log `GlItemView`, hidden when the window is short).
+Per-page items live in `m_pageItems`; `updateVisibility()` combines page + flags
+(connecting, reset, target, banner, dev-only credentials button). Lists are
+`GlItemView` over `QStandardItemModel`; Browse rows are check-box rows (the view is
+single-selection): click/Space toggles, double-click/Enter opens a folder; path is a
+text label, not clickable crumbs. Sync report = summary label + line list
+(`setSyncReport` splits the old text). Dialogs use `GlMessageBox`; QFileDialog stays
+native; the dev-only API-credentials dialog (`MOTIVA_CLOUD_DEV`) is still a plain
+QDialog so the secret stays masked. Verified: build, and an out-of-tree harness
+(static-Qt objects relinked with a test main; `canvas()->snapshot()`) grabbing all
+four empty-state pages. NOT verified: populated lists, real transfers, sign-in,
+other themes, small screens (window capped at 92% of the screen).
+
+## Current status (2026-10-23, cloud storage via rclone)
+
+Replaces the 2026-10-22 hand-written OAuth cloud layer (kept, unbuilt, in
+`scripts/superseded-oauth-cloud/`; it was never committed). Motiva has NO OAuth /
+token / provider-API code: **rclone** (MIT, bundled 1.75.2 in `third_party/rclone/`,
+shipped in `resources/bin/rclone/` with LICENSE.txt) does sign-in, refresh, listing
+and transfers. `RcloneRunner.{h,cpp}` = `RcloneJob` (one async QProcess; JSON-log
+progress/errors, timeouts, Ctrl+C-then-kill cancel, `scrub()` of secrets, error
+classification). `CloudManager` (singleton) = tool check (`rclone version`, >=1.65),
+config encryption (rclone-encrypted `rclone.conf`; random key under DPAPI in
+QSettings `cloud/rcloneKey`, passed via `RCLONE_CONFIG_PASS`), accounts (`config
+create --non-interactive` answered step by step; reconnect), `lsjson` browsing,
+and "plans" (list of rclone steps run one at a time: cache download for playlists,
+download/upload, copy, mirror with `--backup-dir`+`--max-delete`, library backup via
+`VACUUM INTO`, restore under a new name) plus dry-run preview / `check`. `CloudWindow`
+= plain Qt Widgets QDialog (Accounts / Browse / Sync / Backup & Restore + transfer
+panel), themed by the app style sheet; same `setTarget/present/filesReady` API the
+PlaylistDialog "Cloud..." button already used. Details, safety rules and the
+product-owner setup (Google needs your OWN client ID - rclone's shared one is being
+retired and Motiva refuses to connect Google without it): `docs/CLOUD_STORAGE.md`.
+Gotchas found by testing: `copyto`/single-file `copy` IGNORE `--immutable` (single
+files are copied with an exact `--include`); Ctrl+C must be ignored in-process while
+attached to rclone's console or Motiva dies; QProcess `finished` can precede the
+last stderr read (drain in `finish()`); beware MSYS path mangling of `/x` args when
+testing from Git Bash. Verified with an out-of-tree harness (`:local` backend, a
+fake expired-token Drive remote, `:webdav` to a closed port): tool/version, config
+encryption, listing, upload/download/immutability/overwrite+trash, mirror preview+run,
+max-delete brake, verify, progress, cancel (no partials), library backup/restore,
+scrub, reset; UI grabbed under 3 themes. NOT verified: any real sign-in/listing/
+transfer against Google/OneDrive/Dropbox (no accounts/credentials here), reconnect
+(`config update ... config_refresh_token=true`) against a live account, Explorer-level
+use of the window by a person, rclone's third-party Go module licence notices,
+Cleanup window rows for `cloud-trash` / `Motiva Sync Trash`.
+
 ## Current status (v2.1, folder context menu)
 
 Right-clicking a FOLDER shows `Motiva > Add to playlist > <image playlists> /

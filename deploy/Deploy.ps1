@@ -94,6 +94,20 @@ if (Test-Path $shellDll) {
     Copy-Item $shellDll (Join-Path $binDir "MotivaShell.dll") -Force
 }
 
+# --- rclone (MIT): the cloud-storage engine. Its licence must travel with it. ---
+$rcloneSrc = Join-Path $PSScriptRoot "..\third_party\rclone"
+$rcloneDst = Join-Path $binDir "rclone"
+if (Test-Path (Join-Path $rcloneSrc "rclone.exe")) {
+    New-Item -ItemType Directory -Force -Path $rcloneDst | Out-Null
+    Copy-Item (Join-Path $rcloneSrc "rclone.exe") $rcloneDst -Force
+    Copy-Item (Join-Path $rcloneSrc "LICENSE.txt") $rcloneDst -Force
+    Copy-Item (Join-Path $rcloneSrc "README.txt") $rcloneDst -Force
+    $ini = Join-Path $rcloneSrc "motiva-cloud.ini"
+    if (Test-Path $ini) { Copy-Item $ini $rcloneDst -Force }
+} else {
+    Write-Warning "third_party/rclone/rclone.exe not found - cloud storage will not work in this deployment."
+}
+
 # Tells Qt's OWN plugin loader (independent of the OS DLL search PATH
 # the launcher sets up) where to find platforms/styles/imageformats/...
 # relative to the real exe's own directory - this is the standard,

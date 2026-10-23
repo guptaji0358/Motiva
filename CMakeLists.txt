@@ -17,7 +17,7 @@ endif()
 
 # Sql: the playlist library (.mtv) uses Qt SQL's bundled SQLite driver
 # (qsqlite) - no separate SQLite dependency; windeployqt ships the plugin.
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Multimedia MultimediaWidgets Concurrent Svg Sql)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Multimedia MultimediaWidgets Concurrent Svg Sql Network)
 
 qt_standard_project_setup()
 
@@ -98,7 +98,13 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/BackupManager.cpp
     scripts/include/BackupManager.h
     scripts/src/BackupWindow.cpp
+    scripts/src/RcloneRunner.cpp
+    scripts/src/CloudManager.cpp
+    scripts/src/CloudWindow.cpp
     scripts/include/BackupWindow.h
+    scripts/include/RcloneRunner.h
+    scripts/include/CloudManager.h
+    scripts/include/CloudWindow.h
     scripts/include/WindowsShellIntegration.h
 )
 
@@ -118,6 +124,8 @@ target_link_libraries(Motiva PRIVATE
     Qt6::Concurrent
     Qt6::Svg
     Qt6::Sql
+    Qt6::Network
+    Crypt32
     Dwmapi
     Shell32
     User32
@@ -153,6 +161,17 @@ if(MINGW)
 endif()
 set_target_properties(MotivaShell PROPERTIES PREFIX "")
 add_dependencies(Motiva MotivaShell)
+
+# --- rclone (MIT) powers cloud storage. Dev runs find it in <build>/rclone/;
+# deploy/Deploy.ps1 ships it (with its licence) in resources/bin/rclone/.
+# The 85 MB rclone.exe is not kept in git - see third_party/rclone/README.txt.
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/rclone/rclone.exe")
+    add_custom_command(TARGET Motiva POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/third_party/rclone" "$<TARGET_FILE_DIR:Motiva>/rclone"
+        VERBATIM)
+else()
+    message(WARNING "third_party/rclone/rclone.exe is missing - cloud storage will report that rclone was not found.")
+endif()
 
 # --- Deployment-root launcher (see the "Organize Final Deployment
 # Output" task / deploy/Deploy.ps1) ---
