@@ -193,7 +193,7 @@ CloudWindow::CloudWindow(QWidget* parent)
 
     const QScreen* screen = QGuiApplication::primaryScreen();
     const QSize avail = screen ? screen->availableGeometry().size() : QSize(1280, 800);
-    setMinimumSize(std::min(860, int(avail.width() * 0.92)), std::min(640, int(avail.height() * 0.92)));
+    setMinimumSize(std::min(860, int(avail.width() * 0.92)), std::min(800, int(avail.height() * 0.92)));
     resize(std::min(1040, int(avail.width() * 0.92)), std::min(900, int(avail.height() * 0.92)));
 }
 
@@ -660,29 +660,37 @@ void CloudWindow::layoutContent(const QRectF& content, const QRectF& footer) {
 void CloudWindow::layoutAccounts(const QRectF& a) {
     const qreal L = a.left(), W = a.width();
     qreal y = a.top();
-    const qreal h0 = m_accountsIntro->heightForWidth(W) + 2;
-    m_accountsIntro->setRect(QRectF(L, y, W, h0));
-    y += h0 + 8;
+    const bool compact = a.height() < 480;
+    m_accountsIntro->setVisible(!compact);
+    if (!compact) {
+        const qreal h0 = m_accountsIntro->heightForWidth(W) + 2;
+        m_accountsIntro->setRect(QRectF(L, y, W, h0));
+        y += h0 + 8;
+    }
 
     constexpr qreal kConnectW = 130, kCredsW = 170;
     for (ProviderRow& r : m_providers) {
         const qreal textW = std::max<qreal>(80, W - 40 - kConnectW - (r.creds->isVisible() ? kCredsW + 10 : 0));
         const qreal hintH = std::max<qreal>(18, r.hint->heightForWidth(textW) + 2);
-        const qreal cardH = std::max<qreal>(58, 12 + 24 + hintH + 12);
+        const qreal cardH = std::max<qreal>(compact ? 52 : 58, (compact ? 8 : 12) + 24 + hintH + (compact ? 8 : 12));
         const QRectF card(L, y, W, cardH);
         r.card->setRect(card);
-        r.name->setRect(QRectF(L + 20, y + 10, textW, 24));
-        r.hint->setRect(QRectF(L + 20, y + 34, textW, hintH));
+        r.name->setRect(QRectF(L + 20, y + (compact ? 6 : 10), textW, 24));
+        r.hint->setRect(QRectF(L + 20, y + (compact ? 30 : 34), textW, hintH));
         r.connect->setRect(QRectF(card.right() - 16 - kConnectW, card.center().y() - 20, kConnectW, 40));
         r.creds->setRect(QRectF(card.right() - 16 - kConnectW - 10 - kCredsW, card.center().y() - 20, kCredsW, 40));
-        y += cardH + 8;
+        y += cardH + (compact ? 5 : 8);
     }
     m_readOnly->setRect(QRectF(L, y, W, 34));
-    y += 38;
+    y += compact ? 34 : 38;
     const qreal cancelW = m_cancelConnect->isVisible() ? 150 : 0;
     m_connectStatus->setRect(QRectF(L, y, std::max<qreal>(40, W - cancelW - 10), 30));
     m_cancelConnect->setRect(QRectF(L + W - cancelW, y - 2, cancelW, 34));
-    y += 36;
+    const bool statusRow = !m_connectStatus->text().isEmpty() || cancelW > 0;
+    m_connectStatus->setVisible(m_page == AccountsPage && statusRow);
+    if (statusRow || !compact) {
+        y += 36;
+    }
 
     const qreal rowY = a.bottom() - 40;
     const qreal bw = 160;
@@ -690,7 +698,7 @@ void CloudWindow::layoutAccounts(const QRectF& a) {
     m_reconnectAccount->setRect(QRectF(L + bw + 8, rowY, bw - 20, 40));
     m_removeAccount->setRect(QRectF(L + 2 * bw - 12 + 16, rowY, bw, 40));
     m_resetAccounts->setRect(QRectF(L + W - 230, rowY, 230, 40));
-    m_accounts->setRect(QRectF(L, y, W, std::max<qreal>(70, rowY - 8 - y)));
+    m_accounts->setRect(QRectF(L, y, W, std::max<qreal>(50, rowY - 8 - y)));
 }
 
 void CloudWindow::layoutBrowse(const QRectF& a) {
@@ -728,11 +736,15 @@ void CloudWindow::layoutBrowse(const QRectF& a) {
 void CloudWindow::layoutSync(const QRectF& a) {
     const qreal L = a.left(), W = a.width();
     qreal y = a.top();
-    const qreal ih = m_syncIntro->heightForWidth(W) + 2;
-    m_syncIntro->setRect(QRectF(L, y, W, ih));
-    y += ih + 8;
+    const bool compact = a.height() < 430;
+    m_syncIntro->setVisible(!compact);
+    if (!compact) {
+        const qreal ih = m_syncIntro->heightForWidth(W) + 2;
+        m_syncIntro->setRect(QRectF(L, y, W, ih));
+        y += ih + 8;
+    }
 
-    constexpr qreal H = 38, kLabelW = 170, kGap = 8;
+    const qreal H = compact ? 34 : 38, kLabelW = 170, kGap = compact ? 4 : 8;
     const qreal fx = L + kLabelW + 20;
     const qreal fieldW = std::min<qreal>(520, W - kLabelW - 20 - 140);
     auto row = [&](GlLabel* label, GlItem* field, qreal width) {
@@ -750,7 +762,7 @@ void CloudWindow::layoutSync(const QRectF& a) {
     row(m_syncModeLabel, m_syncMode, std::min<qreal>(fieldW, 320));
     const qreal mh = std::max<qreal>(18, m_syncModeHint->heightForWidth(W - kLabelW - 24) + 2);
     m_syncModeHint->setRect(QRectF(fx, y - 2, W - kLabelW - 24, mh));
-    y += mh + 8;
+    y += mh + (compact ? 4 : 8);
 
     m_syncPreview->setRect(QRectF(L, y, 130, H));
     m_syncRun->setRect(QRectF(L + 138, y, 130, H));
@@ -764,7 +776,7 @@ void CloudWindow::layoutSync(const QRectF& a) {
         m_syncSummary->setRect(QRectF(L, y, W, sh));
         y += sh + 6;
     }
-    m_syncReport->setRect(QRectF(L, y, W, std::max<qreal>(60, a.bottom() - y)));
+    m_syncReport->setRect(QRectF(L, y, W, std::max<qreal>(50, a.bottom() - y)));
 }
 
 void CloudWindow::layoutBackup(const QRectF& a) {
