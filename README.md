@@ -67,7 +67,10 @@ Native C++ · Qt 6 · Win32 · DirectComposition · a GPU-drawn UI. No Electron.
 <details>
 <summary><b>🧰 Quality-of-life</b></summary>
 
-- Cascading **Motiva ▸** Explorer right-click menu: set as background, add to a playlist, make a new one
+- **Motiva ▸** Explorer right-click menu (one native `IExplorerCommand`): set as wallpaper, add to your last-used playlist, pick another playlist, or create a new one. It handles a whole multi-file selection at once, and folders that contain images
+- **Browser extension** (Chrome / Edge / Brave): right-click or hover any web image or video to set it as wallpaper, add it to a playlist or save it to Motiva's local cache
+- **Cloud (read-only)** via the bundled [rclone](https://rclone.org): browse Google Drive, OneDrive and Dropbox, and download pictures and videos into playlists. Motiva never uploads or syncs, and lists only media
+- **ChatGPT enhance prompt**: a ready-made prompt, one click from the Playlists window, for upscaling and repairing a low-quality picture
 - **Find File** / **Find All at Once** recover moved media in a single pass over your drives
 - Optional local **media backup** (off by default) and a **Cleanup & Reset** window
 - Start with Windows, Start Menu entry, tray control
@@ -80,6 +83,9 @@ Native C++ · Qt 6 · Win32 · DirectComposition · a GPU-drawn UI. No Electron.
 The GPU-drawn interface, mixed playlists, nested categories, Wallpaper Flow, the theme editor,
 the Explorer menu, missing-media recovery, unified notifications and a much sturdier startup:
 the window appears immediately and desktop attach, media restore and hand-offs follow behind it.
+
+Since then: a single-handler Explorer menu with last-used playlist and whole-selection add, a browser
+extension for web images and videos, read-only cloud browsing, and the ChatGPT enhance-prompt helper.
 
 ## Under the hood
 
@@ -138,6 +144,7 @@ Motiva/
 │   └── include/          headers
 ├── resources/            app.rc, manifest, Qt resources
 ├── Assets/               icons and artwork, organised by feature
+├── extension/            Manifest V3 browser extension (Chrome / Edge / Brave)
 ├── installer/            Inno Setup script and build pipeline
 ├── website/              static project website
 └── CMakeLists.txt
@@ -145,7 +152,8 @@ Motiva/
 
 Key pieces: `GlUi` / `GlWindow` / `GlPopups` (GL toolkit), `PlaylistLibrary` / `LibraryDatabase` (SQLite),
 `FlowDialog`, `ThemeEditorDialog`, `NotificationManager`, `CleanupManager`, `BackupManager`,
-`MediaRecovery`, `WallpaperManager`, `D3DWallpaperRenderer`, `WindowsDesktopWallpaper`.
+`MediaRecovery`, `CloudManager` / `RcloneRunner`, `WebMediaCache`, `BrowserIntegration`,
+`scripts/shell/MotivaShell.cpp` (Explorer menu), `WallpaperManager`, `D3DWallpaperRenderer`, `WindowsDesktopWallpaper`.
 Deeper history lives in [`CLAUDE.md`](CLAUDE.md).
 
 </details>
@@ -155,7 +163,10 @@ Deeper history lives in [`CLAUDE.md`](CLAUDE.md).
 - Preferences: `HKCU\Software\Motiva`
 - Library: a `.mtv` SQLite file in local app data
 - Log: `%TEMP%\Motiva.log`
-- Nothing leaves your PC. Backups are local, opt-in, and originals are only read.
+- Web media cache: `web-cache` in local app data (removed by Cleanup ▸ *Downloaded media*)
+- No telemetry. Backups are local, opt-in, and originals are only read.
+- Cloud is opt-in and read-only: sign-in is handled by rclone with read-only scopes, its config is encrypted, and nothing is ever uploaded.
+- The browser extension talks only to the local Motiva app through Native Messaging.
 
 ## Honest limitations
 
@@ -163,6 +174,9 @@ Deeper history lives in [`CLAUDE.md`](CLAUDE.md).
 - Built and tested on Windows 11; multi-monitor setups with mixed resolutions have had limited testing.
 - The GL interface has no screen-reader support yet, and there is no reduced-motion setting.
 - No automatic pause on idle or lock yet.
+- The browser extension is loaded unpacked for now, and does not handle streaming (HLS/DRM) sources or sites that block hotlinking.
+- Cloud sign-in needs your own OAuth app registration for Google; Dropbox access cannot be restricted to read-only by the client.
+- On Windows 11 the Explorer menu appears under *Show more options*; a top-level entry needs a signed package.
 - Moving wallpapers use more power than a static one; use *Show video on battery* on laptops.
 
 <br/>
