@@ -1724,42 +1724,75 @@ void MainWindow::onExplorerFileReceived(const QString& path) {
     handleExplorerRequestedFile(path);
 }
 
-void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& path) {
-    qInfo() << "[Explorer] \"Add to playlist\" playlist=" << playlistId << ":" << path;
-    // Untrusted command-line/IPC input: only an existing file of a type a
-    // playlist can hold (PlaylistModel's own media detection).
-    const QFileInfo file(path);
-    bool video = PlaylistModel::isVideoFile(path);
-    QStringList files{path};
-    if (file.isDir()) {
-        // Folder verb (v2.1): every image directly inside it, in natural
-        // name order (sub-folders are not searched).
-        files.clear();
-        const QFileInfoList entries = QDir(path).entryInfoList(QDir::Files | QDir::Readable, QDir::NoSort);
-        for (const QFileInfo& entry : entries) {
-            if (PlaylistModel::isImageFile(entry.fileName())) {
-                files << entry.absoluteFilePath();
-            }
-        }
-        QCollator collator;
-        collator.setNumericMode(true);
-        collator.setCaseSensitivity(Qt::CaseInsensitive);
-        std::sort(files.begin(), files.end(), collator);
-        if (files.isEmpty()) {
-            showExplorerPlaylistError(tr("\"%1\" has no images to add.").arg(file.fileName()));
+void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& pathList) {
+    // One or more paths joined by '\n' (a multi-selection from Explorer; a
+    // newline cannot occur in a Windows path).
+    const QStringList requested = pathList.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    qInfo() << "[Explorer] \"Add to playlist\" playlist=" << playlistId << ":" << requested.size() << "item(s)";
+
+    // Untrusted command-line/IPC input: only existing files of a type a
+    // playlist can hold (PlaylistModel's own media detection); a folder
+    // contributes the images directly inside it (natural name order,
+    // sub-folders are not searched).
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    QStringList files;
+    QSet<QString> seen;
+    bool hasVideo = false, hasImage = false;
+    int skipped = 0;
+    QString problem; // explanation when exactly one item was requested
+    const auto take = [&](const QString& file, bool video) {
+        if (seen.contains(file.toLower())) {
             return;
         }
-        video = false;
-    } else if (!file.isFile()) {
-        showExplorerPlaylistError(tr("\"%1\" was not found.").arg(QDir::toNativeSeparators(path)));
-        return;
-    } else if (!video && !PlaylistModel::isImageFile(path)) {
-        showExplorerPlaylistError(
-            tr("\"%1\" can't be added to a playlist - playlists hold videos or still images.").arg(file.fileName()));
+        seen.insert(file.toLower());
+        files << file;
+        (video ? hasVideo : hasImage) = true;
+    };
+    for (const QString& path : requested) {
+        const QFileInfo info(path);
+        if (info.isDir()) {
+            QStringList images;
+            const QFileInfoList entries = QDir(path).entryInfoList(QDir::Files | QDir::Readable, QDir::NoSort);
+            for (const QFileInfo& entry : entries) {
+                if (PlaylistModel::isImageFile(entry.fileName())) {
+                    images << entry.absoluteFilePath();
+                }
+            }
+            std::sort(images.begin(), images.end(), collator);
+            for (const QString& image : images) {
+                take(image, false);
+            }
+            if (images.isEmpty()) {
+                ++skipped;
+                problem = tr("\"%1\" has no images to add.").arg(info.fileName());
+            }
+        } else if (!info.isFile()) {
+            ++skipped;
+            problem = tr("\"%1\" was not found.").arg(QDir::toNativeSeparators(path));
+        } else if (PlaylistModel::isVideoFile(path)) {
+            take(path, true);
+        } else if (PlaylistModel::isImageFile(path)) {
+            take(path, false);
+        } else {
+            ++skipped;
+            problem = tr("\"%1\" can't be added to a playlist - playlists hold videos or still images.")
+                          .arg(info.fileName());
+        }
+    }
+    if (files.isEmpty()) {
+        showExplorerPlaylistError(requested.size() == 1 && !problem.isEmpty()
+                                      ? problem
+                                      : tr("None of the %1 selected items can be added to a playlist.").arg(requested.size()));
         return;
     }
+    const QString summaryName = files.size() == 1 ? QFileInfo(files.first()).fileName() : tr("%1 files").arg(files.size());
+
     if (playlistId <= 0) {
-        createPlaylistFromExplorer(files, video, file.isDir() ? file.fileName() : QString());
+        const QFileInfo only(requested.value(0));
+        createPlaylistFromExplorer(files, hasVideo && !hasImage, requested.size() == 1 && only.isDir() ? only.fileName() : QString(),
+                                   hasVideo && hasImage);
         return;
     }
     PlaylistModel* target = m_library->playlist(playlistId);
@@ -1767,18 +1800,22 @@ void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& path)
         // The menu was out of date (e.g. written while this playlist still
         // existed) - refresh it rather than guessing another playlist.
         syncExplorerPlaylistMenu(true);
-        showExplorerPlaylistError(tr("That playlist no longer exists. \"%1\" was not added.").arg(file.fileName()));
+        showExplorerPlaylistError(tr("That playlist no longer exists. \"%1\" was not added.").arg(summaryName));
         return;
     }
-    if (!target->isMixed() && target->isVideo() != video) {
+    if (!target->isMixed() && ((hasVideo && hasImage) || target->isVideo() != hasVideo)) {
         showExplorerPlaylistError(tr("\"%1\" is a %2 playlist, so \"%3\" can't be added to it.")
-                                      .arg(target->name(), target->isVideo() ? tr("video") : tr("image"),
-                                           file.fileName()));
+                                      .arg(target->name(), target->isVideo() ? tr("video") : tr("image"), summaryName));
         return;
+    }
+    if (skipped > 0) {
+        qInfo() << "[Explorer]" << skipped << "selected item(s) were skipped (unsupported or missing).";
     }
     // The normal add path: one shared media record per file, a file already
     // in this playlist is reported as such and not added twice.
     m_playlistDialog->addFilesTo(playlistId, files);
+    m_settings.setExplorerLastPlaylistId(playlistId);
+    syncExplorerPlaylistMenu(true); // refreshes the "Add to <last playlist>" shortcut
     openPlaylist();
 }
 
@@ -1874,16 +1911,20 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
     });
 }
 
-void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video, const QString& suggestedName) {
+void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video, const QString& suggestedName,
+                                            bool mixed) {
     const QString path = files.value(0);
     showNormal();
     raise();
     activateWindow();
-    const QString fallback = !suggestedName.isEmpty() ? suggestedName : (video ? tr("Videos") : tr("Images"));
+    const QString fallback = !suggestedName.isEmpty() ? suggestedName
+                             : mixed                  ? tr("Mixed")
+                                                      : (video ? tr("Videos") : tr("Images"));
     bool accepted = false;
     QString name = GlMessageBox::getText(this, tr("New Playlist"),
-                                         video ? tr("Name of the new video playlist:")
-                                               : tr("Name of the new image playlist:"),
+                                         mixed   ? tr("Name of the new mixed playlist:")
+                                         : video ? tr("Name of the new video playlist:")
+                                                 : tr("Name of the new image playlist:"),
                                          QLineEdit::Normal, fallback, &accepted)
                        .trimmed();
     if (!accepted) {
@@ -1894,12 +1935,15 @@ void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video
         name = fallback;
     }
     // Same library call as Playlists > + New (names are made unique there).
-    const qint64 id = m_library->createPlaylist(name, video ? PlaylistType::Video : PlaylistType::Image);
+    const qint64 id = m_library->createPlaylist(
+        name, mixed ? PlaylistType::Mixed : (video ? PlaylistType::Video : PlaylistType::Image));
     if (id <= 0) {
         showExplorerPlaylistError(tr("The playlist could not be created:\n%1").arg(m_library->lastError()));
         return;
     }
     m_playlistDialog->addFilesTo(id, files);
+    m_settings.setExplorerLastPlaylistId(id);
+    syncExplorerPlaylistMenu(true);
     openPlaylist();
 }
 
@@ -1933,10 +1977,13 @@ void MainWindow::syncExplorerPlaylistMenu(bool force) {
         }
         signature += QStringLiteral("%1|%2|%3\n").arg(id).arg(type == PlaylistType::Mixed ? 'm' : (video ? 'v' : 'i')).arg(name);
     }
+    const qint64 lastPlaylistId = m_settings.explorerLastPlaylistId();
+    signature += QStringLiteral("last|%1\n").arg(lastPlaylistId);
     if (!force && signature == m_explorerMenuSignature) {
         return;
     }
-    if (WindowsShellIntegration::UpdateExplorerPlaylistMenu(SettingsManager::motivaExecutablePath(), images, videos)) {
+    if (WindowsShellIntegration::UpdateExplorerPlaylistMenu(SettingsManager::motivaExecutablePath(), images, videos,
+                                                            lastPlaylistId)) {
         m_explorerMenuSignature = signature;
         qInfo() << "[Explorer] Playlist submenu updated:" << images.size() << "image /" << videos.size()
                 << "video playlist(s).";

@@ -178,14 +178,22 @@ bool writeCreateNewEntry(MenuKind kind, const QString& exePath, bool separator) 
                         separator ? kSeparatorBefore : 0, true);
 }
 
-// --- Folder menu (v2.1) ---
-// Per-user COM server (MotivaShell.dll) that tells Explorer whether the
-// folder verb is shown; see scripts/shell/MotivaShell.cpp.
-constexpr const char* kFolderStateClsid = "{7B3F0C52-5E1A-4D3B-9A44-6C2D8E1F0B97}";
+// --- COM menu (MotivaShell.dll) ---
+// One IExplorerCommand (scripts/shell/MotivaShell.cpp) builds the whole menu
+// from the live selection: multi-select, folders that contain images, mixed
+// selections and the last-used-playlist shortcut. Registered per-user; the
+// playlists and extension lists it shows are values on the CLSID key
+// (playlists rewritten by UpdateExplorerPlaylistMenu).
+constexpr const char* kMenuClsid = "{2D6F4A18-91C3-4E7B-8A05-3B7C9E5D1F42}";
+// Earlier builds registered a folder-only IExplorerCommandState under this one.
+constexpr const char* kOldFolderStateClsid = "{7B3F0C52-5E1A-4D3B-9A44-6C2D8E1F0B97}";
 constexpr const char* kFolderVerbPath = "Software\\Classes\\Directory\\shell\\Motiva";
 
-QString folderClsidPath() {
-    return QLatin1String(kClassesRoot) + QStringLiteral("CLSID\\") + QLatin1String(kFolderStateClsid);
+QString clsidPath(const char* clsid) {
+    return QLatin1String(kClassesRoot) + QStringLiteral("CLSID\\") + QLatin1String(clsid);
+}
+QString menuClsidPath() {
+    return clsidPath(kMenuClsid);
 }
 
 // The helper DLL lives with the real binary (resources/bin) or beside the exe.
@@ -195,38 +203,81 @@ QString shellDllPath(const QString& exePath) {
     return QFileInfo::exists(deployed) ? deployed : dir.filePath(QStringLiteral("MotivaShell.dll"));
 }
 
+bool comMenuAvailable(const QString& exePath) {
+    return QFileInfo::exists(shellDllPath(exePath));
+}
+
 bool removeFolderMenu() {
     bool ok = deleteTree(QLatin1String(kFolderVerbPath));
     ok = deleteTree(hkcu(menuKeyName(MenuKind::Folder))) && ok;
-    ok = deleteTree(folderClsidPath()) && ok;
+    ok = deleteTree(clsidPath(kOldFolderStateClsid)) && ok;
     return ok;
 }
 
-// "Motiva > Add to playlist" on folders that directly contain an image. If
-// the helper DLL is missing the verb is NOT registered (it could not be
-// hidden for image-less folders, and a menu that always shows is wrong).
-bool registerFolderMenu(const QString& exePath, const QStringList& imageExtensions, const QString& icon) {
+bool removeComServer() {
+    return deleteTree(menuClsidPath());
+}
+
+QString extensionList(const QStringList& extensions) {
+    QStringList dotted;
+    for (const QString& ext : extensions) {
+        dotted << QLatin1Char('.') + ext.toLower();
+    }
+    return dotted.join(QLatin1Char(';'));
+}
+
+bool setMultiString(const QString& path, const wchar_t* valueName, const QStringList& lines) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, path.toStdWString().c_str(), 0, nullptr, 0, KEY_WRITE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+    std::wstring data;
+    for (const QString& line : lines) {
+        data += line.toStdWString();
+        data.push_back(L'\0');
+    }
+    data.push_back(L'\0'); // list terminator (also makes an empty list valid)
+    const bool ok = RegSetValueExW(key, valueName, 0, REG_MULTI_SZ, reinterpret_cast<const BYTE*>(data.c_str()),
+                                   static_cast<DWORD>(data.size() * sizeof(wchar_t))) == ERROR_SUCCESS;
+    RegCloseKey(key);
+    return ok;
+}
+
+// Registers the COM server, one verb per supported extension and the folder
+// verb, all pointing at the same handler. Playlists already written to the
+// CLSID key are kept. The static cascade keys of earlier builds are removed.
+bool registerComMenu(const QString& exePath, const QStringList& videoExtensions, const QStringList& imageExtensions,
+                     const QStringList& otherExtensions, const QString& icon) {
     const QString dll = shellDllPath(exePath);
-    if (imageExtensions.isEmpty() || !QFileInfo::exists(dll)) {
-        qWarning() << "[ShellIntegration] Folder menu skipped (helper DLL or image list missing):" << dll;
-        return removeFolderMenu();
-    }
-    QStringList dotExts;
-    for (const QString& ext : imageExtensions) {
-        dotExts << QLatin1Char('.') + ext.toLower();
-    }
-    bool ok = writeKey(folderClsidPath(), {{nullptr, QStringLiteral("Motiva folder menu state")},
-                                           {L"ImageExtensions", dotExts.join(QLatin1Char(';'))}});
-    ok = writeKey(folderClsidPath() + QStringLiteral("\\InprocServer32"),
+    bool ok = writeKey(menuClsidPath(), {{nullptr, QStringLiteral("Motiva Explorer menu")},
+                                         {L"Exe", QDir::toNativeSeparators(exePath)},
+                                         {L"Icon", icon},
+                                         {L"ImageExtensions", extensionList(imageExtensions)},
+                                         {L"VideoExtensions", extensionList(videoExtensions)},
+                                         {L"OtherExtensions", extensionList(otherExtensions)}});
+    ok = writeKey(menuClsidPath() + QStringLiteral("\\InprocServer32"),
                   {{nullptr, QDir::toNativeSeparators(dll)}, {L"ThreadingModel", QStringLiteral("Apartment")}}) && ok;
-    ok = writeKey(hkcu(menuKeyName(MenuKind::Folder)) + QStringLiteral("\\shell\\02AddToPlaylist"),
-                  {{L"MUIVerb", QStringLiteral("Add to playlist")},
-                   {L"ExtendedSubCommandsKey", playlistsKeyName(MenuKind::Image)}}) && ok;
+
+    QSet<QString> keep;
+    for (const QStringList& group : {videoExtensions, imageExtensions, otherExtensions}) {
+        for (const QString& ext : group) {
+            const QString dotExt = QLatin1Char('.') + ext.toLower();
+            keep.insert(dotExt);
+            const QString verb = associationVerbPath(dotExt, QLatin1String(kMenuVerb));
+            ok = deleteTree(verb) && ok; // drop the static cascade values of earlier builds
+            ok = writeKey(verb, {{L"ExplorerCommandHandler", QLatin1String(kMenuClsid)}, {L"Icon", icon}}) && ok;
+        }
+    }
+    ok = removeMotivaVerbs(keep) && ok;
+    ok = deleteTree(QLatin1String(kFolderVerbPath)) && ok;
     ok = writeKey(QLatin1String(kFolderVerbPath),
-                  {{L"MUIVerb", QStringLiteral("Motiva")},
-                   {L"Icon", icon},
-                   {L"ExtendedSubCommandsKey", menuKeyName(MenuKind::Folder)},
-                   {L"CommandStateHandler", QLatin1String(kFolderStateClsid)}}) && ok;
+                  {{L"ExplorerCommandHandler", QLatin1String(kMenuClsid)}, {L"Icon", icon}}) && ok;
+    for (MenuKind kind : {MenuKind::Video, MenuKind::Image, MenuKind::Background, MenuKind::Folder}) {
+        ok = deleteTree(hkcu(menuKeyName(kind))) && ok;
+        ok = deleteTree(hkcu(playlistsKeyName(kind))) && ok;
+    }
+    ok = deleteTree(clsidPath(kOldFolderStateClsid)) && ok;
     return ok;
 }
 
@@ -319,7 +370,7 @@ bool RemoveStartMenuShortcut() {
 
 bool RegisterExplorerMenu(const QString& exePath, const QStringList& videoExtensions,
                           const QStringList& imageExtensions, const QStringList& backgroundOnlyExtensions,
-                          bool folderMenu) {
+                          bool /*folderMenu*/) {
     if (!isRunnableTarget(exePath)) {
         qWarning() << "[ShellIntegration] Refusing to register Explorer menu: not a runnable deployment:" << exePath;
         UnregisterExplorerMenu();
@@ -328,6 +379,17 @@ bool RegisterExplorerMenu(const QString& exePath, const QStringList& videoExtens
     const QString setBackground =
         QStringLiteral("%1 --set-background \"%2\"").arg(quotedExe(exePath), QStringLiteral("%1"));
     const QString icon = QDir::toNativeSeparators(iconSourceFor(exePath));
+
+    if (comMenuAvailable(exePath)) {
+        const bool done = registerComMenu(exePath, videoExtensions, imageExtensions, backgroundOnlyExtensions, icon);
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+        return done;
+    }
+    // Fallback without MotivaShell.dll: the earlier static cascade (single
+    // selection only, no folder verb, no last-used shortcut).
+    qWarning() << "[ShellIntegration] MotivaShell.dll not found - using the basic static Explorer menu.";
+    removeComServer();
+    removeFolderMenu();
 
     bool ok = true;
     QSet<QString> keep;
@@ -360,15 +422,44 @@ bool RegisterExplorerMenu(const QString& exePath, const QStringList& videoExtens
         }
     }
     ok = removeMotivaVerbs(keep) && ok;
-    ok = (folderMenu ? registerFolderMenu(exePath, imageExtensions, icon) : removeFolderMenu()) && ok;
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return ok;
 }
 
 bool UpdateExplorerPlaylistMenu(const QString& exePath, const QVector<ExplorerPlaylist>& imagePlaylists,
-                                const QVector<ExplorerPlaylist>& videoPlaylists) {
+                                const QVector<ExplorerPlaylist>& videoPlaylists, qint64 lastPlaylistId) {
     if (!isRunnableTarget(exePath)) {
         return false;
+    }
+    if (comMenuAvailable(exePath)) {
+        // One line per playlist, "<id>|<i|v|m>|<name>": a playlist listed for
+        // both kinds is a mixed playlist. Library order is kept.
+        QSet<qint64> inImages, inVideos;
+        for (const ExplorerPlaylist& p : imagePlaylists) {
+            inImages.insert(p.id);
+        }
+        for (const ExplorerPlaylist& p : videoPlaylists) {
+            inVideos.insert(p.id);
+        }
+        QStringList lines;
+        QSet<qint64> seen;
+        for (const QVector<ExplorerPlaylist>* list : {&imagePlaylists, &videoPlaylists}) {
+            for (const ExplorerPlaylist& p : *list) {
+                if (seen.contains(p.id)) {
+                    continue;
+                }
+                seen.insert(p.id);
+                const QChar kind = inImages.contains(p.id) && inVideos.contains(p.id)
+                                       ? QLatin1Char('m')
+                                       : (inVideos.contains(p.id) ? QLatin1Char('v') : QLatin1Char('i'));
+                QString name = p.name;
+                name.replace(QLatin1Char('\n'), QLatin1Char(' '));
+                lines << QStringLiteral("%1|%2|%3").arg(p.id).arg(kind).arg(name);
+            }
+        }
+        bool ok = setMultiString(menuClsidPath(), L"Playlists", lines);
+        ok = writeKey(menuClsidPath(), {{L"LastPlaylistId", QString::number(lastPlaylistId)}}) && ok;
+        return ok;
     }
     bool ok = true;
     const QList<QPair<MenuKind, QVector<ExplorerPlaylist>>> groups = {
@@ -397,6 +488,7 @@ bool UpdateExplorerPlaylistMenu(const QString& exePath, const QVector<ExplorerPl
 bool UnregisterExplorerMenu() {
     bool ok = removeMotivaVerbs();
     ok = removeFolderMenu() && ok;
+    ok = removeComServer() && ok;
     for (MenuKind kind : {MenuKind::Video, MenuKind::Image, MenuKind::Background}) {
         ok = deleteTree(hkcu(menuKeyName(kind))) && ok;
         ok = deleteTree(hkcu(playlistsKeyName(kind))) && ok;

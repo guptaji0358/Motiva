@@ -58,6 +58,9 @@ public:
     // kept in sync by MainWindow (it owns the library).
     bool explorerIntegrationEnabled() const;
     void setExplorerIntegrationEnabled(bool enabled);
+    // Playlist most recently targeted from Explorer ("Add to <name>" shortcut); 0 = none.
+    qint64 explorerLastPlaylistId() const;
+    void setExplorerLastPlaylistId(qint64 id);
 
     // Browser extension bridge (BrowserIntegration): registers Motiva's
     // Native Messaging host for Chrome/Edge/Brave. OFF by default. Enabling

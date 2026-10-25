@@ -2,6 +2,26 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-25b, Explorer menu is now one COM handler)
+
+The static registry cascade is replaced (when `MotivaShell.dll` is present; otherwise the old static
+single-file menu is the fallback) by ONE `IExplorerCommand` in `scripts/shell/MotivaShell.cpp`
+(CLSID `{2D6F4A18-...}`, verbs `...\shell\Motiva` on every supported extension AND `Directory` use
+`ExplorerCommandHandler`). It reads everything from values on its CLSID key (`Exe`, `Icon`,
+`Image/Video/OtherExtensions`, `Playlists` REG_MULTI_SZ `id|i/v/m|name`, `LastPlaylistId`), written by
+`WindowsShellIntegration` (Register = extensions, `UpdateExplorerPlaylistMenu` = playlists + last id).
+Menu: Set as wallpaper (exactly one file) / Add to "<last playlist>" / Add to playlist > ... / Create New
+Playlist. Gets the WHOLE selection in one call (no per-file process, no 15-file cap); folders qualify only
+if they directly contain an image; image+video selection lists only mixed playlists. Invoke writes the paths
+to a temp file and starts `Motiva.exe --explorer-add <playlistId|0> <file>` (main.cpp reads+deletes it, paths
+joined by '\n' through InstanceIpc; `onAddToPlaylistReceived` now takes that list, "0" = new playlist, mixed
+selection -> Mixed playlist). Last-used playlist = `SettingsManager::explorerLastPlaylistId`, updated on
+every successful add/create. Startup re-registers, so upgrading needs no user action (Explorer may need a
+restart to release an old DLL). Verified: build; a COM harness on a fake IShellItemArray (state/enum/titles/
+separators for single, multi, mixed, folder, empty folder, unsupported; Invoke launches with a correct temp
+file). NOT verified: the real Explorer right-click, the full `--explorer-add` -> running-app path, and the
+Windows 11 TOP-LEVEL menu (needs a signed sparse package with identity; the handler is the same interface).
+
 ## Current status (2026-10-25, browser extension: web media -> cache -> wallpaper/playlist)
 
 `extension/` is a Manifest V3 extension (Chrome/Edge/Brave; fixed ID via the `key` in manifest.json,

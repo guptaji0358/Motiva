@@ -25,6 +25,13 @@ bool RemoveStartMenuShortcut();
 
 // --- Explorer context menu ("Motiva >" cascade) ---
 //
+// Normal case (MotivaShell.dll present): ONE verb per supported extension and
+// on folders, with ExplorerCommandHandler -> the COM handler in
+// scripts/shell/MotivaShell.cpp, which builds Set as wallpaper / Add to
+// "<last playlist>" / Add to playlist > ... from the whole selection
+// (multi-select, mixed image+video, folders that contain images). The static
+// layout described below is only the fallback when the DLL is missing.
+//
 // Exactly ONE root entry per supported media extension:
 //
 //   Motiva  >  Set as background
@@ -73,8 +80,13 @@ bool RegisterExplorerMenu(const QString& exePath, const QStringList& videoExtens
 // files list image playlists, video files list video playlists (in library
 // order), each followed by "Create New Playlist...". Only meaningful while
 // the menu is registered.
+//
+// With MotivaShell.dll present (normal case) the playlists are stored as
+// values on the COM handler's CLSID key, and lastPlaylistId drives its
+// "Add to <last playlist>" shortcut; without the DLL the static submenu keys
+// are rewritten as before.
 bool UpdateExplorerPlaylistMenu(const QString& exePath, const QVector<ExplorerPlaylist>& imagePlaylists,
-                                const QVector<ExplorerPlaylist>& videoPlaylists);
+                                const QVector<ExplorerPlaylist>& videoPlaylists, qint64 lastPlaylistId = 0);
 
 // Removes everything above - every shell\Motiva verb, the shared menu keys,
 // and any legacy flat verb - whatever extension set registered them.

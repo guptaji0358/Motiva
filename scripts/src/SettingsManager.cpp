@@ -286,6 +286,13 @@ void SettingsManager::setExplorerIntegrationEnabled(bool enabled) {
     WindowsShellIntegration::RegisterExplorerMenu(motivaExecutablePath(), videos, images, backgroundOnly);
 }
 
+qint64 SettingsManager::explorerLastPlaylistId() const {
+    return m_settings.value("explorer/lastPlaylistId", 0).toLongLong();
+}
+void SettingsManager::setExplorerLastPlaylistId(qint64 id) {
+    m_settings.setValue("explorer/lastPlaylistId", id);
+}
+
 bool SettingsManager::browserExtensionEnabled() const {
     return m_settings.value("app/browserExtensionEnabled", false).toBool();
 }

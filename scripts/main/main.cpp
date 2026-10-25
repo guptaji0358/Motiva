@@ -134,6 +134,30 @@ int main(int argc, char* argv[]) {
                 explorerPlaylistFile = args[i + 2];
             }
             i += 2;
+        } else if (args[i] == QLatin1String("--explorer-add") && i + 2 < args.size()) {
+            // Explorer menu (MotivaShell.dll): "<playlistId|0 = new> <file>", the
+            // file lists every selected path, one per line (UTF-8). It is a
+            // one-shot hand-off, so it is deleted once read. Paths are joined
+            // with '\n' (never valid in a path), as InstanceIpc carries them.
+            bool ok = false;
+            const qint64 id = args[i + 1].toLongLong(&ok);
+            QFile list(args[i + 2]);
+            if (ok && id >= 0 && list.open(QIODevice::ReadOnly)) {
+                QStringList paths;
+                for (const QByteArray& line : list.readAll().split('\n')) {
+                    const QString path = QString::fromUtf8(line).trimmed();
+                    if (!path.isEmpty()) {
+                        paths << path;
+                    }
+                }
+                list.close();
+                if (!paths.isEmpty()) {
+                    explorerPlaylistId = id;
+                    explorerPlaylistFile = paths.join(QLatin1Char('\n'));
+                }
+            }
+            QFile::remove(args[i + 2]);
+            i += 2;
         } else if (args[i] == QLatin1String("--add-to-new-playlist") && i + 1 < args.size()) {
             explorerPlaylistId = 0;
             explorerPlaylistFile = args[++i];
