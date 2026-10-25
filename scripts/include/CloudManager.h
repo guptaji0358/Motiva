@@ -15,13 +15,13 @@
 // does sign-in (in the user's browser), token refresh, listing and transfers,
 // and CloudManager only drives it through RcloneJob (QProcess, asynchronous).
 //
-// Safe defaults:
-//  * imports and uploads use `rclone copy/copyto` (never delete) and
-//    `--immutable` so an existing, different file is reported instead of being
-//    silently overwritten (uploads overwrite only after the user said so);
-//  * mirroring (`sync`) is only started after a dry-run preview was shown and
-//    confirmed, and always with --backup-dir so deleted / replaced files are
-//    moved aside instead of destroyed, plus --max-delete as a brake;
+// Motiva's cloud access is deliberately narrow:
+//  * READ ONLY - accounts are connected with read-only scopes where the service
+//    allows it, and the code has no upload, sync, delete, rename or create call;
+//  * PICTURES AND VIDEOS ONLY (isAllowedMediaName) - other files are not listed
+//    and never fetched, whatever the caller asks for;
+//  * downloads use `rclone copy` with `--immutable` so an existing, different local
+//    file is reported instead of being silently overwritten;
 //  * the rclone config (which holds the OAuth tokens) is encrypted by rclone
 //    itself with a random password that is kept under Windows DPAPI (current
 //    user). The password reaches rclone through its environment only.
@@ -56,17 +56,6 @@ struct CloudToolInfo {
     QString path;
     QString version;     // "1.75.2"
     QString error;       // user-facing, set when !found or unusable
-};
-
-// Result of a dry run / check. Paths are relative to the compared folders.
-struct CloudSyncPreview {
-    bool ok = false;
-    QString error;
-    QStringList added;    // would be copied (new on the destination)
-    QStringList changed;  // would replace a different destination file
-    QStringList removed;  // would be removed from the destination (sync only)
-    int unchanged = 0;
-    int problems = 0;     // "!" lines
 };
 
 struct CloudStep {
@@ -132,7 +121,7 @@ public:
     static bool isValidRemoteName(const QString& name, QString* why = nullptr);
     // Starts rclone's own sign-in (opens the system browser). Reports through
     // connectStatus / connectFinished. One at a time.
-    bool connectAccount(const QString& providerId, const QString& name, bool readOnly);
+    bool connectAccount(const QString& providerId, const QString& name); // always read-only access
     bool reconnectAccount(const QString& name);
     bool isConnecting() const { return m_connectActive; }
     void cancelConnect();
@@ -145,7 +134,6 @@ public:
     // --- browsing ---
     using ListCallback = std::function<void(bool ok, const QList<CloudEntry>&, const QString& error, bool needsReconnect)>;
     void list(const QString& remote, const QString& path, ListCallback done);
-    void makeFolder(const QString& remote, const QString& path, std::function<void(bool, const QString&)> done);
 
     // --- plans (one at a time) ---
     bool busy() const { return m_planActive; }
@@ -153,46 +141,17 @@ public:
     void cancelTransfer();
     void cancelDownloads() { cancelTransfer(); } // CleanupManager's name for it
 
-    // Builders. All of them only copy; nothing here deletes anything.
+    // Builders. Read-only: they only copy FROM the cloud, and skip anything that is
+    // not a picture or video.
     // Files for a playlist: downloaded into the local cache (reused when unchanged).
     CloudPlan planCacheDownload(const QString& remote, const QList<CloudEntry>& files) const;
     // Download into a chosen folder; an existing different local file is reported, not replaced.
     CloudPlan planDownloadTo(const QString& remote, const QList<CloudEntry>& entries, const QString& localDir) const;
-    CloudPlan planUpload(const QString& remote, const QString& remoteDir, const QStringList& localPaths, bool overwrite) const;
-    // Copy a whole folder (never deletes anything at the destination; a
-    // destination file that gets replaced is first moved to `trashDir`).
-    CloudPlan planCopyFolder(const QString& title, const QString& src, const QString& dst, const QString& trashDir) const;
-    // Mirror: makes `dst` equal to `src`. Only after previewTransfer + confirmation.
-    // `trashDir` receives replaced/removed destination files; rclone refuses to
-    // delete more than `maxDelete` files.
-    CloudPlan planMirror(const QString& src, const QString& dst, const QString& trashDir, int maxDelete) const;
-    // Two-way merge of a PC folder and a cloud folder. Files present on one side only are copied
-    // to the other (--ignore-existing: nothing is replaced); a file that differs on both sides
-    // is a CONFLICT: both versions are kept - the cloud one is saved next to the local one as
-    // "<name> (cloud copy <time>).<ext>". Deletions are never propagated (without a baseline a
-    // missing file cannot be told apart from a file that was never there, and a network failure
-    // must never count as a deletion).
-    CloudPlan planTwoWay(const QString& localDir, const QString& remoteSpec, const QStringList& conflicts) const;
-    // A timestamped folder on `remote` (or on disk when remote is empty) for replaced/removed files.
-    static QString newTrashDir(const QString& remote);
-    // Library snapshot (VACUUM INTO, consistent) uploaded as a new, timestamped file.
-    bool planBackupLibrary(const QString& remote, const QString& libraryFile, CloudPlan* plan, QString* error) const;
-    CloudPlan planBackupFolder(const QString& remote, const QString& localDir) const;
-    // Restore a backed-up file to a local folder under a fresh name (never replaces the live library).
-    CloudPlan planRestore(const QString& remote, const CloudEntry& backup, const QString& localDir, QString* savedAs) const;
 
-    using PreviewCallback = std::function<void(const CloudSyncPreview&)>;
-    // Dry run (`sync` = mirror, otherwise copy). Nothing is changed.
-    void previewTransfer(bool mirror, const QString& src, const QString& dst, PreviewCallback done);
-    // Compares two folders by size/hash (rclone check).
-    void verify(const QString& src, const QString& dst, PreviewCallback done);
+    // Picture / video file name test (extension based); folders are not judged here.
+    static bool isAllowedMediaName(const QString& fileName);
 
     static QString remotePath(const QString& remote, const QString& path);
-    static QString backupFolderName() { return QStringLiteral("Motiva Backup"); }
-    static QString syncTrashFolderName() { return QStringLiteral("Motiva Sync Trash"); }
-    static QString localTrashRoot();
-    static QString uniqueLocalName(const QString& dir, const QString& name);
-
     // --- local cache of files fetched for playlists ---
     static QString cacheRoot();
     QString cachePathFor(const QString& remote, const CloudEntry& entry) const;

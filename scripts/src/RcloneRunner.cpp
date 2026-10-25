@@ -1,5 +1,6 @@
 #include "RcloneRunner.h"
 
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -23,7 +24,7 @@ QString RcloneResult::userMessage() const {
     case Status::TimedOut:
         return QObject::tr("The cloud service took too long to answer. Check your connection and try again.");
     case Status::NotStarted:
-        return QObject::tr("The cloud transfer tool (rclone) could not be started.");
+        return QObject::tr("The cloud component could not be started.");
     case Status::Failed:
         break;
     }
@@ -101,7 +102,8 @@ RcloneError RcloneJob::classify(const QStringList& messages, int exitCode) {
     }
     if (has({"invalid_grant", "token expired", "expired or revoked", "couldn't fetch token", "failed to get oauth token",
              "oauth2: cannot fetch token", "401 unauthorized", "invalidauthenticationtoken", "aadsts", "invalid_access_token",
-             "expired_access_token", "unauthorized_client", "autherror", "status code 401", "error 401"})) {
+             "expired_access_token", "unauthorized_client", "autherror", "status code 401", "error 401",
+             "empty token found", "config reconnect"})) {
         return RcloneError::Auth;
     }
     if (has({"ratelimit", "rate limit", "too many requests", "error 429", "status code 429", "toomanyrequests", "quota exceeded for quota metric"})) {
@@ -136,6 +138,14 @@ RcloneJob::RcloneJob(const QString& exe, const QStringList& args, const QProcess
     connect(&m_killTimer, &QTimer::timeout, this, [this] {
         if (m_proc && m_proc->state() != QProcess::NotRunning) {
             m_proc->kill();
+        }
+    });
+    // CloudManager is never destroyed, so a sign-in still waiting when Motiva quits would
+    // outlive it and keep holding rclone's local auth port (53682), breaking the next sign-in.
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+        if (m_proc && m_proc->state() != QProcess::NotRunning) {
+            m_proc->kill();
+            m_proc->waitForFinished(1000);
         }
     });
 }
@@ -286,6 +296,12 @@ void RcloneJob::parseLogLine(const QByteArray& line) {
     const QRegularExpressionMatch m = plain.match(QString::fromUtf8(line));
     if (m.hasMatch() && m_messages.size() < 200) {
         m_messages << scrub(m.captured(1));
+    } else if (!m.hasMatch() && !line.startsWith('{') && m_otherStderr.size() < 20) {
+        static const QRegularExpression stamped(QStringLiteral(R"(^\d{4}/\d\d/\d\d )"));
+        const QString text = QString::fromUtf8(line);
+        if (!stamped.match(text).hasMatch()) { // a stamped line here is INFO/NOTICE/DEBUG noise
+            m_otherStderr << scrub(text);
+        }
     }
 }
 
@@ -318,7 +334,7 @@ void RcloneJob::finish(RcloneResult::Status status) {
     }
     RcloneResult r;
     r.out = m_out;
-    r.messages = m_messages;
+    r.messages = m_messages.isEmpty() ? m_otherStderr : m_messages;
     r.exitCode = m_proc ? m_proc->exitCode() : -1;
     if (m_startFailed) {
         r.status = RcloneResult::Status::NotStarted;

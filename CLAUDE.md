@@ -2,6 +2,27 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-24b, rclone.exe branded)
+
+`scripts/tools/brand_rclone_exe.py` replaces rclone.exe's icon (RT_ICON/GROUP_ICON) and version
+strings with Motiva's (resources only; language 1033 - UpdateResource needs the exact lang).
+Applied to third_party/rclone, build/rclone, deployment/resources/bin/rclone; the sign-in page is
+patched by `patch_rclone_page.py`. NOT changeable here: the Google/Microsoft/Dropbox consent
+screen name/logo (set in your own OAuth app registration).
+
+## Current status (2026-10-24, cloud is read-only and media-only)
+
+Policy, enforced in `CloudManager` (not just hidden in the UI): the cloud is VIEW/DOWNLOAD
+only and only pictures/videos (`CloudManager::isAllowedMediaName`, GIF counts as a picture)
+are ever listed or fetched. Removed entirely: upload, new folder, sync/mirror/two-way,
+library/folder backup, restore, dry-run preview/verify (CloudWindow now has two pages:
+Accounts / Browse). `list()` drops non-media files (folders stay, for navigation);
+`planCacheDownload`/`planDownloadTo` skip folders and non-media (no whole-folder copies).
+Sign-in asks for read-only scopes: Google `drive.readonly`, OneDrive `access_scopes=Files.Read...`;
+Dropbox cannot be restricted by the client - register the Dropbox app with read scopes only.
+Verified: build only. NOT verified: real sign-in with the read-only scopes, listing filter
+against a live account. `docs/CLOUD_STORAGE.md` still describes the removed sync/backup features.
+
 ## Current status (2026-10-23b, Cloud window on the GL UI)
 
 `CloudWindow` is now a `GlWindow` (same public API: `setTarget/present/filesReady`;

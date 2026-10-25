@@ -54,18 +54,6 @@ QString etaText(int seconds) {
     return QObject::tr("%1 s left").arg(seconds);
 }
 
-QString trimSlashes(QString s) {
-    s = s.trimmed();
-    s.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    while (s.startsWith(QLatin1Char('/'))) {
-        s.remove(0, 1);
-    }
-    while (s.endsWith(QLatin1Char('/'))) {
-        s.chop(1);
-    }
-    return s;
-}
-
 QString parentOf(const QString& path) {
     const int i = path.lastIndexOf(QLatin1Char('/'));
     return i < 0 ? QString() : path.left(i);
@@ -157,15 +145,13 @@ QPushButton* plainButton(const QString& text, QWidget* parent = nullptr) {
 } // namespace
 
 CloudWindow::CloudWindow(QWidget* parent)
-    : GlWindow(tr("Cloud Storage"), tr("Google Drive, OneDrive and Dropbox through rclone"), parent),
+    : GlWindow(tr("Cloud Storage"), tr("View pictures and videos from Google Drive, OneDrive and Dropbox"), parent),
       m_cloud(CloudManager::instance()) {
     setModal(false);
 
     buildHeader();
     buildAccountsPage();
     buildBrowsePage();
-    buildSyncPage();
-    buildBackupPage();
     buildTransferPanel();
 
     m_closeButton = new GlButton(canvas(), GlButton::Kind::Secondary);
@@ -187,7 +173,6 @@ CloudWindow::CloudWindow(QWidget* parent)
     connect(m_cloud, &CloudManager::transferFinished, this, &CloudWindow::onTransferFinished);
 
     refreshProviderHints();
-    updateModeHint();
     setBusy(false);
     showPage(AccountsPage);
 
@@ -243,7 +228,7 @@ void CloudWindow::buildHeader() {
     m_reconnectButton->setVisible(false);
     connect(m_reconnectButton, &GlButton::clicked, this, [this] { reconnect(m_reconnectName); });
 
-    const QStringList names{tr("Accounts"), tr("Browse"), tr("Sync"), tr("Backup & Restore")};
+    const QStringList names{tr("Accounts"), tr("Browse")};
     for (int i = 0; i < PageCount; ++i) {
         m_tabButtons[i] = new GlButton(c, GlButton::Kind::Tab);
         m_tabButtons[i]->setText(names.at(i));
@@ -254,8 +239,8 @@ void CloudWindow::buildHeader() {
 void CloudWindow::buildAccountsPage() {
     GlCanvas* c = canvas();
     m_accountsIntro = makeLabel(AccountsPage, 10, true, true);
-    m_accountsIntro->setText(tr("Connect an account. Sign-in happens in your web browser and is handled by rclone; "
-                                "Motiva never sees your password."));
+    m_accountsIntro->setText(tr("Connect an account. Sign-in happens in your web browser and is handled securely by the cloud service; "
+                                "Motiva never sees your password. Access is read-only: Motiva can only view and download pictures and videos."));
 
     // Client IDs are the product owner's business (motiva-cloud.ini); end users never see them.
     m_credsVisible = qEnvironmentVariableIsSet("MOTIVA_CLOUD_DEV");
@@ -280,10 +265,6 @@ void CloudWindow::buildAccountsPage() {
         m_connectButtons.insert(p.id, row.connect);
         m_providers << row;
     }
-
-    m_readOnly = new GlToggle(c);
-    m_readOnly->setText(tr("Google Drive: read-only access (cannot upload, sync or back up to this account)"));
-    own(AccountsPage, m_readOnly);
 
     m_connectStatus = makeLabel(AccountsPage, 10, true);
     m_cancelConnect = makeButton(AccountsPage, tr("Cancel sign-in"));
@@ -377,7 +358,6 @@ void CloudWindow::buildBrowsePage() {
     own(BrowsePage, m_browseRemote);
     m_up = makeButton(BrowsePage, tr("Up"));
     m_refresh = makeButton(BrowsePage, tr("Refresh"));
-    m_newFolder = makeButton(BrowsePage, tr("New folder…"));
     m_search = new GlTextInput(c);
     m_search->setPlaceholder(tr("Search this folder"));
     m_search->setClearable(true);
@@ -392,7 +372,7 @@ void CloudWindow::buildBrowsePage() {
     m_list->setDelegate(new CloudRowDelegate(m_list));
     m_list->setMode(GlItemView::Mode::List, QSize(200, 38), 2);
     m_list->setAccessibleName(tr("Files and folders in the cloud"));
-    m_list->setEmptyText(tr("Nothing to show"), tr("Connect an account, then open a folder."));
+    m_list->setEmptyText(tr("Nothing to show"), tr("Connect an account, then open a folder. Only pictures and videos are listed."));
     own(BrowsePage, m_list);
     connect(m_list, &GlItemView::clicked, this, &CloudWindow::toggleRow);
     connect(m_list, &GlItemView::doubleClicked, this, [this](int row) {
@@ -418,8 +398,6 @@ void CloudWindow::buildBrowsePage() {
     });
 
     m_download = makeButton(BrowsePage, tr("Download to folder…"));
-    m_uploadFiles = makeButton(BrowsePage, tr("Upload files…"));
-    m_uploadFolder = makeButton(BrowsePage, tr("Upload folder…"));
     m_addToPlaylist = makeButton(BrowsePage, tr("Add to playlist"), GlButton::Kind::Primary);
     m_selectAll = makeButton(BrowsePage, tr("Select all"));
     m_clearSelection = makeButton(BrowsePage, tr("Clear"));
@@ -434,125 +412,10 @@ void CloudWindow::buildBrowsePage() {
     connect(m_browseRemote, &GlDropdown::currentIndexChanged, this, [this] { openFolder(QString()); });
     connect(m_up, &GlButton::clicked, this, &CloudWindow::goUp);
     connect(m_refresh, &GlButton::clicked, this, &CloudWindow::reloadListing);
-    connect(m_newFolder, &GlButton::clicked, this, &CloudWindow::makeFolder);
     connect(m_selectAll, &GlButton::clicked, this, [this] { setAllChecked(true); });
     connect(m_clearSelection, &GlButton::clicked, this, [this] { setAllChecked(false); });
     connect(m_download, &GlButton::clicked, this, &CloudWindow::downloadSelected);
-    connect(m_uploadFiles, &GlButton::clicked, this, &CloudWindow::uploadFiles);
-    connect(m_uploadFolder, &GlButton::clicked, this, &CloudWindow::uploadFolder);
     connect(m_addToPlaylist, &GlButton::clicked, this, &CloudWindow::addToPlaylist);
-}
-
-void CloudWindow::buildSyncPage() {
-    GlCanvas* c = canvas();
-    m_syncIntro = makeLabel(SyncPage, 10, true, true);
-    m_syncIntro->setText(tr("Keep a folder on this PC and a folder in the cloud in step. Always preview first."));
-
-    auto formLabel = [this](const QString& text) {
-        GlLabel* l = makeLabel(SyncPage, 10.5);
-        l->setText(text);
-        return l;
-    };
-    m_syncRemoteLabel = formLabel(tr("Account"));
-    m_syncRemote = new GlDropdown(c);
-    m_syncRemote->setCompact(true);
-    own(SyncPage, m_syncRemote);
-
-    m_syncRemoteDirLabel = formLabel(tr("Cloud folder"));
-    m_syncRemoteDir = new GlTextInput(c);
-    m_syncRemoteDir->setPlaceholder(tr("Folder in the cloud, e.g. Wallpapers"));
-    own(SyncPage, m_syncRemoteDir);
-
-    m_syncLocalLabel = formLabel(tr("Folder on this PC"));
-    m_syncLocal = new GlTextInput(c);
-    m_syncLocal->setPlaceholder(tr("Folder on this PC"));
-    own(SyncPage, m_syncLocal);
-    m_syncPick = makeButton(SyncPage, tr("Choose…"));
-
-    m_syncDirectionLabel = formLabel(tr("Direction"));
-    m_syncDirection = new GlDropdown(c);
-    m_syncDirection->setCompact(true);
-    m_syncDirection->addItem(tr("Upload: this PC → cloud"));
-    m_syncDirection->addItem(tr("Download: cloud → this PC"));
-    m_syncDirection->setCurrentIndex(0);
-    own(SyncPage, m_syncDirection);
-
-    m_syncModeLabel = formLabel(tr("Mode"));
-    m_syncMode = new GlDropdown(c);
-    m_syncMode->setCompact(true);
-    m_syncMode->addItem(tr("Copy (never removes)"));
-    m_syncMode->addItem(tr("Mirror (match the source)"));
-    m_syncMode->addItem(tr("Two-way (never deletes)"));
-    m_syncMode->setCurrentIndex(0);
-    own(SyncPage, m_syncMode);
-    m_syncModeHint = makeLabel(SyncPage, 9.5, true, true);
-
-    m_syncPreview = makeButton(SyncPage, tr("Preview"));
-    m_syncRun = makeButton(SyncPage, tr("Run"), GlButton::Kind::Primary);
-    m_syncVerify = makeButton(SyncPage, tr("Verify"));
-    m_syncVerify->setToolTip(tr("Compares both folders afterwards (size and checksum where the service provides one)."));
-
-    m_syncSummary = makeLabel(SyncPage, 10, false, true);
-    m_syncModel = new QStandardItemModel(this);
-    m_syncReport = new GlItemView(c);
-    m_syncReport->setModel(m_syncModel);
-    m_syncReport->setDelegate(new GlTextDelegate(m_syncReport));
-    m_syncReport->setMode(GlItemView::Mode::List, QSize(200, 26), 0);
-    m_syncReport->setAccessibleName(tr("Sync report"));
-    m_syncReport->setEmptyText(tr("No report yet"), tr("Choose the folders and press Preview."));
-    own(SyncPage, m_syncReport);
-
-    connect(m_syncPick, &GlButton::clicked, this, [this] {
-        const QString d = QFileDialog::getExistingDirectory(this, tr("Folder on this PC"), m_syncLocal->text());
-        if (!d.isEmpty()) {
-            m_syncLocal->setText(QDir::toNativeSeparators(d));
-        }
-    });
-    for (GlDropdown* d : {m_syncRemote, m_syncDirection, m_syncMode}) {
-        connect(d, &GlDropdown::currentIndexChanged, this, &CloudWindow::invalidatePreview);
-    }
-    connect(m_syncMode, &GlDropdown::currentIndexChanged, this, &CloudWindow::updateModeHint);
-    connect(m_syncRemoteDir, &GlTextInput::textChanged, this, &CloudWindow::invalidatePreview);
-    connect(m_syncLocal, &GlTextInput::textChanged, this, &CloudWindow::invalidatePreview);
-    connect(m_syncPreview, &GlButton::clicked, this, &CloudWindow::previewSync);
-    connect(m_syncRun, &GlButton::clicked, this, &CloudWindow::runSync);
-    connect(m_syncVerify, &GlButton::clicked, this, &CloudWindow::verifySync);
-}
-
-void CloudWindow::buildBackupPage() {
-    GlCanvas* c = canvas();
-    m_backupIntro = makeLabel(BackupPage, 10, true, true);
-    m_backupIntro->setText(tr("Backups go to a “%1” folder in the chosen account. Nothing is ever deleted there by Motiva; "
-                              "restoring saves a copy next to your files and never replaces the library you are using.")
-                               .arg(CloudManager::backupFolderName()));
-
-    m_backupRemote = new GlDropdown(c);
-    m_backupRemote->setCompact(true);
-    m_backupRemote->setToolTip(tr("Account to back up to"));
-    own(BackupPage, m_backupRemote);
-    m_backupLibraryButton = makeButton(BackupPage, tr("Back up library now"), GlButton::Kind::Primary);
-    m_backupFolderButton = makeButton(BackupPage, tr("Back up a folder…"));
-
-    m_backupListLabel = makeLabel(BackupPage, 10);
-    m_backupListLabel->setBold(true);
-    m_backupListLabel->setText(tr("Library backups in this account"));
-    m_backupModel = new QStandardItemModel(this);
-    m_backups = new GlItemView(c);
-    m_backups->setModel(m_backupModel);
-    m_backups->setDelegate(new GlTextDelegate(m_backups));
-    m_backups->setMode(GlItemView::Mode::List, QSize(200, 34), 0);
-    m_backups->setAccessibleName(tr("Library backups"));
-    m_backups->setEmptyText(tr("No library backups"), tr("Use Back up library now to create the first one."));
-    own(BackupPage, m_backups);
-
-    m_backupRefresh = makeButton(BackupPage, tr("Refresh list"));
-    m_restoreButton = makeButton(BackupPage, tr("Restore selected…"));
-
-    connect(m_backupLibraryButton, &GlButton::clicked, this, &CloudWindow::backupLibrary);
-    connect(m_backupFolderButton, &GlButton::clicked, this, &CloudWindow::backupFolder);
-    connect(m_backupRefresh, &GlButton::clicked, this, &CloudWindow::refreshBackups);
-    connect(m_backupRemote, &GlDropdown::currentIndexChanged, this, &CloudWindow::refreshBackups);
-    connect(m_restoreButton, &GlButton::clicked, this, &CloudWindow::restoreBackup);
 }
 
 void CloudWindow::buildTransferPanel() {
@@ -650,8 +513,6 @@ void CloudWindow::layoutContent(const QRectF& content, const QRectF& footer) {
     switch (m_page) {
     case AccountsPage: layoutAccounts(area); break;
     case BrowsePage: layoutBrowse(area); break;
-    case SyncPage: layoutSync(area); break;
-    case BackupPage: layoutBackup(area); break;
     default: break;
     }
     layoutTransfer(xfer, showLog);
@@ -681,8 +542,6 @@ void CloudWindow::layoutAccounts(const QRectF& a) {
         r.creds->setRect(QRectF(card.right() - 16 - kConnectW - 10 - kCredsW, card.center().y() - 20, kCredsW, 40));
         y += cardH + (compact ? 5 : 8);
     }
-    m_readOnly->setRect(QRectF(L, y, W, 34));
-    y += compact ? 34 : 38;
     const qreal cancelW = m_cancelConnect->isVisible() ? 150 : 0;
     m_connectStatus->setRect(QRectF(L, y, std::max<qreal>(40, W - cancelW - 10), 30));
     m_cancelConnect->setRect(QRectF(L + W - cancelW, y - 2, cancelW, 34));
@@ -708,7 +567,6 @@ void CloudWindow::layoutBrowse(const QRectF& a) {
     m_browseRemote->setRect(QRectF(L, y, 220, H));
     m_up->setRect(QRectF(L + 228, y, 70, H));
     m_refresh->setRect(QRectF(L + 306, y, 100, H));
-    m_newFolder->setRect(QRectF(L + 414, y, 130, H));
     const qreal sw = std::clamp<qreal>(W - 560, 140, 280);
     m_search->setRect(QRectF(R - sw, y, sw, H));
     y += H + 6;
@@ -720,8 +578,6 @@ void CloudWindow::layoutBrowse(const QRectF& a) {
     m_list->setRect(QRectF(L, y, W, std::max<qreal>(80, actionsY - 8 - y)));
 
     m_download->setRect(QRectF(L, actionsY, 190, H));
-    m_uploadFiles->setRect(QRectF(L + 198, actionsY, 140, H));
-    m_uploadFolder->setRect(QRectF(L + 346, actionsY, 150, H));
     const QString addText = m_addToPlaylist->text();
     const qreal addW = std::clamp<qreal>(QFontMetricsF(GlUi::uiFont(10, true)).horizontalAdvance(addText) + 56, 200, W * 0.4);
     m_addToPlaylist->setRect(QRectF(R - addW, actionsY, addW, H));
@@ -731,71 +587,6 @@ void CloudWindow::layoutBrowse(const QRectF& a) {
     m_nextPage->setRect(QRectF(R - 100, pagerY, 100, 36));
     m_pageLabel->setRect(QRectF(R - 100 - 8 - 230, pagerY, 230, 36));
     m_prevPage->setRect(QRectF(R - 100 - 8 - 230 - 8 - 100, pagerY, 100, 36));
-}
-
-void CloudWindow::layoutSync(const QRectF& a) {
-    const qreal L = a.left(), W = a.width();
-    qreal y = a.top();
-    const bool compact = a.height() < 430;
-    m_syncIntro->setVisible(!compact);
-    if (!compact) {
-        const qreal ih = m_syncIntro->heightForWidth(W) + 2;
-        m_syncIntro->setRect(QRectF(L, y, W, ih));
-        y += ih + 8;
-    }
-
-    const qreal H = compact ? 34 : 38, kLabelW = 170, kGap = compact ? 4 : 8;
-    const qreal fx = L + kLabelW + 20;
-    const qreal fieldW = std::min<qreal>(520, W - kLabelW - 20 - 140);
-    auto row = [&](GlLabel* label, GlItem* field, qreal width) {
-        label->setRect(QRectF(L + 4, y, kLabelW, H));
-        field->setRect(QRectF(fx, y, width, H));
-        y += H + kGap;
-    };
-    row(m_syncRemoteLabel, m_syncRemote, std::min<qreal>(fieldW, 320));
-    row(m_syncRemoteDirLabel, m_syncRemoteDir, fieldW);
-    m_syncLocalLabel->setRect(QRectF(L + 4, y, kLabelW, H));
-    m_syncLocal->setRect(QRectF(fx, y, fieldW, H));
-    m_syncPick->setRect(QRectF(fx + fieldW + 8, y, 120, H));
-    y += H + kGap;
-    row(m_syncDirectionLabel, m_syncDirection, std::min<qreal>(fieldW, 320));
-    row(m_syncModeLabel, m_syncMode, std::min<qreal>(fieldW, 320));
-    const qreal mh = std::max<qreal>(18, m_syncModeHint->heightForWidth(W - kLabelW - 24) + 2);
-    m_syncModeHint->setRect(QRectF(fx, y - 2, W - kLabelW - 24, mh));
-    y += mh + (compact ? 4 : 8);
-
-    m_syncPreview->setRect(QRectF(L, y, 130, H));
-    m_syncRun->setRect(QRectF(L + 138, y, 130, H));
-    m_syncVerify->setRect(QRectF(L + 276, y, 130, H));
-    y += H + 10;
-
-    const bool summary = !m_syncSummary->text().isEmpty();
-    m_syncSummary->setVisible(m_page == SyncPage && summary);
-    if (summary) {
-        const qreal sh = m_syncSummary->heightForWidth(W) + 4;
-        m_syncSummary->setRect(QRectF(L, y, W, sh));
-        y += sh + 6;
-    }
-    m_syncReport->setRect(QRectF(L, y, W, std::max<qreal>(50, a.bottom() - y)));
-}
-
-void CloudWindow::layoutBackup(const QRectF& a) {
-    const qreal L = a.left(), W = a.width();
-    qreal y = a.top();
-    constexpr qreal H = 38;
-    const qreal ih = m_backupIntro->heightForWidth(W) + 2;
-    m_backupIntro->setRect(QRectF(L, y, W, ih));
-    y += ih + 10;
-    m_backupRemote->setRect(QRectF(L, y, 220, H));
-    m_backupLibraryButton->setRect(QRectF(L + 230, y, 190, H));
-    m_backupFolderButton->setRect(QRectF(L + 428, y, 170, H));
-    y += H + 10;
-    m_backupListLabel->setRect(QRectF(L + 4, y, W - 8, 24));
-    y += 28;
-    const qreal rowY = a.bottom() - H;
-    m_backups->setRect(QRectF(L, y, W, std::max<qreal>(70, rowY - 8 - y)));
-    m_backupRefresh->setRect(QRectF(L, rowY, 150, H));
-    m_restoreButton->setRect(QRectF(L + 158, rowY, 190, H));
 }
 
 void CloudWindow::layoutTransfer(const QRectF& a, bool showLog) {
@@ -834,12 +625,7 @@ void CloudWindow::refreshTool() {
         if (!t.found) {
             m_toolLabel->setText(tr("⚠ %1").arg(t.error));
         } else {
-            QString text = tr("Cloud access runs through rclone %1 (MIT licence) — %2.")
-                               .arg(t.version, t.bundled ? tr("the copy shipped with Motiva") : tr("found on this PC"));
-            if (!t.licenseFilePresent) {
-                text += tr(" The rclone licence file is missing next to rclone.exe; reinstall Motiva to restore it.");
-            }
-            m_toolLabel->setText(text);
+            m_toolLabel->setText(t.licenseFilePresent ? QString() : tr("Part of the cloud component is missing; reinstall Motiva to restore it."));
         }
         canvas()->relayout();
     });
@@ -897,9 +683,7 @@ void CloudWindow::reloadRemotes() {
         if (remotes.size() == 1) {
             m_accounts->setCurrentRow(0);
         }
-        for (GlDropdown* d : {m_browseRemote, m_syncRemote, m_backupRemote}) {
-            fillRemoteCombo(d);
-        }
+        fillRemoteCombo(m_browseRemote);
         if (!m_selectRemote.isEmpty()) {
             const int i = m_browseRemote->findData(m_selectRemote);
             if (i >= 0) {
@@ -968,7 +752,7 @@ void CloudWindow::editCredentials(const QString& providerId) {
     dlg.setWindowTitle(tr("%1 API credentials").arg(info.displayName));
     auto* v = new QVBoxLayout(&dlg);
     auto* text = new QLabel(tr("Register your own application with the service and enter its client ID (and secret, where it "
-                               "has one) here. Leave the ID empty to use rclone's shared registration.\n\nRegistration page: %1\n"
+                               "has one) here. Leave the ID empty to use Motiva's default registration.\n\nRegistration page: %1\n"
                                "The secret is stored encrypted for your Windows account only.")
                                 .arg(info.consoleUrl),
                             &dlg);
@@ -1004,45 +788,22 @@ void CloudWindow::editCredentials(const QString& providerId) {
 }
 
 void CloudWindow::connectProvider(const QString& providerId) {
-    const CloudProviderInfo info = CloudManager::provider(providerId);
-    QString suggestion = info.displayName;
-    auto taken = [this](const QString& n) {
-        return std::any_of(m_remotes.begin(), m_remotes.end(), [&n](const CloudRemote& r) {
-            return r.name.compare(n, Qt::CaseInsensitive) == 0;
-        });
-    };
-    for (int i = 2; taken(suggestion); ++i) {
-        suggestion = QStringLiteral("%1 %2").arg(info.displayName).arg(i);
-    }
-    for (;;) {
-        bool ok = false;
-        const QString name = GlMessageBox::getText(this, tr("Connect %1").arg(info.displayName),
-                                                   tr("Name for this account (you can connect several):"), suggestion, &ok)
-                                 .trimmed();
-        if (!ok) {
-            return;
-        }
-        QString why;
-        if (!CloudManager::isValidRemoteName(name, &why)) {
-            GlMessageBox::warning(this, tr("Account name"), why);
-            suggestion = name;
-            continue;
-        }
-        if (taken(name)) {
-            GlMessageBox::warning(this, tr("Account name"), tr("An account with that name already exists."));
-            suggestion = name;
-            continue;
-        }
-        if (!m_cloud->connectAccount(providerId, name, providerId == QLatin1String("gdrive") && m_readOnly->isChecked())) {
-            showBanner(tr("A sign-in is already in progress."), true);
-            return;
-        }
-        m_connectingProvider = providerId;
-        m_connectingUi = true;
-        showBanner(QString(), false);
-        setBusy(m_cloud->busy());
+    // Motiva is a personal app: one cloud account per computer. Remove it to use another.
+    if (!m_remotes.isEmpty()) {
+        showBanner(tr("Only one cloud account can be connected. Remove “%1” first to connect a different one.")
+                       .arg(m_remotes.first().name),
+                   true);
         return;
     }
+    const CloudProviderInfo info = CloudManager::provider(providerId);
+    if (!m_cloud->connectAccount(providerId, info.displayName)) {
+        showBanner(tr("A sign-in is already in progress."), true);
+        return;
+    }
+    m_connectingProvider = providerId;
+    m_connectingUi = true;
+    showBanner(QString(), false);
+    setBusy(m_cloud->busy());
 }
 
 void CloudWindow::onConnectFinished(const QString& name, bool ok, const QString& message) {
@@ -1188,25 +949,6 @@ QList<CloudEntry> CloudWindow::selectedEntries() const {
     return out;
 }
 
-void CloudWindow::makeFolder() {
-    const QString remote = m_browseRemote->currentData().toString();
-    if (remote.isEmpty()) {
-        return;
-    }
-    bool ok = false;
-    const QString name = trimSlashes(GlMessageBox::getText(this, tr("New folder"), tr("Folder name:"), QString(), &ok));
-    if (!ok || name.isEmpty()) {
-        return;
-    }
-    const QString path = m_path.isEmpty() ? name : m_path + QLatin1Char('/') + name;
-    m_cloud->makeFolder(remote, path, [this](bool done, const QString& error) {
-        if (!done) {
-            showBanner(error, true);
-        }
-        reloadListing();
-    });
-}
-
 bool CloudWindow::begin(const CloudPlan& plan) {
     if (!m_cloud->startPlan(plan)) {
         showBanner(tr("Another transfer is already running."), true);
@@ -1219,7 +961,7 @@ void CloudWindow::downloadSelected() {
     const QString remote = m_browseRemote->currentData().toString();
     const QList<CloudEntry> sel = selectedEntries();
     if (remote.isEmpty() || sel.isEmpty()) {
-        showBanner(tr("Tick the files or folders to download first."), false);
+        showBanner(tr("Tick the pictures or videos to download first."), false);
         return;
     }
     const QString dir = QFileDialog::getExistingDirectory(
@@ -1230,66 +972,6 @@ void CloudWindow::downloadSelected() {
     m_addAfterDownload = false;
     m_planKind = QStringLiteral("download");
     begin(m_cloud->planDownloadTo(remote, sel, dir));
-}
-
-void CloudWindow::uploadFiles() {
-    const QStringList files = QFileDialog::getOpenFileNames(this, tr("Upload files"));
-    if (!files.isEmpty()) {
-        uploadPaths(files);
-    }
-}
-
-void CloudWindow::uploadFolder() {
-    const QString dir = QFileDialog::getExistingDirectory(this, tr("Upload folder"));
-    if (!dir.isEmpty()) {
-        uploadPaths({dir});
-    }
-}
-
-void CloudWindow::uploadPaths(const QStringList& paths) {
-    const QString remote = m_browseRemote->currentData().toString();
-    if (remote.isEmpty()) {
-        return;
-    }
-    QStringList clashes;
-    for (const QString& p : paths) {
-        const QString name = QFileInfo(p).fileName();
-        for (const CloudEntry& e : m_entries) {
-            if (e.name.compare(name, Qt::CaseInsensitive) == 0) {
-                clashes << name;
-            }
-        }
-    }
-    bool overwrite = false;
-    QStringList toSend = paths;
-    if (!clashes.isEmpty()) {
-        GlMessageBox box(QMessageBox::Question, tr("Already in the cloud"),
-                         tr("%n item(s) with the same name already exist in this cloud folder:\n%1\n\nReplace them? Replaced "
-                            "files are moved to “%2” in the same account, not deleted.",
-                            nullptr, int(clashes.size()))
-                             .arg(clashes.mid(0, 8).join(QLatin1Char('\n')), CloudManager::syncTrashFolderName()),
-                         this);
-        auto* replace = box.addButton(tr("Replace"), QMessageBox::AcceptRole);
-        auto* skip = box.addButton(tr("Skip existing"), QMessageBox::ActionRole);
-        box.addButton(QMessageBox::Cancel);
-        box.setDefaultButton(skip);
-        box.exec();
-        if (box.clickedButton() == replace) {
-            overwrite = true;
-        } else if (box.clickedButton() == skip) {
-            toSend.erase(std::remove_if(toSend.begin(), toSend.end(),
-                                        [&clashes](const QString& p) { return clashes.contains(QFileInfo(p).fileName()); }),
-                         toSend.end());
-        } else {
-            return;
-        }
-    }
-    if (toSend.isEmpty()) {
-        return;
-    }
-    m_planRemote = remote;
-    m_planKind = QStringLiteral("upload");
-    begin(m_cloud->planUpload(remote, m_path, toSend, overwrite));
 }
 
 void CloudWindow::addToPlaylist() {
@@ -1321,347 +1003,6 @@ void CloudWindow::addToPlaylist() {
     }
 }
 
-// ------------------------------------------------------------------ sync
-
-void CloudWindow::updateModeHint() {
-    static const char* const kHints[] = {
-        QT_TR_NOOP("Copy only adds new files and updates changed ones. Nothing is removed."),
-        QT_TR_NOOP("Mirror makes the destination identical to the source. Files that are not in the source are moved to a "
-                   "safety folder, not deleted."),
-        QT_TR_NOOP("Two-way adds new files in both directions. If a file differs on both sides, both copies are kept. "
-                   "Nothing is deleted."),
-    };
-    const int i = std::clamp(m_syncMode->currentIndex(), 0, 2);
-    m_syncModeHint->setText(tr(kHints[i]));
-    canvas()->relayout();
-}
-
-void CloudWindow::setSyncReport(const QString& text) {
-    const QStringList lines = text.split(QLatin1Char('\n'));
-    m_syncSummary->setText(lines.value(0));
-    QStringList rest;
-    for (int i = 1; i < lines.size(); ++i) {
-        if (!lines.at(i).trimmed().isEmpty()) {
-            rest << lines.at(i);
-        }
-    }
-    setLines(m_syncModel, rest);
-    canvas()->relayout();
-}
-
-void CloudWindow::invalidatePreview() {
-    m_previewValid = false;
-    m_syncRun->setEnabled(false);
-    m_syncVerify->setEnabled(!m_cloud->busy());
-}
-
-bool CloudWindow::syncEndpoints(QString* src, QString* dst, QString* localDir, QString* remote, QString* remoteDir) const {
-    *remote = m_syncRemote->currentData().toString();
-    *remoteDir = trimSlashes(m_syncRemoteDir->text());
-    *localDir = QDir::fromNativeSeparators(m_syncLocal->text().trimmed());
-    if (remote->isEmpty() || localDir->isEmpty()) {
-        return false;
-    }
-    const QString localNative = QDir::toNativeSeparators(QDir::cleanPath(*localDir));
-    const QString remoteSpec = CloudManager::remotePath(*remote, *remoteDir);
-    if (m_syncDirection->currentIndex() == 0) {
-        *src = localNative;
-        *dst = remoteSpec;
-    } else {
-        *src = remoteSpec;
-        *dst = localNative;
-    }
-    return true;
-}
-
-void CloudWindow::previewSync() {
-    QString src, dst, local, remote, remoteDir;
-    if (!syncEndpoints(&src, &dst, &local, &remote, &remoteDir)) {
-        setSyncReport(tr("Choose an account and a folder on this PC first."));
-        return;
-    }
-    const bool upload = m_syncDirection->currentIndex() == 0;
-    const bool mirror = m_syncMode->currentIndex() == 1;
-    const bool twoWay = m_syncMode->currentIndex() == 2;
-    if ((upload || twoWay) && !QFileInfo(local).isDir()) {
-        setSyncReport(tr("The folder on this PC does not exist."));
-        return;
-    }
-    if (mirror) {
-        // Guard rails for the one destructive mode.
-        const QDir d(local);
-        const QStringList sensitive{QDir::homePath(), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
-                                    QStandardPaths::writableLocation(QStandardPaths::DesktopLocation),
-                                    QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)};
-        const bool unsafeLocal = d.isRoot() || std::any_of(sensitive.begin(), sensitive.end(), [&local](const QString& s) {
-                                     return !s.isEmpty() && QDir::cleanPath(s).compare(QDir::cleanPath(local), Qt::CaseInsensitive) == 0;
-                                 });
-        if (!upload && unsafeLocal) {
-            setSyncReport(tr("Mirroring into a drive root or a main user folder is blocked: it could remove "
-                             "unrelated files. Pick a dedicated sub-folder."));
-            return;
-        }
-        if (upload && remoteDir.isEmpty()) {
-            setSyncReport(tr("Mirroring onto the root of a cloud account is blocked. Enter a dedicated cloud folder."));
-            return;
-        }
-        if (remoteDir.startsWith(CloudManager::syncTrashFolderName(), Qt::CaseInsensitive) ||
-            remoteDir.startsWith(CloudManager::backupFolderName(), Qt::CaseInsensitive)) {
-            setSyncReport(tr("That cloud folder is reserved for Motiva's own safety copies."));
-            return;
-        }
-    }
-    setSyncReport(tr("Comparing…"));
-    m_syncPreview->setEnabled(false);
-    const QString key = src + QLatin1Char('|') + dst + QLatin1Char('|') + QString::number(mirror) + QString::number(twoWay);
-    if (twoWay) {
-        const QString remoteSpec = CloudManager::remotePath(remote, remoteDir);
-        m_cloud->verify(QDir::toNativeSeparators(local), remoteSpec, [this, key](const CloudSyncPreview& p) {
-            m_syncPreview->setEnabled(!m_cloud->busy());
-            if (!p.ok) {
-                setSyncReport(p.error);
-                m_previewValid = false;
-                return;
-            }
-            // verify(): added = only on this PC, removed = only in the cloud, changed = on both but different.
-            QString text = tr("%1 only on this PC (will be uploaded), %2 only in the cloud (will be downloaded), "
-                              "%3 conflict(s) (both versions kept), %4 identical.")
-                               .arg(p.added.size()).arg(p.removed.size()).arg(p.changed.size()).arg(p.unchanged);
-            if (p.problems > 0) {
-                text += tr("\n%1 item(s) could not be compared - the sync stays blocked until the comparison is complete.").arg(p.problems);
-            }
-            auto section = [&text](const QString& head, const QStringList& items) {
-                if (items.isEmpty()) {
-                    return;
-                }
-                text += QStringLiteral("\n%1\n").arg(head);
-                for (int i = 0; i < items.size() && i < 200; ++i) {
-                    text += QStringLiteral("    %1\n").arg(items.at(i));
-                }
-                if (items.size() > 200) {
-                    text += tr("    … and %1 more\n").arg(items.size() - 200);
-                }
-            };
-            section(tr("Conflicts (different on both sides - neither is overwritten):"), p.changed);
-            section(tr("Will be uploaded:"), p.added);
-            section(tr("Will be downloaded:"), p.removed);
-            setSyncReport(text.trimmed());
-            m_lastPreview = p;
-            m_previewKey = key;
-            m_previewValid = p.problems == 0;
-            m_syncRun->setEnabled(m_previewValid && !m_cloud->busy() && (!p.added.isEmpty() || !p.removed.isEmpty() || !p.changed.isEmpty()));
-        });
-        return;
-    }
-    m_cloud->previewTransfer(mirror, src, dst, [this, key, mirror](const CloudSyncPreview& p) {
-        m_syncPreview->setEnabled(!m_cloud->busy());
-        if (!p.ok) {
-            setSyncReport(p.error);
-            m_previewValid = false;
-            return;
-        }
-        QString text = tr("%1 new, %2 changed, %3 to remove, %4 already identical.")
-                           .arg(p.added.size())
-                           .arg(p.changed.size())
-                           .arg(p.removed.size())
-                           .arg(p.unchanged);
-        if (p.problems > 0) {
-            text += tr("\n%1 item(s) could not be compared.").arg(p.problems);
-        }
-        auto section = [&text](const QString& head, const QStringList& items) {
-            if (items.isEmpty()) {
-                return;
-            }
-            text += QStringLiteral("\n%1\n").arg(head);
-            for (int i = 0; i < items.size() && i < 200; ++i) {
-                text += QStringLiteral("    %1\n").arg(items.at(i));
-            }
-            if (items.size() > 200) {
-                text += tr("    … and %1 more\n").arg(items.size() - 200);
-            }
-        };
-        section(tr("Will be added:"), p.added);
-        section(tr("Will replace a different file:"), p.changed);
-        section(mirror ? tr("Will be moved to the safety folder (not in the source):") : tr("Only at the destination (kept):"), p.removed);
-        setSyncReport(text.trimmed());
-        m_lastPreview = p;
-        m_previewKey = key;
-        m_previewValid = true;
-        m_syncRun->setEnabled(!m_cloud->busy() && (!p.added.isEmpty() || !p.changed.isEmpty() || (mirror && !p.removed.isEmpty())));
-    });
-}
-
-void CloudWindow::runSync() {
-    QString src, dst, local, remote, remoteDir;
-    if (!syncEndpoints(&src, &dst, &local, &remote, &remoteDir) || !m_previewValid) {
-        return;
-    }
-    const bool upload = m_syncDirection->currentIndex() == 0;
-    const bool mirror = m_syncMode->currentIndex() == 1;
-    const bool twoWay = m_syncMode->currentIndex() == 2;
-    const QString key = src + QLatin1Char('|') + dst + QLatin1Char('|') + QString::number(mirror) + QString::number(twoWay);
-    if (key != m_previewKey) {
-        invalidatePreview();
-        return;
-    }
-    if (twoWay) {
-        const CloudSyncPreview tp = m_lastPreview;
-        const QString q = tr("Two-way synchronisation\n\n• %1 file(s) uploaded\n• %2 file(s) downloaded\n• %3 conflict(s): the cloud "
-                             "version is saved next to the local one as “… (cloud copy …)”; nothing is overwritten or deleted.\n\nContinue?")
-                              .arg(tp.added.size()).arg(tp.removed.size()).arg(tp.changed.size());
-        if (GlMessageBox::question(this, tr("Confirm two-way sync"), q, QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
-            return;
-        }
-        m_planKind = QStringLiteral("sync");
-        m_planRemote = remote;
-        if (begin(m_cloud->planTwoWay(local, CloudManager::remotePath(remote, remoteDir), tp.changed))) {
-            invalidatePreview();
-        }
-        return;
-    }
-    const CloudSyncPreview p = m_lastPreview;
-    const QString trash = CloudManager::newTrashDir(upload ? remote : QString());
-    const int replaced = p.changed.size();
-    const int removed = mirror ? p.removed.size() : 0;
-    QString question = mirror
-                           ? tr("Mirror will make the destination identical to the source.\n\n• %1 file(s) added\n• %2 file(s) "
-                                "replaced\n• %3 file(s) removed from the destination")
-                                 .arg(p.added.size())
-                                 .arg(replaced)
-                                 .arg(removed)
-                           : tr("Copy %1 new and %2 changed file(s) to the destination.").arg(p.added.size()).arg(replaced);
-    if (replaced > 0 || removed > 0) {
-        question += tr("\n\nReplaced and removed files are first moved to:\n%1\n(they are not deleted).").arg(trash);
-    }
-    question += tr("\n\nContinue?");
-    if (GlMessageBox::question(this, mirror ? tr("Confirm mirror") : tr("Confirm copy"), question, QMessageBox::Yes | QMessageBox::No,
-                               QMessageBox::No) != QMessageBox::Yes) {
-        return;
-    }
-    m_planKind = QStringLiteral("sync");
-    const CloudPlan plan = mirror ? m_cloud->planMirror(src, dst, trash, removed + replaced + 5)
-                                  : m_cloud->planCopyFolder(tr("Copying to %1").arg(upload ? remote : tr("this PC")), src, dst, trash);
-    if (begin(plan)) {
-        invalidatePreview();
-    }
-}
-
-void CloudWindow::verifySync() {
-    QString src, dst, local, remote, remoteDir;
-    if (!syncEndpoints(&src, &dst, &local, &remote, &remoteDir)) {
-        setSyncReport(tr("Choose an account and a folder on this PC first."));
-        return;
-    }
-    setSyncReport(tr("Verifying…"));
-    m_cloud->verify(src, dst, [this](const CloudSyncPreview& p) {
-        if (!p.ok) {
-            setSyncReport(p.error);
-            return;
-        }
-        if (p.added.isEmpty() && p.changed.isEmpty() && p.removed.isEmpty() && p.problems == 0) {
-            setSyncReport(tr("Verified: both folders match (%1 file(s)).").arg(p.unchanged));
-            return;
-        }
-        QString text = tr("Differences found: %1 missing at the destination, %2 different, %3 only at the destination, %4 "
-                          "could not be checked; %5 match.")
-                           .arg(p.added.size())
-                           .arg(p.changed.size())
-                           .arg(p.removed.size())
-                           .arg(p.problems)
-                           .arg(p.unchanged);
-        for (const QString& f : p.added.mid(0, 50)) {
-            text += tr("\n    missing: %1").arg(f);
-        }
-        for (const QString& f : p.changed.mid(0, 50)) {
-            text += tr("\n    different: %1").arg(f);
-        }
-        setSyncReport(text);
-    });
-}
-
-// ------------------------------------------------------------------ backup
-
-void CloudWindow::backupLibrary() {
-    const QString remote = m_backupRemote->currentData().toString();
-    if (remote.isEmpty()) {
-        showBanner(tr("Connect an account first."), false);
-        return;
-    }
-    CloudPlan plan;
-    QString error;
-    if (!m_cloud->planBackupLibrary(remote, LibraryDatabase::defaultLibraryPath(), &plan, &error)) {
-        showBanner(error, true);
-        return;
-    }
-    m_planRemote = remote;
-    m_planKind = QStringLiteral("backup");
-    if (!begin(plan) && plan.cleanup) {
-        plan.cleanup();
-    }
-}
-
-void CloudWindow::backupFolder() {
-    const QString remote = m_backupRemote->currentData().toString();
-    if (remote.isEmpty()) {
-        showBanner(tr("Connect an account first."), false);
-        return;
-    }
-    const QString dir = QFileDialog::getExistingDirectory(this, tr("Folder to back up"));
-    if (dir.isEmpty()) {
-        return;
-    }
-    m_planKind = QStringLiteral("backup");
-    begin(m_cloud->planBackupFolder(remote, dir));
-}
-
-void CloudWindow::refreshBackups() {
-    const QString remote = m_backupRemote->currentData().toString();
-    clearRows(m_backupModel);
-    m_backupEntries.clear();
-    if (remote.isEmpty()) {
-        return;
-    }
-    m_cloud->list(remote, CloudManager::backupFolderName() + QStringLiteral("/Library"),
-                  [this](bool ok, const QList<CloudEntry>& entries, const QString& error, bool reconnectNeeded) {
-                      clearRows(m_backupModel);
-                      m_backupEntries.clear();
-                      if (!ok) {
-                          // A missing backup folder just means no backup yet.
-                          if (!error.contains(tr("no longer exists"))) {
-                              showBanner(error, true, reconnectNeeded ? m_backupRemote->currentData().toString() : QString());
-                          }
-                          return;
-                      }
-                      QList<CloudEntry> sorted;
-                      for (const CloudEntry& e : entries) {
-                          if (!e.isFolder && e.name.endsWith(QStringLiteral(".mtv"), Qt::CaseInsensitive)) {
-                              sorted << e;
-                          }
-                      }
-                      std::sort(sorted.begin(), sorted.end(), [](const CloudEntry& a, const CloudEntry& b) { return a.name > b.name; });
-                      m_backupEntries = sorted;
-                      for (const CloudEntry& e : sorted) {
-                          m_backupModel->appendRow(new QStandardItem(tr("%1  —  %2").arg(e.name, sizeText(e.size))));
-                      }
-                  });
-}
-
-void CloudWindow::restoreBackup() {
-    const QString remote = m_backupRemote->currentData().toString();
-    const int row = m_backups->currentRow();
-    if (remote.isEmpty() || row < 0 || row >= m_backupEntries.size()) {
-        showBanner(tr("Select a backup to restore first."), false);
-        return;
-    }
-    const QString dir = QFileDialog::getExistingDirectory(
-        this, tr("Save the restored library in"), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
-    if (dir.isEmpty()) {
-        return;
-    }
-    m_planKind = QStringLiteral("restore");
-    begin(m_cloud->planRestore(remote, m_backupEntries.at(row), dir, &m_restoreSavedAs));
-}
-
 // ------------------------------------------------------------------ transfers
 
 void CloudWindow::setBusy(bool busy) {
@@ -1669,7 +1010,7 @@ void CloudWindow::setBusy(bool busy) {
     const bool idle = !busy && !signingIn;
     const bool haveAccount = !m_remotes.isEmpty();
     for (auto it = m_connectButtons.begin(); it != m_connectButtons.end(); ++it) {
-        it.value()->setEnabled(!signingIn);
+        it.value()->setEnabled(!signingIn && !haveAccount);
     }
     m_testAccount->setEnabled(haveAccount && !signingIn);
     m_reconnectAccount->setEnabled(haveAccount && !signingIn);
@@ -1683,18 +1024,8 @@ void CloudWindow::setBusy(bool busy) {
         m_prevPage->setEnabled(false);
         m_nextPage->setEnabled(false);
     }
-    m_newFolder->setEnabled(haveAccount && !busy);
     m_download->setEnabled(haveAccount && !busy);
-    m_uploadFiles->setEnabled(haveAccount && !busy);
-    m_uploadFolder->setEnabled(haveAccount && !busy);
     m_addToPlaylist->setEnabled(haveAccount && !busy);
-    m_syncPreview->setEnabled(haveAccount && !busy);
-    m_syncRun->setEnabled(haveAccount && !busy && m_previewValid);
-    m_syncVerify->setEnabled(haveAccount && !busy);
-    m_backupLibraryButton->setEnabled(haveAccount && !busy);
-    m_backupFolderButton->setEnabled(haveAccount && !busy);
-    m_restoreButton->setEnabled(haveAccount && !busy);
-    m_backupRefresh->setEnabled(haveAccount);
 }
 
 void CloudWindow::onTransferProgress(const RcloneProgress& p, int stepIndex, int stepCount, const QString& label) {
@@ -1738,9 +1069,6 @@ void CloudWindow::onTransferFinished(const CloudOutcome& o) {
         summary = tr("Cancelled. Files already transferred were kept; unfinished files were not left behind.");
     } else if (o.ok) {
         summary = tr("Finished: %1").arg(o.title);
-        if (m_planKind == QLatin1String("restore") && !m_restoreSavedAs.isEmpty()) {
-            summary = tr("Restored copy saved as %1. Your current library was not changed.").arg(QDir::toNativeSeparators(m_restoreSavedAs));
-        }
     } else {
         summary = o.errors.join(QLatin1Char('\n'));
     }
@@ -1757,12 +1085,6 @@ void CloudWindow::onTransferFinished(const CloudOutcome& o) {
         if (!o.paths.isEmpty()) {
             emit filesReady(o.paths);
         }
-    }
-    if (m_planKind == QLatin1String("upload") || m_planKind == QLatin1String("sync")) {
-        reloadListing();
-    }
-    if (m_planKind == QLatin1String("backup")) {
-        refreshBackups();
     }
     m_planKind.clear();
     m_planRemote.clear();

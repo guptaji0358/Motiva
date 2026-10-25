@@ -92,6 +92,7 @@ private:
     QByteArray m_errBuf;
     QByteArray m_out;
     QStringList m_messages;
+    QStringList m_otherStderr; // untimestamped stderr (usage errors etc.), used only if nothing better was seen
     bool m_cancelled = false;
     bool m_timedOut = false;
     bool m_done = false;

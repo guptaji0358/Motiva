@@ -4,3 +4,4 @@ deployment/
 CLAUDE.md
 release/
 third_party/rclone/rclone.exe
+third_party/rclone/motiva-cloud.ini

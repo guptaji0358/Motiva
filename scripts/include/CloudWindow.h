@@ -8,9 +8,10 @@
 class QStandardItemModel;
 
 // "Cloud Storage": connect Google Drive / OneDrive / Dropbox accounts (through
-// rclone), browse them, download, upload, synchronise, back up and restore.
+// rclone), browse them (READ ONLY) and download pictures and videos. Nothing is ever uploaded,
+// changed or deleted in the cloud, and only picture / video files are listed.
 // A GlWindow like the other utility windows: GL-drawn items on one canvas,
-// four pages (Accounts / Browse / Sync / Backup & Restore) and a transfer
+// two pages (Accounts / Browse) and a transfer
 // panel that stays visible at the bottom.
 //
 // Opened from a playlist, the Browse page also offers "Add to playlist": the
@@ -32,7 +33,7 @@ signals:
     void filesReady(const QStringList& localPaths);
 
 private:
-    enum Page { AccountsPage, BrowsePage, SyncPage, BackupPage, PageCount };
+    enum Page { AccountsPage, BrowsePage, PageCount };
 
     struct ProviderRow {
         QString id;
@@ -46,8 +47,6 @@ private:
     void buildHeader();
     void buildAccountsPage();
     void buildBrowsePage();
-    void buildSyncPage();
-    void buildBackupPage();
     void buildTransferPanel();
 
     GlButton* makeButton(Page page, const QString& text, GlButton::Kind kind = GlButton::Kind::Secondary);
@@ -58,8 +57,6 @@ private:
     void updateVisibility();
     void layoutAccounts(const QRectF& area);
     void layoutBrowse(const QRectF& area);
-    void layoutSync(const QRectF& area);
-    void layoutBackup(const QRectF& area);
     void layoutTransfer(const QRectF& area, bool showLog);
 
     void refreshTool();
@@ -85,28 +82,9 @@ private:
     void toggleRow(int row);
     void setAllChecked(bool on);
     void goUp();
-    void makeFolder();
     void downloadSelected();
-    void uploadFiles();
-    void uploadFolder();
-    void uploadPaths(const QStringList& paths);
     void addToPlaylist();
     QList<CloudEntry> selectedEntries() const;
-
-    // sync
-    void previewSync();
-    void runSync();
-    void verifySync();
-    bool syncEndpoints(QString* src, QString* dst, QString* localDir, QString* remote, QString* remoteDir) const;
-    void invalidatePreview();
-    void setSyncReport(const QString& text);
-    void updateModeHint();
-
-    // backup
-    void backupLibrary();
-    void backupFolder();
-    void refreshBackups();
-    void restoreBackup();
 
     // transfers
     bool begin(const CloudPlan& plan);
@@ -136,7 +114,6 @@ private:
     QHash<QString, GlButton*> m_connectButtons;
     QHash<QString, GlLabel*> m_providerHints;
     GlLabel* m_accountsIntro = nullptr;
-    GlToggle* m_readOnly = nullptr;
     GlButton* m_cancelConnect = nullptr;
     GlLabel* m_connectStatus = nullptr;
     GlItemView* m_accounts = nullptr;
@@ -154,14 +131,11 @@ private:
     GlDropdown* m_browseRemote = nullptr;
     GlButton* m_up = nullptr;
     GlButton* m_refresh = nullptr;
-    GlButton* m_newFolder = nullptr;
     GlTextInput* m_search = nullptr;
     GlLabel* m_pathLabel = nullptr;
     GlItemView* m_list = nullptr;
     QStandardItemModel* m_listModel = nullptr;
     GlButton* m_download = nullptr;
-    GlButton* m_uploadFiles = nullptr;
-    GlButton* m_uploadFolder = nullptr;
     GlButton* m_addToPlaylist = nullptr;
     GlButton* m_selectAll = nullptr;
     GlButton* m_clearSelection = nullptr;
@@ -174,42 +148,6 @@ private:
     int m_listGeneration = 0;
     bool m_haveTarget = false;
 
-    // sync
-    GlLabel* m_syncIntro = nullptr;
-    GlLabel* m_syncRemoteLabel = nullptr;
-    GlLabel* m_syncRemoteDirLabel = nullptr;
-    GlLabel* m_syncLocalLabel = nullptr;
-    GlLabel* m_syncDirectionLabel = nullptr;
-    GlLabel* m_syncModeLabel = nullptr;
-    GlLabel* m_syncModeHint = nullptr;
-    GlDropdown* m_syncRemote = nullptr;
-    GlTextInput* m_syncRemoteDir = nullptr;
-    GlTextInput* m_syncLocal = nullptr;
-    GlButton* m_syncPick = nullptr;
-    GlDropdown* m_syncDirection = nullptr;
-    GlDropdown* m_syncMode = nullptr;
-    GlButton* m_syncPreview = nullptr;
-    GlButton* m_syncRun = nullptr;
-    GlButton* m_syncVerify = nullptr;
-    GlLabel* m_syncSummary = nullptr;
-    GlItemView* m_syncReport = nullptr;
-    QStandardItemModel* m_syncModel = nullptr;
-    bool m_previewValid = false;
-    CloudSyncPreview m_lastPreview;
-    QString m_previewKey;
-
-    // backup
-    GlLabel* m_backupIntro = nullptr;
-    GlLabel* m_backupListLabel = nullptr;
-    GlDropdown* m_backupRemote = nullptr;
-    GlItemView* m_backups = nullptr;
-    QStandardItemModel* m_backupModel = nullptr;
-    QList<CloudEntry> m_backupEntries;
-    GlButton* m_backupLibraryButton = nullptr;
-    GlButton* m_backupFolderButton = nullptr;
-    GlButton* m_backupRefresh = nullptr;
-    GlButton* m_restoreButton = nullptr;
-
     // transfer panel
     GlPanel* m_xferPanel = nullptr;
     GlLabel* m_xferTitle = nullptr;
@@ -220,7 +158,6 @@ private:
     QStandardItemModel* m_logModel = nullptr;
 
     bool m_addAfterDownload = false;
-    QString m_restoreSavedAs;
     QString m_planRemote;
     QString m_planKind;
 };

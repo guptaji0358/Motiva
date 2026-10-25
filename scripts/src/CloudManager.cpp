@@ -1,9 +1,10 @@
 #include "CloudManager.h"
 
+#include "VideoPlayer.h"
+
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
-#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -14,10 +15,6 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QVersionNumber>
-#include <QSqlDatabase>
-#include <QSqlError>
-#include <QSqlQuery>
-#include <QUuid>
 
 #include <windows.h>
 #include <wincrypt.h>
@@ -27,7 +24,6 @@ namespace {
 constexpr int kMinMajor = 1, kMinMinor = 65;
 constexpr int kListTimeoutMs = 90 * 1000;
 constexpr int kSignInTimeoutMs = 5 * 60 * 1000;
-constexpr int kPreviewTimeoutMs = 15 * 60 * 1000;
 constexpr int kTransferIdleMs = 3 * 60 * 1000;
 
 QByteArray dpapiProtect(const QByteArray& plain) {
@@ -92,10 +88,6 @@ QString filterLiteral(const QString& name) {
 QString parentOf(const QString& path) {
     const int i = path.lastIndexOf(QLatin1Char('/'));
     return i < 0 ? QString() : path.left(i);
-}
-
-QString timestamp() {
-    return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
 }
 
 QDateTime parseRcloneTime(const QString& text) {
@@ -177,10 +169,6 @@ QString CloudManager::cacheRoot() {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/cloud-cache");
 }
 
-QString CloudManager::localTrashRoot() {
-    return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/cloud-trash");
-}
-
 QString CloudManager::configPath() {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/rclone/rclone.conf");
 }
@@ -201,26 +189,15 @@ QString CloudManager::cachePathFor(const QString& remote, const CloudEntry& entr
     return QStringLiteral("%1/%2/%3/%4").arg(cacheRoot(), sanitizedFileName(remote), key, sanitizedFileName(entry.name));
 }
 
+// The only files Motiva will list or fetch from the cloud: pictures and videos
+// (GIF counts as a picture). Everything else is left where it is, unseen.
+bool CloudManager::isAllowedMediaName(const QString& fileName) {
+    return VideoPlayer::hasStaticImageExtension(fileName) || VideoPlayer::hasVideoExtension(fileName) ||
+           fileName.endsWith(QLatin1String(".gif"), Qt::CaseInsensitive);
+}
+
 QString CloudManager::remotePath(const QString& remote, const QString& path) {
     return remote + QLatin1Char(':') + path;
-}
-
-QString CloudManager::uniqueLocalName(const QString& dir, const QString& name) {
-    const QFileInfo fi(name);
-    const QString base = fi.completeBaseName().isEmpty() ? name : fi.completeBaseName();
-    const QString ext = fi.suffix().isEmpty() ? QString() : QLatin1Char('.') + fi.suffix();
-    QString candidate = name;
-    for (int i = 2; QFileInfo::exists(QDir(dir).filePath(candidate)); ++i) {
-        candidate = QStringLiteral("%1 (%2)%3").arg(base).arg(i).arg(ext);
-    }
-    return candidate;
-}
-
-QString CloudManager::newTrashDir(const QString& remote) {
-    if (remote.isEmpty()) {
-        return QDir::toNativeSeparators(localTrashRoot() + QLatin1Char('/') + timestamp());
-    }
-    return remotePath(remote, syncTrashFolderName() + QLatin1Char('/') + timestamp());
 }
 
 // ------------------------------------------------------------------ the tool
@@ -279,8 +256,7 @@ void CloudManager::checkTool(ToolCallback done) {
     info.path = m_rcloneOverride.isEmpty() ? locateRclone(&bundled) : m_rcloneOverride;
     info.bundled = bundled;
     if (info.path.isEmpty()) {
-        info.error = tr("The cloud transfer tool (rclone) was not found. Reinstall Motiva, or put rclone.exe in the 'rclone' "
-                        "folder next to Motiva's program files.");
+        info.error = tr("The cloud component was not found. Reinstall Motiva.");
         m_tool = info;
         QTimer::singleShot(0, this, [this, done] { done(m_tool); });
         return;
@@ -294,15 +270,12 @@ void CloudManager::checkTool(ToolCallback done) {
         static const QRegularExpression re(QStringLiteral(R"(rclone v?(\d+\.\d+\.\d+))"));
         const QRegularExpressionMatch m = re.match(QString::fromUtf8(r.out));
         if (!r.ok() || !m.hasMatch()) {
-            m_tool.error = tr("rclone could not be started (%1).").arg(QDir::toNativeSeparators(m_tool.path));
+            m_tool.error = tr("The cloud component could not be started.");
         } else {
             m_tool.version = m.captured(1);
             const QVersionNumber v = QVersionNumber::fromString(m_tool.version);
             if (QVersionNumber::compare(v, QVersionNumber(kMinMajor, kMinMinor)) < 0) {
-                m_tool.error = tr("rclone %1 is too old; Motiva needs %2.%3 or newer.")
-                                   .arg(m_tool.version)
-                                   .arg(kMinMajor)
-                                   .arg(kMinMinor);
+                m_tool.error = tr("The cloud component is out of date; reinstall Motiva.");
             } else {
                 m_tool.found = true;
             }
@@ -564,7 +537,7 @@ void CloudManager::listRemotes(RemotesCallback done) {
     });
 }
 
-bool CloudManager::connectAccount(const QString& providerId, const QString& name, bool readOnly) {
+bool CloudManager::connectAccount(const QString& providerId, const QString& name) {
     if (m_connectActive) {
         return false;
     }
@@ -575,7 +548,7 @@ bool CloudManager::connectAccount(const QString& providerId, const QString& name
     m_connectActive = true;
     m_connectCancelled = false;
     emit connectStatus(tr("Preparing…"));
-    ensureReady([this, info, name, readOnly](bool ok, const QString& error) {
+    ensureReady([this, info, name](bool ok, const QString& error) {
         if (m_connectCancelled) {
             m_connectActive = false;
             emit connectFinished(name, false, tr("Cancelled."));
@@ -595,8 +568,13 @@ bool CloudManager::connectAccount(const QString& providerId, const QString& name
                 args << QStringLiteral("client_secret=%1").arg(secret);
             }
         }
-        if (readOnly && info.id == QLatin1String("gdrive")) {
+        // Motiva only ever reads: ask the service for read-only access where it lets the
+        // client choose. (Dropbox fixes its permissions in the app registration instead -
+        // register the app with read scopes only; see docs/CLOUD_STORAGE.md.)
+        if (info.id == QLatin1String("gdrive")) {
             args << QStringLiteral("scope=drive.readonly");
+        } else if (info.id == QLatin1String("onedrive")) {
+            args << QStringLiteral("access_scopes=Files.Read Files.Read.All Sites.Read.All offline_access");
         }
         args << QStringLiteral("--non-interactive");
         emit connectStatus(tr("Opening your browser - sign in there, then return to Motiva…"));
@@ -663,8 +641,19 @@ void CloudManager::configStep(const QString& name, const QByteArray& jsonOut, in
     }
     const QString state = o.value(QStringLiteral("State")).toString();
     if (state.isEmpty()) {
-        m_connectActive = false;
-        emit connectFinished(name, true, tr("Connected."));
+        // Never report success on trust: the account must really be in the config now.
+        listRemotes([this, name, createdByUs](const QList<CloudRemote>& remotes, const QString&) {
+            bool found = false;
+            for (const CloudRemote& r : remotes) {
+                found = found || r.name == name;
+            }
+            if (!found) {
+                failConnect(name, tr("Sign-in did not finish, so the account was not saved. Please try again."), createdByUs);
+                return;
+            }
+            m_connectActive = false;
+            emit connectFinished(name, true, tr("Connected."));
+        });
         return;
     }
     if (iteration >= 12) {
@@ -764,25 +753,12 @@ void CloudManager::list(const QString& remote, const QString& path, ListCallback
                 e.size = e.isFolder ? 0 : qint64(o.value(QStringLiteral("Size")).toDouble());
                 e.mime = o.value(QStringLiteral("MimeType")).toString();
                 e.modified = parseRcloneTime(o.value(QStringLiteral("ModTime")).toString());
+                if (!e.isFolder && !isAllowedMediaName(e.name)) {
+                    continue; // only pictures and videos are ever shown
+                }
                 entries << e;
             }
             done(true, entries, QString(), false);
-        });
-        job->start();
-    });
-}
-
-void CloudManager::makeFolder(const QString& remote, const QString& path, std::function<void(bool, const QString&)> done) {
-    ensureReady([this, remote, path, done](bool ok, const QString& error) {
-        if (!ok) {
-            done(false, error);
-            return;
-        }
-        auto* job = makeJob({QStringLiteral("mkdir"), remotePath(remote, path)});
-        job->setTimeouts(kListTimeoutMs, 0);
-        connect(job, &RcloneJob::finished, this, [job, done](const RcloneResult& r) {
-            job->deleteLater();
-            done(r.ok(), r.userMessage());
         });
         job->start();
     });
@@ -792,8 +768,10 @@ void CloudManager::makeFolder(const QString& remote, const QString& path, std::f
 
 CloudPlan CloudManager::planCacheDownload(const QString& remote, const QList<CloudEntry>& files) const {
     CloudPlan plan;
-    plan.title = tr("Downloading %n file(s) from %1", nullptr, files.size()).arg(remote);
     for (const CloudEntry& e : files) {
+        if (e.isFolder || !isAllowedMediaName(e.name)) {
+            continue;
+        }
         const QString local = cachePathFor(remote, e);
         CloudStep s;
         s.label = e.name;
@@ -802,185 +780,29 @@ CloudPlan CloudManager::planCacheDownload(const QString& remote, const QList<Clo
         plan.steps << s;
         plan.partialDirs << QFileInfo(local).absolutePath();
     }
+    plan.title = tr("Downloading %n file(s) from %1", nullptr, int(plan.steps.size())).arg(remote);
     return plan;
 }
 
-// NOTE: `copyto` / copy-of-a-single-file ignore --immutable and --backup-dir, so a single
-// file is copied as "copy <its folder> <destination> --include /<exact name>" instead,
-// which goes through rclone's normal compare pipeline (verified by the test harness).
+// Only picture / video files are fetched, one by one (folders are never copied whole, so
+// nothing else can come along). NOTE: `copyto` / copy-of-a-single-file ignore --immutable,
+// so a file is copied as "copy <its folder> <destination> --include /<exact name>" instead,
+// which goes through rclone's normal compare pipeline.
 CloudPlan CloudManager::planDownloadTo(const QString& remote, const QList<CloudEntry>& entries, const QString& localDir) const {
     CloudPlan plan;
-    plan.title = tr("Downloading %n item(s) from %1", nullptr, entries.size()).arg(remote);
     for (const CloudEntry& e : entries) {
+        if (e.isFolder || !isAllowedMediaName(e.name)) {
+            continue;
+        }
         CloudStep s;
         s.label = e.name;
         // --immutable: an existing, different local file is reported, never replaced.
-        if (e.isFolder) {
-            s.args = {QStringLiteral("copy"), remotePath(remote, e.path),
-                      QDir::toNativeSeparators(QDir(localDir).filePath(e.name)), QStringLiteral("--immutable")};
-        } else {
-            s.args = {QStringLiteral("copy"), remotePath(remote, parentOf(e.path)), QDir::toNativeSeparators(localDir),
-                      QStringLiteral("--include"), QStringLiteral("/") + filterLiteral(e.name), QStringLiteral("--max-depth"),
-                      QStringLiteral("1"), QStringLiteral("--immutable")};
-        }
+        s.args = {QStringLiteral("copy"), remotePath(remote, parentOf(e.path)), QDir::toNativeSeparators(localDir),
+                  QStringLiteral("--include"), QStringLiteral("/") + filterLiteral(e.name), QStringLiteral("--max-depth"),
+                  QStringLiteral("1"), QStringLiteral("--immutable")};
         plan.steps << s;
     }
-    plan.partialDirs << localDir;
-    return plan;
-}
-
-CloudPlan CloudManager::planUpload(const QString& remote, const QString& remoteDir, const QStringList& localPaths, bool overwrite) const {
-    CloudPlan plan;
-    plan.title = tr("Uploading %n item(s) to %1", nullptr, localPaths.size()).arg(remote);
-    const QString trash = overwrite ? newTrashDir(remote) : QString();
-    for (const QString& p : localPaths) {
-        const QFileInfo fi(p);
-        CloudStep s;
-        s.label = fi.fileName();
-        if (fi.isDir()) {
-            s.args = {QStringLiteral("copy"), QDir::toNativeSeparators(p), remotePath(remote, joinPath(remoteDir, fi.fileName()))};
-        } else {
-            s.args = {QStringLiteral("copy"), QDir::toNativeSeparators(fi.absolutePath()), remotePath(remote, remoteDir),
-                      QStringLiteral("--include"), QStringLiteral("/") + filterLiteral(fi.fileName()), QStringLiteral("--max-depth"),
-                      QStringLiteral("1")};
-        }
-        if (overwrite) {
-            s.args << QStringLiteral("--backup-dir") << trash; // replaced remote files are moved aside, not lost
-        } else {
-            s.args << QStringLiteral("--immutable");           // never replace a different remote file
-        }
-        plan.steps << s;
-    }
-    return plan;
-}
-
-CloudPlan CloudManager::planCopyFolder(const QString& title, const QString& src, const QString& dst, const QString& trashDir) const {
-    CloudPlan plan;
-    plan.title = title;
-    CloudStep s;
-    s.label = title;
-    s.args = {QStringLiteral("copy"), src, dst, QStringLiteral("--backup-dir"), trashDir};
-    plan.steps << s;
-    return plan;
-}
-
-CloudPlan CloudManager::planTwoWay(const QString& localDir, const QString& remoteSpec, const QStringList& conflicts) const {
-    CloudPlan plan;
-    plan.title = tr("Two-way synchronising");
-    const QString local = QDir::toNativeSeparators(localDir);
-    CloudStep up;
-    up.label = tr("Add new files to the cloud");
-    up.args = {QStringLiteral("copy"), local, remoteSpec, QStringLiteral("--ignore-existing")};
-    CloudStep down;
-    down.label = tr("Add new files to this PC");
-    down.args = {QStringLiteral("copy"), remoteSpec, local, QStringLiteral("--ignore-existing")};
-    plan.steps << up << down;
-    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HHmmss"));
-    for (const QString& rel : conflicts) {
-        const QFileInfo fi(rel);
-        const QString base = fi.completeBaseName();
-        const QString ext = fi.suffix().isEmpty() ? QString() : QStringLiteral(".") + fi.suffix();
-        QString relDir = fi.path() == QLatin1String(".") ? QString() : fi.path();
-        CloudStep c;
-        c.label = tr("Keep both versions of %1").arg(rel);
-        const QString target = QDir(localDir).filePath(joinPath(relDir, base + QStringLiteral(" (cloud copy ") + stamp + QStringLiteral(")") + ext));
-        c.args = {QStringLiteral("copyto"), remoteSpec + (remoteSpec.endsWith(QLatin1Char(':')) ? QString() : QStringLiteral("/")) + rel,
-                  QDir::toNativeSeparators(target), QStringLiteral("--immutable")};
-        plan.steps << c;
-    }
-    plan.partialDirs << localDir;
-    return plan;
-}
-
-CloudPlan CloudManager::planMirror(const QString& src, const QString& dst, const QString& trashDir, int maxDelete) const {
-    CloudPlan plan;
-    plan.title = tr("Synchronising");
-    CloudStep s;
-    s.label = tr("Mirror %1 to %2").arg(src, dst);
-    s.args = {QStringLiteral("sync"), src, dst, QStringLiteral("--backup-dir"), trashDir, QStringLiteral("--max-delete"),
-              QString::number(qMax(0, maxDelete))};
-    plan.steps << s;
-    return plan;
-}
-
-bool CloudManager::planBackupLibrary(const QString& remote, const QString& libraryFile, CloudPlan* plan, QString* error) const {
-    if (!QFileInfo(libraryFile).isFile()) {
-        if (error) {
-            *error = tr("The Motiva library file was not found.");
-        }
-        return false;
-    }
-    const QString tmpDir = QDir::temp().filePath(QStringLiteral("motiva-cloud-") + QUuid::createUuid().toString(QUuid::Id128).left(8));
-    if (!QDir().mkpath(tmpDir)) {
-        if (error) {
-            *error = tr("Couldn't create a temporary folder for the backup.");
-        }
-        return false;
-    }
-    const QString name = QStringLiteral("MotivaLibrary-%1.mtv").arg(timestamp());
-    const QString snapshot = QDir(tmpDir).filePath(name);
-    {
-        // A consistent copy even while Motiva has the library open.
-        const QString conn = QStringLiteral("motiva_cloud_snapshot_") + QUuid::createUuid().toString(QUuid::Id128);
-        bool ok = false;
-        QString why;
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
-            db.setDatabaseName(libraryFile);
-            db.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
-            if (db.open()) {
-                QSqlQuery q(db);
-                QString target = QDir::toNativeSeparators(snapshot);
-                target.replace(QLatin1Char('\''), QStringLiteral("''"));
-                ok = q.exec(QStringLiteral("VACUUM INTO '%1'").arg(target));
-                if (!ok) {
-                    why = q.lastError().text();
-                }
-            } else {
-                why = db.lastError().text();
-            }
-        }
-        QSqlDatabase::removeDatabase(conn);
-        if (!ok) {
-            QFile::remove(snapshot);
-            QDir().rmdir(tmpDir);
-            if (error) {
-                *error = tr("Couldn't snapshot the library: %1").arg(why);
-            }
-            return false;
-        }
-    }
-    plan->title = tr("Backing up the Motiva library to %1").arg(remote);
-    CloudStep s;
-    s.label = name;
-    s.args = {QStringLiteral("copyto"), QDir::toNativeSeparators(snapshot),
-              remotePath(remote, backupFolderName() + QStringLiteral("/Library/") + name), QStringLiteral("--immutable")};
-    plan->steps = {s};
-    plan->cleanup = [snapshot, tmpDir] {
-        QFile::remove(snapshot);
-        QDir().rmdir(tmpDir);
-    };
-    return true;
-}
-
-CloudPlan CloudManager::planBackupFolder(const QString& remote, const QString& localDir) const {
-    const QString leaf = QFileInfo(localDir).fileName().isEmpty() ? QStringLiteral("Folder") : QFileInfo(localDir).fileName();
-    return planCopyFolder(tr("Backing up %1 to %2").arg(leaf, remote), QDir::toNativeSeparators(localDir),
-                          remotePath(remote, backupFolderName() + QStringLiteral("/Files/") + leaf), newTrashDir(remote));
-}
-
-CloudPlan CloudManager::planRestore(const QString& remote, const CloudEntry& backup, const QString& localDir, QString* savedAs) const {
-    const QString name = uniqueLocalName(localDir, sanitizedFileName(backup.name));
-    if (savedAs) {
-        *savedAs = QDir(localDir).filePath(name);
-    }
-    CloudPlan plan;
-    plan.title = tr("Restoring %1").arg(backup.name);
-    CloudStep s;
-    s.label = backup.name;
-    s.args = {QStringLiteral("copyto"), remotePath(remote, backup.path), QDir::toNativeSeparators(QDir(localDir).filePath(name)),
-              QStringLiteral("--immutable")};
-    plan.steps << s;
+    plan.title = tr("Downloading %n file(s) from %1", nullptr, int(plan.steps.size())).arg(remote);
     plan.partialDirs << localDir;
     return plan;
 }
@@ -1089,90 +911,4 @@ void CloudManager::finishPlan() {
     m_planActive = false;
     const CloudOutcome out = m_outcome;
     emit transferFinished(out);
-}
-
-// ------------------------------------------------------------------ previews
-
-void CloudManager::previewTransfer(bool mirror, const QString& src, const QString& dst, PreviewCallback done) {
-    ensureReady([this, mirror, src, dst, done](bool ok, const QString& error) {
-        if (!ok) {
-            CloudSyncPreview p;
-            p.error = error;
-            done(p);
-            return;
-        }
-        auto* job = makeJob({mirror ? QStringLiteral("sync") : QStringLiteral("copy"), src, dst, QStringLiteral("--dry-run"),
-                             QStringLiteral("--combined"), QStringLiteral("-")});
-        job->setTimeouts(kPreviewTimeoutMs, 0);
-        connect(job, &RcloneJob::finished, this, [job, done](const RcloneResult& r) {
-            job->deleteLater();
-            CloudSyncPreview p;
-            if (!r.ok()) {
-                p.error = r.userMessage();
-                done(p);
-                return;
-            }
-            const QStringList lines = QString::fromUtf8(r.out).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-            for (QString line : lines) {
-                line = line.trimmed();
-                if (line.size() < 3 || line.at(1) != QLatin1Char(' ')) {
-                    continue;
-                }
-                const QString path = line.mid(2);
-                switch (line.at(0).unicode()) {
-                case '+': p.added << path; break;
-                case '*': p.changed << path; break;
-                case '-': p.removed << path; break;
-                case '=': ++p.unchanged; break;
-                case '!': ++p.problems; break;
-                default: break;
-                }
-            }
-            p.ok = true;
-            done(p);
-        });
-        job->start();
-    });
-}
-
-void CloudManager::verify(const QString& src, const QString& dst, PreviewCallback done) {
-    ensureReady([this, src, dst, done](bool ok, const QString& error) {
-        if (!ok) {
-            CloudSyncPreview p;
-            p.error = error;
-            done(p);
-            return;
-        }
-        auto* job = makeJob({QStringLiteral("check"), src, dst, QStringLiteral("--combined"), QStringLiteral("-")});
-        job->setTimeouts(kPreviewTimeoutMs, 0);
-        connect(job, &RcloneJob::finished, this, [job, done](const RcloneResult& r) {
-            job->deleteLater();
-            CloudSyncPreview p;
-            // `check` exits non-zero when it finds differences; that is a valid answer.
-            if (r.out.trimmed().isEmpty() && !r.ok()) {
-                p.error = r.userMessage();
-                done(p);
-                return;
-            }
-            const QStringList lines = QString::fromUtf8(r.out).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-            for (QString line : lines) {
-                line = line.trimmed();
-                if (line.size() < 3 || line.at(1) != QLatin1Char(' ')) {
-                    continue;
-                }
-                const QString path = line.mid(2);
-                switch (line.at(0).unicode()) {
-                case '+': p.added << path; break;   // only on the source: missing at the destination (checked with rclone 1.75.2)
-                case '-': p.removed << path; break; // only at the destination
-                case '*': p.changed << path; break;
-                case '=': ++p.unchanged; break;
-                case '!': ++p.problems; break;
-                default: break;
-                }
-            }
-            p.ok = true;
-            done(p);
-        });
-        job->start();
-    });
 }
