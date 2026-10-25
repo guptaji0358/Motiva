@@ -112,7 +112,35 @@ async function sendChunk(uploadId, seq, bytes) {
 
 // Step 1 of the fallback chain: the browser downloads the file and streams it
 // to Motiva. Returns { uploadId, mime, name } or throws.
-async function uploadViaBrowser(src) {
+// Pictures Motiva can decode as-is. Anything else the browser can show (AVIF,
+// HEIC, JXL, SVG, or a missing/odd content type) is re-encoded as WebP here,
+// because many sites serve those and Motiva's image plugins do not read them.
+const NATIVE_IMAGE = /^image\/(jpeg|jpg|png|webp|bmp|gif|tiff)$/;
+
+async function uploadConvertedImage(resp, src) {
+  const bitmap = await createImageBitmap(await resp.blob());
+  try {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const out = await canvas.convertToBlob({ type: 'image/webp', quality: 0.95 });
+    const bytes = new Uint8Array(await out.arrayBuffer());
+    const uploadId = newUploadId();
+    try {
+      for (let seq = 0, off = 0; off < bytes.length; seq++, off += CHUNK_BYTES) {
+        await sendChunk(uploadId, seq, bytes.subarray(off, off + CHUNK_BYTES));
+      }
+    } catch (e) {
+      call({ type: 'abort', uploadId }).catch(() => {});
+      throw e;
+    }
+    const base = nameFromUrl(src).replace(/\.[^.]*$/, '') || 'web-image';
+    return { uploadId, mime: 'image/webp', name: base + '.webp' };
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function uploadViaBrowser(src, kind) {
   const resp = await fetch(src, { credentials: 'include', cache: 'force-cache' });
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const mime = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
@@ -121,6 +149,9 @@ async function uploadViaBrowser(src) {
   }
   const length = Number(resp.headers.get('content-length') || 0);
   if (length > MAX_BYTES) throw new Error('File is larger than 2 GB');
+  if (!mime.startsWith('video/') && !NATIVE_IMAGE.test(mime) && (kind === 'image' || mime.startsWith('image/'))) {
+    return uploadConvertedImage(resp, src);
+  }
 
   const uploadId = newUploadId();
   const reader = resp.body.getReader();
@@ -191,7 +222,7 @@ async function sendMedia({ action, playlistId, src, pageUrl, kind, tabId, frameI
       upload = await uploadViaPage(tabId, frameId || 0, src);
     } else if (/^https?:/i.test(src)) {
       try {
-        upload = await uploadViaBrowser(src);
+        upload = await uploadViaBrowser(src, kind);
       } catch (e) {
         console.warn('Browser fetch failed, asking Motiva to download instead:', e);
       }
