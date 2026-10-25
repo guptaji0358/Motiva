@@ -105,7 +105,8 @@ function nameFromUrl(url) {
 }
 
 async function sendChunk(uploadId, seq, bytes) {
-  const reply = await call({ type: 'chunk', uploadId, seq, data: bytesToBase64(bytes) });
+  // Generous timeout: when Motiva has to be started, its first answer comes after its (slow) cold start.
+  const reply = await call({ type: 'chunk', uploadId, seq, data: bytesToBase64(bytes) }, 180000);
   if (!reply.ok) throw new Error(reply.error || 'Motiva rejected the data');
 }
 
@@ -179,6 +180,11 @@ async function uploadViaPage(tabId, frameId, src) {
 async function sendMedia({ action, playlistId, src, pageUrl, kind, tabId, frameId }) {
   const labels = { wallpaper: 'Set as wallpaper', playlist: 'Add to playlist', cache: 'Save to cache' };
   toast(tabId, 'Motiva: sending… (' + labels[action] + ')');
+  call({ type: 'ping' }, 5000)
+    .then((r) => {
+      if (r && r.ok && !r.appRunning) toast(tabId, 'Motiva is starting - the first request can take a minute…');
+    })
+    .catch(() => {});
   try {
     let upload = null;
     if (/^(blob|data):/i.test(src)) {

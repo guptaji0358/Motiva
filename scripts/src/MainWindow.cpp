@@ -290,8 +290,11 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     m_explorerMenuSyncTimer->setInterval(250);
     connect(m_explorerMenuSyncTimer, &QTimer::timeout, this, [this] { syncExplorerPlaylistMenu(); });
 
+    qInfo() << "[Startup] stage: buildUi begin";
     buildUi();
+    qInfo() << "[Startup] stage: buildUi done, buildTray begin";
     buildTray();
+    qInfo() << "[Startup] stage: buildTray done";
 
     // Unified notifications: toasts inside this window, Windows
     // notifications through the tray icon. Preferences are read live from
@@ -350,7 +353,9 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     m_webCache = new WebMediaCache(this);
     WebMediaCache::sweepIncomplete();
     connect(&m_ipc, &InstanceIpc::browserRequestReceived, this, [this](quintptr host, const QString& json) {
-        runAfterStartup([this, host, json] { onBrowserRequest(host, json); });
+        // Not held until startup finishes: chunk/abort/playlist/fetch only touch
+        // files and the library; only the final wallpaper/playlist action waits.
+        onBrowserRequest(host, json);
     });
 
     // Whenever the playlist's current image changes (any rotation trigger,
@@ -761,12 +766,15 @@ void MainWindow::buildUi() {
     m_primaryButton->setText(tr("Set as Wallpaper"));
     connect(m_primaryButton, &GlButton::clicked, this, &MainWindow::onPrimaryButtonClicked);
 
+    qInfo() << "[Startup] stage: PlaylistDialog begin";
     m_playlistDialog = new PlaylistDialog(m_library, this);
+    qInfo() << "[Startup] stage: PlaylistDialog done";
     m_playlistDialog->setBackupManager(m_backup);
     m_playlistDialog->setSettings(&m_settings);
     connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
 
     m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, m_backup, this);
+    qInfo() << "[Startup] stage: SettingsDialog done";
     connect(m_settingsDialog, &SettingsDialog::mutedChanged, this, [this](bool muted) {
         if (m_trayMuteAction) {
             m_trayMuteAction->blockSignals(true);
@@ -1855,10 +1863,10 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
         }
         const QString fileName = QFileInfo(path).fileName();
         if (action == QLatin1String("wallpaper")) {
-            handleExplorerRequestedFile(path);
+            runAfterStartup([this, path] { handleExplorerRequestedFile(path); });
             reply(true, tr("Motiva: \"%1\" set as wallpaper").arg(fileName));
         } else if (action == QLatin1String("playlist")) {
-            onAddToPlaylistReceived(playlistId, path);
+            runAfterStartup([this, playlistId, path] { onAddToPlaylistReceived(playlistId, path); });
             reply(true, tr("Motiva: \"%1\" sent to your playlist").arg(fileName));
         } else {
             reply(true, tr("Motiva: \"%1\" saved to the cache").arg(fileName));
