@@ -2,6 +2,32 @@
 
 Guidance for Claude Code (or any future agent) working in this repo.
 
+## Current status (2026-10-25, browser extension: web media -> cache -> wallpaper/playlist)
+
+`extension/` is a Manifest V3 extension (Chrome/Edge/Brave; fixed ID via the `key` in manifest.json,
+same ID is in `BrowserIntegration::kExtensionId` and the host's origin check). Right-click an image/video
+-> Motiva > Set as wallpaper / Add to playlist > <playlists> / New playlist / Save to cache, plus a hover
+button (content.js, shadow DOM, toggle in the popup). Transport = Native Messaging:
+`scripts/browser/MotivaBrowserHost.exe` (Qt-free relay, built by CMake, shipped beside Motiva.exe) forwards
+each JSON request as WM_COPYDATA command 5 to the running Motiva's `InstanceIpc` window and relays replies
+(command 6, sent to the host window passed in WPARAM) back; it starts Motiva (`--autostart`) when a request
+needs it, but NOT for `playlists`/`abort` (browser startup must not launch the app). `ping` is answered by
+the host. The host finds fields with a naive `"key":"` scan, so the extension must send compact JSON.
+`MainWindow::onBrowserRequest` handles playlists / chunk / abort / media; web files go through
+`WebMediaCache` (`<AppLocalData>/web-cache/<hash>/<name>`): the extension first fetches in the browser
+(cookies work) and streams base64 chunks, falling back to Motiva downloading the URL itself (Referer =
+page). blob:/data: go through the content script. Validation: http(s) only, no text/HLS, 2 GB cap,
+image must be decodable. Cached files are never auto-pruned (a playlist may use them); the Cleanup
+"DOWNLOADED MEDIA" row (formerly cloud downloads) deletes web-cache + cloud-cache. Settings >
+Integration > "Browser extension" registers the host (`BrowserIntegration`: manifest under
+AppLocalData/browser + HKCU NativeMessagingHosts for Chrome/Edge/Brave; installer uninstall removes the
+keys; Deploy.ps1 ships the host and `extension/`). The toggle's refresh must use QSignalBlocker.
+Verified: build; host protocol and the app end to end with a Python stand-in for Chrome (ping, not-running
+playlists, URL download, chunked upload, HTML rejection, playlist list); JS syntax. NOT verified: loading
+the extension in a real browser, the registry/manifest discovery by Chrome, the hover button/menus,
+wallpaper and playlist actions through the bridge, HLS/DRM/streaming sources (unsupported), sites that
+block hotlinking by Referer when the browser fetch fails.
+
 ## Current status (2026-10-24b, rclone.exe branded)
 
 `scripts/tools/brand_rclone_exe.py` replaces rclone.exe's icon (RT_ICON/GROUP_ICON) and version

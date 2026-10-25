@@ -13,6 +13,10 @@ constexpr DWORD kSetBackgroundCommand = 2;
 // Payload: "<playlist id>\n<path>" (UTF-16, no terminator). 3 was the
 // earlier path-only "Add to Motiva playlist" command, retired with it.
 constexpr DWORD kAddToPlaylistCommand = 4;
+// Browser extension bridge: request from MotivaBrowserHost.exe / reply to it.
+// Keep in sync with scripts/browser/MotivaBrowserHost.cpp.
+constexpr DWORD kBrowserRequestCommand = 5;
+constexpr DWORD kBrowserReplyCommand = 6;
 ATOM g_classAtom = 0;
 
 // The running instance creates its IPC window as the first step of
@@ -128,6 +132,21 @@ bool InstanceIpc::sendAddToPlaylistRequest(qint64 playlistId, const QString& pat
     return true;
 }
 
+bool InstanceIpc::sendBrowserReply(quintptr hostWindow, const QString& json) {
+    HWND target = reinterpret_cast<HWND>(hostWindow);
+    if (!target || !IsWindow(target)) {
+        return false;
+    }
+    const std::wstring payloadW = json.toStdWString();
+    COPYDATASTRUCT cds{};
+    cds.dwData = kBrowserReplyCommand;
+    cds.cbData = static_cast<DWORD>(payloadW.size() * sizeof(wchar_t));
+    cds.lpData = const_cast<wchar_t*>(payloadW.c_str());
+    DWORD_PTR result = 0;
+    return SendMessageTimeoutW(target, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds),
+                               SMTO_ABORTIFHUNG, 5000, &result) != 0;
+}
+
 LRESULT CALLBACK InstanceIpc::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_NCCREATE) {
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
@@ -168,6 +187,12 @@ LRESULT CALLBACK InstanceIpc::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             } else {
                 qWarning() << "[IPC] Ignoring a malformed Add-to-playlist request.";
             }
+        } else if (cds && cds->dwData == kBrowserRequestCommand && cds->lpData && cds->cbData > 0) {
+            const QString json = QString::fromWCharArray(
+                reinterpret_cast<const wchar_t*>(cds->lpData), static_cast<int>(cds->cbData / sizeof(wchar_t)));
+            QMetaObject::invokeMethod(self, "browserRequestReceived", Qt::QueuedConnection,
+                                      Q_ARG(quintptr, reinterpret_cast<quintptr>(reinterpret_cast<HWND>(wParam))),
+                                      Q_ARG(QString, json));
         }
         return TRUE;
     }

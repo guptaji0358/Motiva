@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Motiva - Wallpaper from the web",
+  "short_name": "Motiva",
+  "version": "1.0.0",
+  "description": "Send images and videos from any web page to the Motiva desktop app: set as wallpaper, add to a playlist, or keep in Motiva's cache.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzGsTrNfXB60+6d+1fhFEwb/mRpOf9Dg7UW8PP91x60W7IN2uobUgLKUltOj0Cky21ToivF/AMLEnNvJCSx7VSyqc2uTHXl1wgf2Npiz+vTFiXkY6w6GOQkjAMegSJVhZZuxS+XVRycGPizmAZcaYIXeSzhaFuY+B1l/JKsRYGzyl3h1V473w0Tat39DFGaOB+YINCDCn7DM+PzE0Kpi/gCta7SL7j4l3tDFstbqZhmQIh+niJ7HX5CbP6QSjcrmISa4Us98jfi7c5WUd40ZWZ3rSycaN+NkodKRx6nHLX9FLE4n7QxaloLDyAuIBipsBokQyKKKsXCn2MM0wh3I5KwIDAQAB",
+  "minimum_chrome_version": "110",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Motiva",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["contextMenus", "nativeMessaging", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

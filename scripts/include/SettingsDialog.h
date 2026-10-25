@@ -175,6 +175,7 @@ private:
     GlToggle* m_playVideosOnBatteryCheck = nullptr;
     GlToggle* m_showInWindowsSearchCheck = nullptr;
     GlToggle* m_explorerIntegrationCheck = nullptr;
+    GlToggle* m_browserExtensionCheck = nullptr;
     // Single "Theme" selector (Dark Aurora / Light Aurora / Dark Onyx /
     // Light Onyx). Index order matches Theme::AppTheme's ordinal order exactly.
     GlDropdown* m_themeCombo = nullptr;

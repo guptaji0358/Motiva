@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motiva</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1b1b22; --muted:#6a6a78; --line:#e2e2ea; --ok:#1f9d63; --bad:#d64545; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1b22; --fg:#f1f1f6; --muted:#9a9aab; --line:#33333f; --ok:#4cd08e; --bad:#ff7070; } }
+  body { margin:0; width:300px; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.45 system-ui,"Segoe UI",sans-serif; }
+  h1 { margin:0 0 10px; font-size:15px; display:flex; align-items:center; gap:8px; }
+  h1 img { width:20px; height:20px; }
+  .row { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--line); }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex:none; }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+  .muted { color:var(--muted); font-size:12px; }
+  label { display:flex; gap:8px; align-items:center; cursor:pointer; }
+</style>
+</head>
+<body>
+  <h1><img src="icons/icon32.png" alt="">Motiva</h1>
+  <div class="row"><span class="dot" id="dot"></span><div><div id="state">Checking…</div><div class="muted" id="detail"></div></div></div>
+  <div class="row"><label><input type="checkbox" id="overlay"> Show the Motiva button over images and videos</label></div>
+  <div class="muted">Right-click any image or video &rarr; Motiva.</div>
+  <script src="popup.js"></script>
+</body>
+</html>

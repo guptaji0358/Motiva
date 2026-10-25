@@ -49,6 +49,12 @@ public:
     // for that window instead of dropping the file.
     static bool sendAddToPlaylistRequest(qint64 playlistId, const QString& path);
 
+    // Browser extension bridge (MotivaBrowserHost.exe): the host sends one
+    // UTF-16 JSON request per WM_COPYDATA with its own window as WPARAM;
+    // replies (possibly much later, e.g. after a download) go back to that
+    // window with sendBrowserReply(). Returns false if the host is gone.
+    static bool sendBrowserReply(quintptr hostWindow, const QString& json);
+
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 signals:
@@ -63,6 +69,9 @@ signals:
     // Emitted (queued) for a file handed off via "Add to playlist" - see
     // sendAddToPlaylistRequest() for playlistId.
     void addToPlaylistReceived(qint64 playlistId, const QString& path);
+
+    // Emitted (queued) for a request relayed from the browser extension.
+    void browserRequestReceived(quintptr hostWindow, const QString& json);
 
 private:
     HWND m_hwnd = nullptr;

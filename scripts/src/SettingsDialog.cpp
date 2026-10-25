@@ -10,6 +10,11 @@
 #include "CleanupWindow.h"
 #include "BackupManager.h"
 #include "BackupWindow.h"
+#include "BrowserIntegration.h"
+#include "GlPopups.h"
+#include <QDesktopServices>
+#include <QSignalBlocker>
+#include <QUrl>
 
 #include <QFormLayout>
 #include <QVBoxLayout>
@@ -239,6 +244,32 @@ void SettingsDialog::buildUi() {
            "in File Explorer, with \"Set as background\" and \"Add to playlist\" (videos and images). On "
            "Windows 11 this may appear under \"Show more options\"."));
     connect(m_explorerIntegrationCheck, &GlToggle::toggled, this, &SettingsDialog::onExplorerIntegrationToggled);
+    m_browserExtensionCheck = addToggle(
+        PgIntegration, tr("Browser extension (Chrome, Edge, Brave)"),
+        tr("Lets the Motiva browser extension send web pictures and videos to Motiva: set as wallpaper, add to a "
+           "playlist, or keep in Motiva's cache. Web files are saved in Motiva's cache and played from there."));
+    connect(m_browserExtensionCheck, &GlToggle::toggled, this, [this](bool on) {
+        QString error;
+        if (!m_settings->setBrowserExtensionEnabled(on, &error)) {
+            GlMessageBox::warning(this, tr("Browser extension"),
+                                  tr("The browser extension could not be turned on:\n%1").arg(error));
+            QSignalBlocker block(m_browserExtensionCheck);
+            m_browserExtensionCheck->setChecked(false);
+        }
+    });
+    auto* extensionFolderButton = addButtonRow(
+        PgIntegration,
+        makeDesc(tr("In your browser open the extensions page, turn on Developer mode, choose \"Load unpacked\" "
+                    "and select this folder.")),
+        tr("Open Extension Folder"));
+    connect(extensionFolderButton, &GlButton::clicked, this, [this] {
+        const QString dir = BrowserIntegration::extensionFolder();
+        if (dir.isEmpty()) {
+            GlMessageBox::warning(this, tr("Browser extension"), tr("The extension folder was not found next to Motiva."));
+            return;
+        }
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
 
     // Optional local media backup: the ON/OFF switch (OFF by default) and a
     // one-line status; details, progress and storage live in BackupWindow.
@@ -466,6 +497,11 @@ void SettingsDialog::restoreFromSettings() {
     m_manager->setPlayVideosOnBattery(m_settings->playVideosOnBattery());
     m_showInWindowsSearchCheck->setChecked(m_settings->showInWindowsSearch());
     m_explorerIntegrationCheck->setChecked(m_settings->explorerIntegrationEnabled());
+    {
+        // Reflecting the stored value must not re-run the register/unregister handler.
+        QSignalBlocker block(m_browserExtensionCheck);
+        m_browserExtensionCheck->setChecked(m_settings->browserExtensionEnabled());
+    }
     const bool notifyValues[7] = {m_settings->notifyInApp(),      m_settings->notifyDesktop(),
                                   m_settings->notifySuccess(),    m_settings->notifyError(),
                                   m_settings->notifyWarning(),    m_settings->notifyBackground(),

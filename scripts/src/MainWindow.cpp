@@ -50,6 +50,11 @@
 #include <QProcess>
 #include <QInputDialog>
 #include <QtConcurrent/QtConcurrentRun>
+#include "WebMediaCache.h"
+#include "BrowserIntegration.h"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
@@ -341,6 +346,12 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     connect(&m_ipc, &InstanceIpc::addToPlaylistReceived, this, [this](qint64 id, const QString& path) {
         runAfterStartup([this, id, path] { onAddToPlaylistReceived(id, path); });
     });
+    // Browser extension requests (web pictures/videos -> cache -> wallpaper/playlist).
+    m_webCache = new WebMediaCache(this);
+    WebMediaCache::sweepIncomplete();
+    connect(&m_ipc, &InstanceIpc::browserRequestReceived, this, [this](quintptr host, const QString& json) {
+        runAfterStartup([this, host, json] { onBrowserRequest(host, json); });
+    });
 
     // Whenever the playlist's current image changes (any rotation trigger,
     // Show now, removal of the current image) or the playlist is switched
@@ -590,6 +601,13 @@ void MainWindow::completeStartup() {
     // toggle the setting off and on again.
     if (m_settings.showInWindowsSearch()) {
         WindowsShellIntegration::CreateStartMenuShortcut(SettingsManager::motivaExecutablePath());
+    }
+    if (m_settings.browserExtensionEnabled()) {
+        // Keeps the host manifest/registry pointing at the current install path.
+        QString error;
+        if (!BrowserIntegration::registerHost(&error)) {
+            qWarning() << "[Browser] Could not refresh the extension helper registration:" << error;
+        }
     }
     if (m_settings.explorerIntegrationEnabled()) {
         // Same registration the Settings toggle performs (also replaces the
@@ -1754,6 +1772,98 @@ void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& path)
     // in this playlist is reported as such and not added twice.
     m_playlistDialog->addFilesTo(playlistId, files);
     openPlaylist();
+}
+
+void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
+    QJsonParseError parseError;
+    const QJsonObject req = QJsonDocument::fromJson(json.toUtf8(), &parseError).object();
+    const qint64 id = static_cast<qint64>(req.value(QStringLiteral("id")).toDouble());
+    const QString type = req.value(QStringLiteral("type")).toString();
+
+    const auto reply = [hostWindow, id](bool ok, const QString& message = QString(), QJsonObject extra = QJsonObject()) {
+        extra[QStringLiteral("id")] = static_cast<double>(id);
+        extra[QStringLiteral("ok")] = ok;
+        if (!message.isEmpty()) {
+            extra[ok ? QStringLiteral("message") : QStringLiteral("error")] = message;
+        }
+        InstanceIpc::sendBrowserReply(hostWindow, QString::fromUtf8(QJsonDocument(extra).toJson(QJsonDocument::Compact)));
+    };
+
+    if (parseError.error != QJsonParseError::NoError || id <= 0) {
+        qWarning() << "[Browser] Ignoring a malformed request.";
+        return; // no valid id to answer
+    }
+    if (!m_settings.browserExtensionEnabled()) {
+        reply(false, tr("The browser extension is turned off in Motiva > Settings > Integration."));
+        return;
+    }
+
+    if (type == QLatin1String("playlists")) {
+        QJsonArray list;
+        const PlaylistListModel* model = m_library->listModel();
+        for (int row = 0; row < model->rowCount(); ++row) {
+            const QModelIndex index = model->index(row);
+            const auto t = static_cast<PlaylistType>(index.data(PlaylistListModel::TypeRole).toInt());
+            list.append(QJsonObject{
+                {QStringLiteral("id"), static_cast<double>(index.data(PlaylistListModel::IdRole).toLongLong())},
+                {QStringLiteral("name"), index.data(Qt::DisplayRole).toString()},
+                {QStringLiteral("type"), t == PlaylistType::Mixed   ? QStringLiteral("mixed")
+                                         : t == PlaylistType::Video ? QStringLiteral("video")
+                                                                    : QStringLiteral("image")},
+            });
+        }
+        reply(true, QString(), QJsonObject{{QStringLiteral("playlists"), list}});
+        return;
+    }
+    if (type == QLatin1String("chunk")) {
+        const QByteArray bytes = QByteArray::fromBase64(req.value(QStringLiteral("data")).toString().toLatin1());
+        const QString error = m_webCache->appendChunk(req.value(QStringLiteral("uploadId")).toString(),
+                                                       req.value(QStringLiteral("seq")).toInt(-1), bytes);
+        reply(error.isEmpty(), error);
+        return;
+    }
+    if (type == QLatin1String("abort")) {
+        m_webCache->abortUpload(req.value(QStringLiteral("uploadId")).toString());
+        reply(true);
+        return;
+    }
+    if (type != QLatin1String("media")) {
+        reply(false, tr("Unknown request."));
+        return;
+    }
+
+    const QString action = req.value(QStringLiteral("action")).toString();
+    if (action != QLatin1String("wallpaper") && action != QLatin1String("playlist") && action != QLatin1String("cache")) {
+        reply(false, tr("Unknown action."));
+        return;
+    }
+    const qint64 playlistId = static_cast<qint64>(req.value(QStringLiteral("playlistId")).toDouble());
+    WebMediaCache::Request request;
+    request.url = req.value(QStringLiteral("url")).toString();
+    request.pageUrl = req.value(QStringLiteral("pageUrl")).toString();
+    request.uploadId = req.value(QStringLiteral("uploadId")).toString();
+    request.name = req.value(QStringLiteral("name")).toString();
+    request.mime = req.value(QStringLiteral("mime")).toString();
+    qInfo() << "[Browser]" << action << "request for"
+            << (request.url.isEmpty() ? QStringLiteral("(uploaded data)") : request.url);
+
+    m_webCache->fetch(request, [this, reply, action, playlistId](const QString& path, const QString& error) {
+        if (!error.isEmpty()) {
+            qWarning() << "[Browser] Could not cache the web file:" << error;
+            reply(false, error);
+            return;
+        }
+        const QString fileName = QFileInfo(path).fileName();
+        if (action == QLatin1String("wallpaper")) {
+            handleExplorerRequestedFile(path);
+            reply(true, tr("Motiva: \"%1\" set as wallpaper").arg(fileName));
+        } else if (action == QLatin1String("playlist")) {
+            onAddToPlaylistReceived(playlistId, path);
+            reply(true, tr("Motiva: \"%1\" sent to your playlist").arg(fileName));
+        } else {
+            reply(true, tr("Motiva: \"%1\" saved to the cache").arg(fileName));
+        }
+    });
 }
 
 void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video, const QString& suggestedName) {

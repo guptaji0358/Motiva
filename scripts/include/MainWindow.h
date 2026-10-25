@@ -30,6 +30,7 @@ class PlaylistRotation;
 class PlaylistDialog;
 class CleanupManager;
 class BackupManager;
+class WebMediaCache;
 class ThemeTransitionOverlay;
 class QDragEnterEvent;
 class QDragMoveEvent;
@@ -145,6 +146,12 @@ private slots:
     // adds `path` to the playlist with exactly this id, or - for 0 - asks
     // for a name and creates a new playlist of the file's type first.
     void onAddToPlaylistReceived(qint64 playlistId, const QString& path);
+    // A request relayed from the browser extension (InstanceIpc /
+    // MotivaBrowserHost.exe): playlist list, upload chunks, or a media action
+    // (wallpaper / add to playlist / cache) on a web picture or video. Web
+    // files are first stored by WebMediaCache; everything then uses the cached
+    // local file. Replies go back to `hostWindow` as JSON with the request id.
+    void onBrowserRequest(quintptr hostWindow, const QString& json);
     void openPlaylist();
     // "Set as Wallpaper" from PlaylistDialog: makes `playlistId` the active
     // playlist, makes its current item the current media, and runs the
@@ -251,6 +258,7 @@ private:
     SettingsManager m_settings;
     RecoveryState m_recoveryState;
     InstanceIpc m_ipc;
+    WebMediaCache* m_webCache = nullptr;
     bool m_startMinimized = false;
     QString m_initialExplorerFile;
     qint64 m_initialPlaylistId = 0;

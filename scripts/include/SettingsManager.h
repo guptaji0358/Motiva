@@ -59,6 +59,12 @@ public:
     bool explorerIntegrationEnabled() const;
     void setExplorerIntegrationEnabled(bool enabled);
 
+    // Browser extension bridge (BrowserIntegration): registers Motiva's
+    // Native Messaging host for Chrome/Edge/Brave. OFF by default. Enabling
+    // returns false (reason in *error) if the helper exe is missing.
+    bool browserExtensionEnabled() const;
+    bool setBrowserExtensionEnabled(bool enabled, QString* error = nullptr);
+
     // Optional local backup of media (BackupManager). OFF by default: until
     // the user turns it on, Motiva never copies, scans or uploads media.
     bool backupEnabled() const;

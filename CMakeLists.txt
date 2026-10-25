@@ -66,7 +66,10 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/RecoveryState.h
     scripts/include/StartupDiagnostics.h
     scripts/src/InstanceIpc.cpp
+    scripts/src/BrowserIntegration.cpp
+    scripts/src/WebMediaCache.cpp
     scripts/include/InstanceIpc.h
+    scripts/include/WebMediaCache.h
     scripts/src/WindowsShellIntegration.cpp
     scripts/src/LibraryDatabase.cpp
     scripts/include/LibraryDatabase.h
@@ -161,6 +164,15 @@ if(MINGW)
 endif()
 set_target_properties(MotivaShell PROPERTIES PREFIX "")
 add_dependencies(Motiva MotivaShell)
+
+# --- Browser extension helper (Chrome/Edge/Brave Native Messaging host). Qt-free
+# relay between the browser and the running Motiva window; ships beside Motiva.exe.
+add_executable(MotivaBrowserHost scripts/browser/MotivaBrowserHost.cpp)
+target_link_libraries(MotivaBrowserHost PRIVATE user32)
+if(MINGW)
+    target_link_options(MotivaBrowserHost PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
+add_dependencies(Motiva MotivaBrowserHost)
 
 # --- rclone (MIT) powers cloud storage. Dev runs find it in <build>/rclone/;
 # deploy/Deploy.ps1 ships it (with its licence) in resources/bin/rclone/.

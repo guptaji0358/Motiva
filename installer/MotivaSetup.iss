@@ -835,6 +835,10 @@ end;
 procedure CleanMotivaShellRegistration;
 var Names: TArrayOfString; I: Integer; Base: String;
 begin
+  { Browser extension native-messaging host (Chrome, Edge, Brave) }
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Google\Chrome\NativeMessagingHosts\com.motiva.browser');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Edge\NativeMessagingHosts\com.motiva.browser');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.motiva.browser');
   Base := 'Software\Classes\SystemFileAssociations';
   if RegGetSubkeyNames(HKCU, Base, Names) then
     for I := 0 to GetArrayLength(Names) - 1 do

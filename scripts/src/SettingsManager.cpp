@@ -1,4 +1,5 @@
 #include "SettingsManager.h"
+#include "BrowserIntegration.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include "WindowsShellIntegration.h"
@@ -285,6 +286,23 @@ void SettingsManager::setExplorerIntegrationEnabled(bool enabled) {
     WindowsShellIntegration::RegisterExplorerMenu(motivaExecutablePath(), videos, images, backgroundOnly);
 }
 
+bool SettingsManager::browserExtensionEnabled() const {
+    return m_settings.value("app/browserExtensionEnabled", false).toBool();
+}
+bool SettingsManager::setBrowserExtensionEnabled(bool enabled, QString* error) {
+    if (!enabled) {
+        m_settings.setValue("app/browserExtensionEnabled", false);
+        BrowserIntegration::unregisterHost();
+        return true;
+    }
+    if (!BrowserIntegration::registerHost(error)) {
+        m_settings.setValue("app/browserExtensionEnabled", false);
+        return false;
+    }
+    m_settings.setValue("app/browserExtensionEnabled", true);
+    return true;
+}
+
 Theme::AppTheme SettingsManager::theme() const {
     if (m_settings.contains("app/theme")) {
         return Theme::themeFromSettingsKey(m_settings.value("app/theme").toString(), Theme::AppTheme::DarkAurora);
@@ -382,7 +400,7 @@ void SettingsManager::setLastWindowsSessionStamp(qint64 stamp) {
 }
 
 bool SettingsManager::hasWindowsIntegration() const {
-    return startWithWindows() || showInWindowsSearch() || explorerIntegrationEnabled();
+    return startWithWindows() || showInWindowsSearch() || explorerIntegrationEnabled() || browserExtensionEnabled();
 }
 
 void SettingsManager::disableWindowsIntegration() {
@@ -392,6 +410,7 @@ void SettingsManager::disableWindowsIntegration() {
     setStartWithWindows(false);
     setShowInWindowsSearch(false);
     setExplorerIntegrationEnabled(false);
+    setBrowserExtensionEnabled(false);
 }
 
 void SettingsManager::clearDataReferences() {
@@ -406,7 +425,7 @@ void SettingsManager::resetPreferences() {
     for (const char* key : {"video/volume", "video/muted", "video/loop", "video/scalingMode",
                             "display/monitorSelection", "display/specificMonitorIndex", "app/startWithWindows",
                             "app/showVideoOnBattery", "app/playVideosOnBattery", "app/playImagesOnBattery",
-                            "app/showInWindowsSearch", "app/explorerIntegrationEnabled",
+                            "app/showInWindowsSearch", "app/explorerIntegrationEnabled", "app/browserExtensionEnabled",
                             "app/theme", "app/uiStyle", "app/appearance", "notifications/inApp",
                             "notifications/desktop", "notifications/success", "notifications/error",
                             "notifications/warning", "notifications/background", "notifications/playback",

@@ -1,6 +1,7 @@
 #include "CleanupManager.h"
 #include "BackupManager.h"
 #include "CloudManager.h"
+#include "WebMediaCache.h"
 #include <QDirIterator>
 #include "LibraryDatabase.h"
 #include "LocalBackupProvider.h"
@@ -91,18 +92,28 @@ QString CleanupManager::cloudCacheDirectory() {
     return QDir::cleanPath(CloudManager::cacheRoot());
 }
 
-// Exact files currently inside the cloud cache (enumerated, never a tree delete).
+// Pictures/videos saved from the browser extension live in their own cache
+// (WebMediaCache); the Cleanup "downloads" row covers it together with the
+// cloud cache.
+static QString webCacheDirectory() {
+    return QDir::cleanPath(WebMediaCache::cacheRoot());
+}
+
+// Exact files currently inside the cloud and web caches (enumerated, never a tree delete).
 QStringList CleanupManager::cloudCacheFiles() {
     QStringList files;
-    QDirIterator it(cloudCacheDirectory(), QDir::Files | QDir::Hidden | QDir::NoSymLinks, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        files << it.next();
+    for (const QString& root : {cloudCacheDirectory(), webCacheDirectory()}) {
+        QDirIterator it(root, QDir::Files | QDir::Hidden | QDir::NoSymLinks, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            files << it.next();
+        }
     }
     return files;
 }
 
 QStringList CleanupManager::approvedRoots() {
-    QStringList roots{libraryDirectory(), QFileInfo(RecoveryState::stateFilePath()).absolutePath(), cloudCacheDirectory()};
+    QStringList roots{libraryDirectory(), QFileInfo(RecoveryState::stateFilePath()).absolutePath(), cloudCacheDirectory(),
+                      webCacheDirectory()};
     const QString legacy = legacyDirectory();
     if (!legacy.isEmpty()) {
         roots << legacy;
@@ -187,9 +198,11 @@ void CleanupManager::removeEmptyOwnedDir(const QString& dir) {
     }
     const QString clean = QDir::cleanPath(QFileInfo(dir).absoluteFilePath());
     bool ok = false;
-    const QString cloudRoot = cloudCacheDirectory();
-    if (clean.compare(cloudRoot, Qt::CaseInsensitive) == 0 || clean.startsWith(cloudRoot + QLatin1Char('/'), Qt::CaseInsensitive)) {
-        ok = true;
+    for (const QString& cacheRoot : {cloudCacheDirectory(), webCacheDirectory()}) {
+        if (clean.compare(cacheRoot, Qt::CaseInsensitive) == 0 ||
+            clean.startsWith(cacheRoot + QLatin1Char('/'), Qt::CaseInsensitive)) {
+            ok = true;
+        }
     }
     for (const QString& a : std::as_const(allowed)) {
         ok = ok || clean.compare(QDir::cleanPath(a), Qt::CaseInsensitive) == 0;
@@ -361,16 +374,19 @@ QVector<CleanupManager::Step> CleanupManager::buildSteps(Operation op) {
         steps.push_back({tr("Deleting downloaded cloud files"), true, [] { return removeOwnedFiles(cloudCacheFiles()); }});
         steps.push_back({tr("Removing empty cloud folders"), true, [] {
                              QStringList dirs;
-                             QDirIterator it(cloudCacheDirectory(), QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
-                                             QDirIterator::Subdirectories);
-                             while (it.hasNext()) {
-                                 dirs << it.next();
+                             for (const QString& root : {cloudCacheDirectory(), webCacheDirectory()}) {
+                                 QDirIterator it(root, QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+                                                 QDirIterator::Subdirectories);
+                                 while (it.hasNext()) {
+                                     dirs << it.next();
+                                 }
                              }
                              std::sort(dirs.begin(), dirs.end(), [](const QString& a, const QString& b) { return a.size() > b.size(); });
                              for (const QString& d : std::as_const(dirs)) {
                                  removeEmptyOwnedDir(d);
                              }
                              removeEmptyOwnedDir(cloudCacheDirectory());
+                             removeEmptyOwnedDir(webCacheDirectory());
                              return QString();
                          }});
         break;

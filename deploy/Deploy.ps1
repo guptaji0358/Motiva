@@ -94,6 +94,18 @@ if (Test-Path $shellDll) {
     Copy-Item $shellDll (Join-Path $binDir "MotivaShell.dll") -Force
 }
 
+# --- Browser extension: the Native Messaging helper and the unpacked extension ---
+$hostExe = Join-Path $BuildDir "MotivaBrowserHost.exe"
+if (Test-Path $hostExe) {
+    Copy-Item $hostExe (Join-Path $binDir "MotivaBrowserHost.exe") -Force
+}
+$extSrc = Join-Path $PSScriptRoot "..\extension"
+if (Test-Path (Join-Path $extSrc "manifest.json")) {
+    $extDst = Join-Path $binDir "extension"
+    New-Item -ItemType Directory -Force -Path $extDst | Out-Null
+    Copy-Item (Join-Path $extSrc "*") $extDst -Recurse -Force
+}
+
 # --- rclone (MIT): the cloud-storage engine. Its licence must travel with it. ---
 $rcloneSrc = Join-Path $PSScriptRoot "..\third_party\rclone"
 $rcloneDst = Join-Path $binDir "rclone"
