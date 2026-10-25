@@ -12,9 +12,11 @@
 #include "FlowDialog.h"
 #include "GlUi.h"
 #include "DialogSizing.h"
+#include "GlWindow.h"
 #include "Theme.h"
 #include "SettingsManager.h"
 #include "VideoPlayer.h"
+#include "WallpaperEnhancePrompt.h"
 
 #include <QAbstractProxyModel>
 #include <QDragMoveEvent>
@@ -24,6 +26,11 @@
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
+#include <QPlainTextEdit>
+#include <QDesktopServices>
+#include <QSet>
+#include <QUrl>
 #include <QCollator>
 #include <QDirIterator>
 #include <QImageReader>
@@ -591,6 +598,7 @@ void PlaylistDialog::applyThemedIcons() {
                                                               {m_newMixedButton, ":/playlist/new-mixed.svg"},
                                                               {m_addButton, ":/playlist/add-media.svg"},
                                                               {m_flowButton, ":/playlist/flow.svg"},
+                                                              {m_chatGptButton, ":/playlist/chatgpt.svg"},
                                                               {m_addFolderButton, ":/playlist/add-folder.svg"}};
     for (const auto& [b, path] : headerIcons) {
         if (b) {
@@ -954,6 +962,10 @@ void PlaylistDialog::buildUi() {
                               tr("Wallpaper Flow (F5): see and edit the order in which this playlist changes the "
                                  "wallpaper, as a diagram"),
                               [this] { openFlow(); });
+    m_chatGptButton = makeButton(GlButton::Kind::Icon, QString(), tr("ChatGPT enhance prompt"),
+                                 tr("ChatGPT: show a ready-made prompt that upscales and repairs a picture. Copy it, "
+                                    "attach your picture in ChatGPT and send."),
+                                 [this] { showEnhancePrompt(); });
     m_addFolderButton = makeButton(GlButton::Kind::Secondary, tr("Add Folder…"), tr("Add Folder"),
                                    tr("Add every supported file in a folder and its subfolders (Ctrl+Shift+O)"),
                                    [this] { onAddFolder(); });
@@ -1102,7 +1114,8 @@ void PlaylistDialog::layoutGl(const QSizeF& size) {
     m_importButton->setRect(QRectF(rightEdge - 2 * iconW - gap, ty, iconW, th));
     m_flowButton->setRect(QRectF(rightEdge - 3 * iconW - 2 * gap, ty, iconW, th));
     m_flowButton->setVisible(pl != nullptr);
-    const qreal avail = (rightEdge - 3 * iconW - 2 * gap) - 14 - tx;
+    m_chatGptButton->setRect(QRectF(rightEdge - 4 * iconW - 3 * gap, ty, iconW, th));
+    const qreal avail = (rightEdge - 4 * iconW - 3 * gap) - 14 - tx;
     const qreal bw4 = std::clamp((avail - 5 * gap) / 6, 80.0, 150.0);
     for (GlButton* b : {m_newImageButton, m_newVideoButton, m_newMixedButton, m_addButton, m_addFolderButton, m_cloudButton}) {
         b->setRect(QRectF(tx, ty, bw4, th));
@@ -1677,6 +1690,71 @@ void PlaylistDialog::showPlaylistMenu(const QPoint& global, int row) {
     } else if (chosen == del) {
         onDeletePlaylist();
     }
+}
+
+namespace {
+// "ChatGPT prompt" window: the ready-made enhance prompt, a copy button and a
+// shortcut to ChatGPT. Motiva never talks to ChatGPT itself.
+class EnhancePromptWindow : public GlWindow {
+public:
+    EnhancePromptWindow(const QString& prompt, QWidget* parent)
+        : GlWindow(tr("ChatGPT Prompt"), tr("Upscale and repair a wallpaper"), parent), m_prompt(prompt) {
+        GlCanvas* c = canvas();
+        auto* steps = new GlLabel(c);
+        steps->setText(tr("1. Click Copy prompt     2. Open ChatGPT and attach your picture     3. Paste and send"));
+        steps->setPointSize(10);
+        steps->setTone(GlLabel::Tone::Accent);
+        steps->setWordWrap(true);
+        steps->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        auto* heading = new GlLabel(c);
+        heading->setText(tr("Prompt"));
+        heading->setCaps(true);
+        heading->setBold(true);
+        heading->setPointSize(8.5);
+        heading->setTone(GlLabel::Tone::Dim);
+        auto* body = new GlLabel(c);
+        body->setText(prompt);
+        body->setPointSize(9.5);
+        body->setWordWrap(true);
+        body->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        m_stack.addWrapped(steps, 14);
+        m_stack.add(heading, 22, 4);
+        m_stack.addWrapped(body, 0);
+
+        m_open = new GlButton(c, GlButton::Kind::Secondary);
+        m_open->setText(tr("Open ChatGPT"));
+        connect(m_open, &GlButton::clicked, this,
+                [] { QDesktopServices::openUrl(QUrl(QStringLiteral("https://chatgpt.com/"))); });
+        m_copy = new GlButton(c, GlButton::Kind::Primary);
+        m_copy->setText(tr("Copy prompt"));
+        connect(m_copy, &GlButton::clicked, this, [this] {
+            QGuiApplication::clipboard()->setText(m_prompt);
+            m_copy->setText(tr("Copied"));
+        });
+        m_close = new GlButton(c, GlButton::Kind::Secondary);
+        m_close->setText(tr("Close"));
+        connect(m_close, &GlButton::clicked, this, &QDialog::close);
+        resize(720, 700);
+        setMinimumSize(560, 520);
+    }
+    void layoutContent(const QRectF& content, const QRectF& footer) override {
+        m_stack.layout(content.adjusted(8, 8, -8, -8));
+        layoutFooter({m_open, m_copy, m_close}, footer, 140);
+    }
+
+private:
+    QString m_prompt;
+    GlStack m_stack;
+    GlButton* m_open = nullptr;
+    GlButton* m_copy = nullptr;
+    GlButton* m_close = nullptr;
+};
+} // namespace
+
+void PlaylistDialog::showEnhancePrompt() {
+    const QString prompt = WallpaperEnhancePrompt::build(WallpaperEnhancePrompt::largestScreenSize());
+    EnhancePromptWindow dlg(prompt, this);
+    dlg.exec();
 }
 
 void PlaylistDialog::showItemMenu(const QPoint& global, int sourceRow) {

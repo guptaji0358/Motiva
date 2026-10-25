@@ -83,6 +83,8 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/PlaylistRotation.h
     scripts/src/PlaylistDialog.cpp
     scripts/include/PlaylistDialog.h
+    scripts/src/WallpaperEnhancePrompt.cpp
+    scripts/include/WallpaperEnhancePrompt.h
     scripts/src/CleanupManager.cpp
     scripts/include/CleanupManager.h
     scripts/src/CleanupWindow.cpp

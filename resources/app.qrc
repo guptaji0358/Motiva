@@ -76,6 +76,7 @@
         <file alias="playlist/new-video.svg">../Assets/playlist/new-video.svg</file>
         <file alias="playlist/new-mixed.svg">../Assets/playlist/new-mixed.svg</file>
         <file alias="playlist/add-media.svg">../Assets/playlist/add-media.svg</file>
+        <file alias="playlist/chatgpt.svg">../Assets/playlist/chatgpt.svg</file>
         <file alias="playlist/flow.svg">../Assets/playlist/flow.svg</file>
         <file alias="playlist/add-folder.svg">../Assets/playlist/add-folder.svg</file>
         <file alias="playlist/video-badge.svg">../Assets/playlist/video-badge.svg</file>

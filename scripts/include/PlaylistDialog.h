@@ -163,6 +163,7 @@ private:
     void finishInlineRename(bool commit);
     void onDeletePlaylist();
     void showPlaylistMenu(const QPoint& global, int row);
+    void showEnhancePrompt();
     void showItemMenu(const QPoint& global, int sourceRow);
     void openFlow();
     // "Find File" for a missing item (see MediaRecoveryDialog).
@@ -271,6 +272,7 @@ private:
     GlLabel* m_arrangeLabel = nullptr;
     GlDropdown* m_arrangeCombo = nullptr;
     GlButton* m_flowButton = nullptr;
+    GlButton* m_chatGptButton = nullptr;
     GlButton* m_addFolderButton = nullptr;
     GlButton* m_cloudButton = nullptr;
     CloudWindow* m_cloudWindow = nullptr;
