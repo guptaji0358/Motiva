@@ -82,7 +82,16 @@ Model tokens and tool calls are NOT measured, so no token savings are claimed. R
 cold 90.6 ms vs cached 9.3 ms (9.7x; the OS file cache makes cold times vary, 821 ms seen on a first run),
 one search result ~1.1k chars vs ~45k chars of memory files.
 
-## Not yet implemented
+## Phase 8 verification
 
-Knowledge-candidate auto-capture and unprompted generation (Claude must author and propose candidates).
-Live confirmation that SessionStart injects its output (PostToolUse is confirmed). Do not describe these as working.
+`tests/test_e2e.py` copies LIAS into two temp projects and uses only the CLI in separate processes: persisted
+knowledge, isolation between projects, propose/promote/later reuse of a generated automation, risk-2 denial,
+quarantine after 3 failures (doctor flags it), and backup/damage/restore. Passed on 2026-11-13.
+
+## Deliberate limits
+
+- Knowledge auto-capture is not built: the hook payload has no reliable success signal, so capture would store
+  unverified guesses. Save facts with `knowledge add ... --status verified` after a test or user confirmation.
+- Generation is not unprompted: Claude writes a candidate, LIAS validates, tests and registers it.
+- Unconfirmed: SessionStart output injection in a fresh session (PostToolUse is confirmed).
+- Token savings are not measured; only local timings and a character-count proxy.
