@@ -52,7 +52,15 @@ prints a 3-line summary into context, expires due records, swallows all errors, 
 (`LIAS_HOOK_ACTIVE`). Script and JSON verified locally; that Claude Code actually injects the output at session start
 is not yet observed (check at next new session).
 
+## Workflow observation (discovery only)
+
+`PostToolUse` (matcher `Bash`) runs `hooks/post_tool_use.py`: normalizes the command and counts repeats in the
+`observed` table (schema v2). Commands with secrets, trivial commands and LIAS's own CLI are skipped; output is never
+stored. `learning candidates [--threshold 3]` lists repeated commands ranked by count x length; `learning dismiss`
+hides one. Nothing is generated or activated automatically. Hook script and CLI verified by tests; that Claude Code
+delivers the Bash payload (`tool_input.command`) to the hook in a live session is NOT yet observed.
+
 ## Not yet implemented
 
-PostToolUse hook, knowledge-candidate auto-capture, workflow observation and automation generation
+knowledge-candidate auto-capture, automation generation
 (Phase 4-5), benchmarks (Phase 6), backup-restore command. Do not describe these as working.

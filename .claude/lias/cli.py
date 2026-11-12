@@ -49,6 +49,11 @@ def build_parser():
     dl.add_argument("id")
     k.add_parser("index")
     k.add_parser("expire")
+    le = sub.add_parser("learning").add_subparsers(dest="lcmd", required=True)
+    cd = le.add_parser("candidates")
+    cd.add_argument("--threshold", type=int, default=3)
+    ds = le.add_parser("dismiss")
+    ds.add_argument("command")
     au = sub.add_parser("automation").add_subparsers(dest="acmd", required=True)
     au.add_parser("list")
     r = au.add_parser("run")
@@ -103,6 +108,12 @@ def main(argv=None, paths=None):
             out(kn.index_markdown(paths.memory))
         elif c == "expire":
             out({"expired": kn.expire_due()})
+    elif ns.cmd == "learning":
+        from lias.learning import observer
+        if ns.lcmd == "candidates":
+            out(observer.candidates(conn, ns.threshold))
+        else:
+            out({"dismissed": observer.dismiss(conn, ns.command)})
     elif ns.cmd == "automation":
         if ns.acmd == "list":
             items, bad = reg.summary()

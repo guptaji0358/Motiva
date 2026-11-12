@@ -121,11 +121,15 @@ class CoreTests(unittest.TestCase):
         c.close()
         with self.assertRaises(RuntimeError):
             db.connect(self.paths)
+        # restore a real v1 database and check it upgrades with a backup
+        self.paths.db_file.unlink()
         c = sqlite3.connect(self.paths.db_file)
-        c.execute("PRAGMA user_version=1")
-        c.commit()
+        c.executescript("BEGIN;" + db.MIGRATIONS[0] + "PRAGMA user_version=1;COMMIT;")
         c.close()
         self.conn = db.connect(self.paths)
+        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(db.MIGRATIONS))
+        self.conn.execute("SELECT * FROM observed")
+        self.assertEqual(len(list(self.paths.backups.glob("lias-pre-migrate-v1-*"))), 1)
 
     def test_manifest_validation(self):
         good = json.loads((REAL_SCRIPTS / "manifests" / "source-stats.json").read_text())

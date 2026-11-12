@@ -29,6 +29,11 @@ MIGRATIONS = [
     CREATE TABLE cache(key TEXT PRIMARY KEY, automation_id TEXT NOT NULL, created REAL NOT NULL,
         expires_at REAL NOT NULL, result TEXT NOT NULL);
     """,
+    # v2: workflow observation
+    """
+    CREATE TABLE observed(cmd TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0,
+        first_seen REAL NOT NULL, last_seen REAL NOT NULL, dismissed INTEGER NOT NULL DEFAULT 0);
+    """,
 ]
 
 
