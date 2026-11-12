@@ -53,6 +53,7 @@ class Paths:
         self.backups = self.lias / "backups"
         self.manifests = self.lias / "automation" / "manifests"
         self.scripts = self.lias / "automation" / "scripts"
+        self.generated = self.lias / "automation" / "generated"
         self.memory = self.claude / "memory"
 
     @property

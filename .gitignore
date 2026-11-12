@@ -10,3 +10,4 @@ third_party/rclone/motiva-cloud.ini
 .claude/lias/cache/
 .claude/lias/logs/
 __pycache__/
+.claude/lias/automation/generated/*/report.json

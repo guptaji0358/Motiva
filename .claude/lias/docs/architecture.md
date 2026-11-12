@@ -60,7 +60,18 @@ stored. `learning candidates [--threshold 3]` lists repeated commands ranked by 
 hides one. Nothing is generated or activated automatically. Hook script and CLI verified by tests; that Claude Code
 delivers the Bash payload (`tool_input.command`) to the hook in a live session is NOT yet observed.
 
+## Generated automation lifecycle
+
+Candidate in `automation/generated/<id>/{manifest.json,script.py}` (Claude authors it; manifest needs `tests` with
+fixtures, args and expected result keys). `automation propose <id>` runs: manifest checks (risk must be 0) ->
+AST static check (import whitelist, no eval/exec/subprocess/network, read-only open, no write/delete attributes) ->
+duplicate check (description Jaccard >= 0.7) -> budget (20 generated) -> isolated tests in a temp project dir ->
+`report.json` with file hashes. `automation promote <id>` needs a passing report whose hashes still match, re-runs the
+static check, backs up any previous version to `backups/`, and writes script + manifest atomically.
+`automation retire <id>` moves a generated automation to `backups/`. Static checks are a guardrail, not a sandbox.
+Live example: `memory-line-check` (checks the 200-line memory limit).
+
 ## Not yet implemented
 
-knowledge-candidate auto-capture, automation generation
-(Phase 4-5), benchmarks (Phase 6), backup-restore command. Do not describe these as working.
+knowledge-candidate auto-capture, automatic (unprompted) generation
+(Claude must author and propose candidates), benchmarks (Phase 6), backup-restore command. Do not describe these as working.

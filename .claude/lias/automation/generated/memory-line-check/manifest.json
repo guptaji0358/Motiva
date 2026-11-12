@@ -1,0 +1,16 @@
+{
+  "id": "memory-line-check",
+  "name": "Memory file line limit check",
+  "description": "Verify every .claude/memory markdown file stays within the 200 line limit required by CLAUDE.md.",
+  "entry": "script.py",
+  "version": "1.0.0",
+  "risk": 0,
+  "timeout": 20,
+  "status": "inactive",
+  "args": {"limit": {"type": "integer", "default": 200}},
+  "tests": [
+    {"fixtures": {".claude/memory/a.md": "one\ntwo\n", ".claude/memory/b.md": "x\n"}, "args": {}, "expect": {"ok": true, "files_checked": 2}},
+    {"fixtures": {".claude/memory/big.md": "l\nl\nl\nl\n"}, "args": {"limit": 3}, "expect": {"ok": false, "max_lines": 4}},
+    {"fixtures": {}, "args": {}, "expect": {"ok": true, "files_checked": 0}}
+  ]
+}

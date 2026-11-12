@@ -63,6 +63,8 @@ def build_parser():
     r.add_argument("--allow-risk", type=int, default=1, choices=[0, 1, 2])
     rl = au.add_parser("release")
     rl.add_argument("id")
+    for name in ("propose", "promote", "retire"):
+        au.add_parser(name).add_argument("id")
     return p
 
 
@@ -118,6 +120,11 @@ def main(argv=None, paths=None):
         if ns.acmd == "list":
             items, bad = reg.summary()
             out({"automations": items, "bad_manifests": bad})
+        elif ns.acmd in ("propose", "promote", "retire"):
+            from lias.core import generation
+            r = getattr(generation, ns.acmd)(paths, conn, ns.id)
+            out(r)
+            return 0 if r.get("passed", r.get("promoted", r.get("retired"))) else 1
         elif ns.acmd == "release":
             reg.release(ns.id)
             out({"released": ns.id})
