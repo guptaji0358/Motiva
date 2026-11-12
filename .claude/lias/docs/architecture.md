@@ -71,7 +71,18 @@ static check, backs up any previous version to `backups/`, and writes script + m
 `automation retire <id>` moves a generated automation to `backups/`. Static checks are a guardrail, not a sandbox.
 Live example: `memory-line-check` (checks the 200-line memory limit).
 
+## Backup, restore, benchmark
+
+`backup create|list|restore <name>`: snapshots via the SQLite backup API (keeps 10 `manual` ones). Restore verifies
+integrity and project identity, saves the current DB as `pre-restore`, then replaces atomically; it runs with no open
+connection. `benchmark` measures local numbers only and writes `benchmarks/*.json`: top-3 retrieval accuracy (it
+queries each record by its own title, so it is an optimistic smoke test, not a real relevance score), search latency,
+a character-count context proxy (all memory files vs one search result), and source-stats cold vs cached.
+Model tokens and tool calls are NOT measured, so no token savings are claimed. Reference run on this repo:
+cold 90.6 ms vs cached 9.3 ms (9.7x; the OS file cache makes cold times vary, 821 ms seen on a first run),
+one search result ~1.1k chars vs ~45k chars of memory files.
+
 ## Not yet implemented
 
-knowledge-candidate auto-capture, automatic (unprompted) generation
-(Claude must author and propose candidates), benchmarks (Phase 6), backup-restore command. Do not describe these as working.
+Knowledge-candidate auto-capture and unprompted generation (Claude must author and propose candidates).
+Live confirmation that the SessionStart/PostToolUse hooks fire in a real session. Do not describe these as working.

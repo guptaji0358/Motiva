@@ -49,6 +49,12 @@ def build_parser():
     dl.add_argument("id")
     k.add_parser("index")
     k.add_parser("expire")
+    sub.add_parser("benchmark")
+    bk = sub.add_parser("backup").add_subparsers(dest="bcmd", required=True)
+    bk.add_parser("create")
+    bk.add_parser("list")
+    br = bk.add_parser("restore")
+    br.add_argument("name")
     le = sub.add_parser("learning").add_subparsers(dest="lcmd", required=True)
     cd = le.add_parser("candidates")
     cd.add_argument("--threshold", type=int, default=3)
@@ -71,6 +77,11 @@ def build_parser():
 def main(argv=None, paths=None):
     ns = build_parser().parse_args(argv)
     paths = paths or db.default_paths()
+    if ns.cmd == "backup" and ns.bcmd == "restore":  # must run with no open connection
+        from lias.core import maintenance
+        r = maintenance.backup_restore(paths, ns.name)
+        out(r)
+        return 0 if r["restored"] else 1
     try:
         conn = db.connect(paths, rebind=ns.rebind)
     except db.ProjectMismatch as e:
@@ -83,6 +94,16 @@ def main(argv=None, paths=None):
         return 0 if r["ok"] else 1
     if ns.cmd == "status":
         out(diagnostics.status(paths, conn))
+    elif ns.cmd == "backup":
+        from lias.core import maintenance
+        out({"created": maintenance.backup_create(paths, conn)} if ns.bcmd == "create"
+            else maintenance.backup_list(paths))
+    elif ns.cmd == "benchmark":
+        from lias.core import maintenance
+
+        def run_auto(aid, cache):
+            return runner.run(paths, conn, reg, aid, {}, use_cache=cache)
+        out(maintenance.benchmark(paths, conn, kn, reg, run_auto))
     elif ns.cmd == "knowledge":
         c = ns.kcmd
         if c == "search":

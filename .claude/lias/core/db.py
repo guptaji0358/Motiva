@@ -51,6 +51,7 @@ class Paths:
         self.database = self.lias / "database"
         self.db_file = self.database / "lias.sqlite3"
         self.backups = self.lias / "backups"
+        self.benchmarks = self.lias / "benchmarks"
         self.manifests = self.lias / "automation" / "manifests"
         self.scripts = self.lias / "automation" / "scripts"
         self.generated = self.lias / "automation" / "generated"
