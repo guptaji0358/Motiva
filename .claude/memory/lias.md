@@ -19,7 +19,7 @@ python .claude/lias/cli.py knowledge index   # re-index memory/*.md after editin
   conflict protection, expiry, markdown indexing, runner (timeouts, arg validation, cache, quarantine), doctor/status.
 - Automations: `source-stats` (fingerprint-cached; 821 ms cold, 9 ms cached on this repo), `build-env-check`.
 - SessionStart hook (`.claude/settings.json` -> `lias/hooks/session_start.py`): script verified; injection into a live session NOT yet observed.
-- PostToolUse(Bash) hook + `learning candidates`: counts repeated commands (42 tests: core 12, runner 11, observer 5, generation 10, maintenance 4). Live delivery NOT yet observed.
+- PostToolUse(Bash) hook + `learning candidates`: counts repeated commands (42 tests: core 12, runner 11, observer 5, generation 10, maintenance 4). Live delivery CONFIRMED 2026-11-12 (this session's Bash commands appeared in `observed`).
 - Generation pipeline: `automation propose|promote|retire <id>` (see docs/architecture.md); `memory-line-check` was created this way.
 - `backup create|list|restore`, `benchmark` (local timings + char proxy; tokens not measured; see architecture.md).
 - Not implemented: auto-capture of knowledge, unprompted generation. `database/` is gitignored and local.

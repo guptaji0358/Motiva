@@ -58,7 +58,7 @@ is not yet observed (check at next new session).
 `observed` table (schema v2). Commands with secrets, trivial commands and LIAS's own CLI are skipped; output is never
 stored. `learning candidates [--threshold 3]` lists repeated commands ranked by count x length; `learning dismiss`
 hides one. Nothing is generated or activated automatically. Hook script and CLI verified by tests; that Claude Code
-delivers the Bash payload (`tool_input.command`) to the hook in a live session is NOT yet observed.
+delivers the Bash payload (`tool_input.command`) to the hook was CONFIRMED on 2026-11-12: commands run in the building session were recorded.
 
 ## Generated automation lifecycle
 
@@ -85,4 +85,4 @@ one search result ~1.1k chars vs ~45k chars of memory files.
 ## Not yet implemented
 
 Knowledge-candidate auto-capture and unprompted generation (Claude must author and propose candidates).
-Live confirmation that the SessionStart/PostToolUse hooks fire in a real session. Do not describe these as working.
+Live confirmation that SessionStart injects its output (PostToolUse is confirmed). Do not describe these as working.
