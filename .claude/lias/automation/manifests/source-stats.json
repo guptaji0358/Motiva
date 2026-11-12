@@ -1,0 +1,12 @@
+{
+  "id": "source-stats",
+  "name": "Source file statistics",
+  "description": "Count source files and lines by extension for the project (excludes build, deploy, third_party, .git, .claude).",
+  "entry": "source_stats.py",
+  "version": "1.0.0",
+  "risk": 0,
+  "timeout": 60,
+  "status": "active",
+  "args": {"extensions": {"type": "string", "default": "", "description": "comma list like .cpp,.h; empty = defaults"}},
+  "cache": {"policy": "fingerprint", "ttl": 3600, "extensions": [".cpp", ".h", ".hpp", ".c", ".qml", ".py", ".js", ".ps1", ".bat", ".cmake", ".txt", ".html", ".css"]}
+}

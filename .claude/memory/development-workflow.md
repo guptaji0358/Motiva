@@ -3,7 +3,7 @@
 ## Build (dev)
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="D:/Apps/Qt6/6.11.1/mingw_64" -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="D:/Apps/Qt6/6.12.0/mingw_64" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 

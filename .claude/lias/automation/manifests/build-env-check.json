@@ -1,0 +1,11 @@
+{
+  "id": "build-env-check",
+  "name": "Build environment check",
+  "description": "Verify Qt, MinGW, cmake and ninja are present for building Motiva (read-only existence checks).",
+  "entry": "build_env_check.py",
+  "version": "1.1.0",
+  "risk": 0,
+  "timeout": 30,
+  "status": "active",
+  "args": {}
+}

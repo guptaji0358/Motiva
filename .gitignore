@@ -5,3 +5,8 @@ CLAUDE.md
 release/
 third_party/rclone/rclone.exe
 third_party/rclone/motiva-cloud.ini
+.claude/lias/database/
+.claude/lias/backups/
+.claude/lias/cache/
+.claude/lias/logs/
+__pycache__/

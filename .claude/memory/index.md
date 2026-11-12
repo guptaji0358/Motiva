@@ -16,6 +16,7 @@ is the final authority; these notes say where to look. Last full pass: 2026-11-1
 | [development-workflow.md](development-workflow.md) | You build, deploy, run, log, or test |
 | [decisions.md](decisions.md) | You are about to change a design choice and need its reason |
 | [known-issues.md](known-issues.md) | You need what is unverified, limited, or broken |
+| [lias.md](lias.md) | You use or change the local knowledge/automation system in `.claude/lias/` |
 
 ## Task to file map
 
