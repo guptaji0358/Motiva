@@ -18,7 +18,8 @@ python .claude/lias/cli.py knowledge index   # re-index memory/*.md after editin
 - Implemented and tested (23 unit tests): DB + migrations, knowledge store with FTS5, secret rejection,
   conflict protection, expiry, markdown indexing, runner (timeouts, arg validation, cache, quarantine), doctor/status.
 - Automations: `source-stats` (fingerprint-cached; 821 ms cold, 9 ms cached on this repo), `build-env-check`.
-- Not implemented: hooks, auto-capture, automation generation, benchmarks. `database/` is gitignored and local.
+- SessionStart hook (`.claude/settings.json` -> `lias/hooks/session_start.py`): script verified; injection into a live session NOT yet observed.
+- Not implemented: PostToolUse hook, auto-capture, automation generation, benchmarks. `database/` is gitignored and local.
 - After editing memory markdown, run `knowledge index`; `documented` records are derived from it.
 
 ## Gotchas
