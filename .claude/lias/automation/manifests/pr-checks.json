@@ -1,0 +1,16 @@
+{
+  "id": "pr-checks",
+  "name": "PR CI status",
+  "description": "Read PR check results with gh; list only failing/pending checks.",
+  "entry": "pr_checks.py",
+  "version": "1.0.0",
+  "risk": 0,
+  "timeout": 90,
+  "status": "active",
+  "args": {
+    "pr": {
+      "type": "integer",
+      "default": 0
+    }
+  }
+}
