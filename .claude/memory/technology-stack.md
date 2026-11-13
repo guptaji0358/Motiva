@@ -50,6 +50,11 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   scale <= 1.25 and crop <= 30%. Setting `resolutionCompat` in
   `chrome.storage.local` (default on), toggled in the extension popup, not in
   Motiva's Qt settings. Image `naturalWidth/Height`, video `videoWidth/Height`.
+  Button state is derived by `syncButton()` in `content.js` (throttled move
+  with trailing run, plus `load`/`loadedmetadata`/`emptied` re-check); verified
+  in the browser pane with a shimmed `chrome.*` page: compatible shows,
+  incompatible hides, fast move and src swap under a still pointer update.
+  Real Chrome load of the unpacked extension: not verified.
 
 ## Packaging
 

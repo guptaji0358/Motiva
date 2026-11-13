@@ -135,28 +135,58 @@
     btn.style.display = 'flex';
   }
 
+  // Button visibility is a pure function of the media under the pointer:
+  // visible <=> eligible media there && (compat off || compatible). It is
+  // re-derived on every pointer move (throttled, with a trailing run so the
+  // last position is never skipped) and whenever the media under a still
+  // pointer changes or finishes loading, so no stale state survives.
   let lastMove = 0;
+  let lastX = -1;
+  let lastY = -1;
+  let trailTimer = 0;
+  let overHost = false;
+
+  function syncButton() {
+    trailTimer = 0;
+    if (!overlayEnabled || menu.style.display === 'block' || overHost || lastX < 0) return;
+    const hit = findUnder(lastX, lastY);
+    const ok = !hit || isCompatible(hit);
+    reportContextMenu(ok);
+    if (hit && ok) {
+      current = hit;
+      placeButton(hit);
+    } else {
+      current = null;
+      btn.style.display = 'none';
+    }
+  }
+
   document.addEventListener(
     'mousemove',
     (e) => {
-      if (!overlayEnabled || menu.style.display === 'block') return;
+      overHost = e.composedPath().includes(host);
+      if (overHost) return;
+      lastX = e.clientX;
+      lastY = e.clientY;
       const now = performance.now();
-      if (now - lastMove < 80) return;
-      lastMove = now;
-      const path = e.composedPath();
-      if (path.includes(host)) return;
-      const hit = findUnder(e.clientX, e.clientY);
-      reportContextMenu(!hit || isCompatible(hit));
-      if (hit && isCompatible(hit)) {
-        current = hit;
-        placeButton(hit);
-      } else {
-        current = null;
-        btn.style.display = 'none';
+      if (now - lastMove < 80) {
+        if (!trailTimer) trailTimer = setTimeout(syncButton, 90);
+        return;
       }
+      lastMove = now;
+      syncButton();
     },
     { passive: true, capture: true }
   );
+  // Image/video metadata arriving or a carousel swapping the source under a
+  // stationary pointer changes the answer without any mouse movement.
+  for (const type of ['load', 'loadedmetadata', 'emptied']) {
+    document.addEventListener(type, (e) => {
+      if (e.target === (current && current.el) || e.target instanceof HTMLImageElement || e.target instanceof HTMLVideoElement) {
+        if (!trailTimer) trailTimer = setTimeout(syncButton, 0);
+      }
+    }, { passive: true, capture: true });
+  }
   // Right-click "Motiva" entry follows the same result as the hover button.
   // Reported ahead of time (on hover, only when it changes) so the menu is
   // already correct when the user right-clicks; reset when the pointer leaves
@@ -185,11 +215,8 @@
 
   // Re-check the media the button is on after a setting or display change.
   function refreshButton() {
-    if (current && !isCompatible(current)) {
-      current = null;
-      btn.style.display = 'none';
-      menu.style.display = 'none';
-    }
+    if (current && !isCompatible(current)) menu.style.display = 'none';
+    syncButton();
   }
   window.addEventListener('resize', refreshButton, { passive: true });
   try {
