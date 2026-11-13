@@ -1,0 +1,20 @@
+{
+  "id": "memory-lias-update",
+  "name": "Update memory and LIAS",
+  "description": "Optionally append a line to a memory .md (200-line guard), reindex LIAS knowledge, run doctor.",
+  "entry": "memory_lias_update.py",
+  "version": "1.0.0",
+  "risk": 1,
+  "timeout": 120,
+  "status": "active",
+  "args": {
+    "file": {
+      "type": "string",
+      "default": ""
+    },
+    "append": {
+      "type": "string",
+      "default": ""
+    }
+  }
+}
