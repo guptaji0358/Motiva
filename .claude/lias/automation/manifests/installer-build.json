@@ -1,0 +1,11 @@
+{
+  "id": "installer-build",
+  "name": "Build installer",
+  "description": "Run installer/build-installer.ps1; report release/MotivaSetup.exe size.",
+  "entry": "installer_build.py",
+  "version": "1.0.0",
+  "risk": 1,
+  "timeout": 600,
+  "status": "active",
+  "args": {}
+}
