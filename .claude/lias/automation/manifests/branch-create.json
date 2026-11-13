@@ -1,0 +1,19 @@
+{
+  "id": "branch-create",
+  "name": "Create feature branch",
+  "description": "git checkout -b <prefix>/<slug-of-name> from the current HEAD.",
+  "entry": "branch_create.py",
+  "version": "1.0.0",
+  "risk": 1,
+  "timeout": 30,
+  "status": "active",
+  "args": {
+    "name": {
+      "type": "string"
+    },
+    "prefix": {
+      "type": "string",
+      "default": "feature"
+    }
+  }
+}
