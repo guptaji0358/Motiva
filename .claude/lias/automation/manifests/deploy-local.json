@@ -1,0 +1,11 @@
+{
+  "id": "deploy-local",
+  "name": "Build and deploy exe",
+  "description": "Build, then copy build/Motiva.exe to deployment/resources/bin.",
+  "entry": "deploy_local.py",
+  "version": "1.0.0",
+  "risk": 1,
+  "timeout": 600,
+  "status": "active",
+  "args": {}
+}
