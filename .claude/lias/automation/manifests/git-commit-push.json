@@ -1,0 +1,23 @@
+{
+  "id": "git-commit-push",
+  "name": "Commit and push",
+  "description": "Stage all changes, commit with the given message (attribution added), push current branch. Never forces; refuses secret-looking files.",
+  "entry": "git_commit_push.py",
+  "version": "1.1.0",
+  "risk": 2,
+  "timeout": 240,
+  "status": "active",
+  "args": {
+    "message": {
+      "type": "string"
+    },
+    "push": {
+      "type": "boolean",
+      "default": true
+    },
+    "paths": {
+      "type": "string",
+      "default": ""
+    }
+  }
+}
