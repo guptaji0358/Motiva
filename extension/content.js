@@ -146,8 +146,22 @@
   let trailTimer = 0;
   let overHost = false;
 
+  // After the extension is reloaded, tabs keep an orphaned copy of this
+  // script whose chrome.* calls throw; it must go quiet instead of erroring.
+  function alive() {
+    try {
+      return !!chrome.runtime.id;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function syncButton() {
     trailTimer = 0;
+    if (!alive()) {
+      btn.style.display = 'none';
+      return;
+    }
     if (!overlayEnabled || menu.style.display === 'block' || overHost || lastX < 0) return;
     const hit = findUnder(lastX, lastY);
     const ok = !hit || isCompatible(hit);
@@ -164,6 +178,7 @@
   document.addEventListener(
     'mousemove',
     (e) => {
+      if (!alive()) return;
       overHost = e.composedPath().includes(host);
       if (overHost) return;
       lastX = e.clientX;
