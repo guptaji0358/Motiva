@@ -1,0 +1,15 @@
+{
+  "id": "code-outline",
+  "name": "Code outline",
+  "description": "Line-numbered outline of one file (functions, listeners, observers, timers, chrome.* calls, display toggles) or of a custom regex. Use before reading a file in full.",
+  "entry": "code_outline.py",
+  "version": "1.0.0",
+  "risk": 0,
+  "timeout": 20,
+  "status": "active",
+  "args": {
+    "file": {"type": "string", "default": "extension/content.js"},
+    "pattern": {"type": "string", "default": ""},
+    "max": {"type": "integer", "default": 120}
+  }
+}
