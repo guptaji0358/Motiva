@@ -1,0 +1,11 @@
+{
+  "id": "build-compile",
+  "name": "Compile Motiva",
+  "description": "Run cmake --build; on failure returns exit code and every error line.",
+  "entry": "build_compile.py",
+  "version": "1.0.0",
+  "risk": 1,
+  "timeout": 600,
+  "status": "active",
+  "args": {}
+}
