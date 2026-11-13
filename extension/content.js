@@ -11,14 +11,41 @@
   const CHUNK = 384 * 1024;
 
   let overlayEnabled = true;
+  let compatEnabled = true; // "Resolution-Based Compatibility", default on
   try {
-    chrome.storage.local.get('overlay').then((d) => {
+    chrome.storage.local.get(['overlay', 'resolutionCompat']).then((d) => {
       overlayEnabled = d.overlay !== false;
+      compatEnabled = d.resolutionCompat !== false;
     });
     chrome.storage.onChanged.addListener((changes) => {
       if (changes.overlay) overlayEnabled = changes.overlay.newValue !== false;
+      if (changes.resolutionCompat) {
+        compatEnabled = changes.resolutionCompat.newValue !== false;
+        refreshButton();
+      }
     });
   } catch (e) {}
+
+  // Physical pixel size of the display this window is on. screen.* is in
+  // CSS px, so multiplying by devicePixelRatio gives device pixels; read
+  // fresh on every check, so moving the window to another monitor or
+  // changing the desktop resolution is picked up without a reload.
+  function displaySize() {
+    const dpr = window.devicePixelRatio || 1;
+    return { width: Math.round(screen.width * dpr), height: Math.round(screen.height * dpr) };
+  }
+
+  // Intrinsic size from metadata the browser already loaded: no decoding,
+  // no extra requests. 0 until the image/video metadata is available.
+  function mediaSize(el) {
+    if (el instanceof HTMLVideoElement) return { width: el.videoWidth, height: el.videoHeight };
+    return { width: el.naturalWidth, height: el.naturalHeight };
+  }
+
+  function isCompatible(hit) {
+    if (!compatEnabled) return true; // setting off: previous behaviour
+    return MotivaCompat.evaluateCached(mediaSize(hit.el), displaySize()).compatible;
+  }
 
   // ----------------------------------------------------------------- UI
   const host = document.createElement('div');
@@ -118,7 +145,7 @@
       const path = e.composedPath();
       if (path.includes(host)) return;
       const hit = findUnder(e.clientX, e.clientY);
-      if (hit) {
+      if (hit && isCompatible(hit)) {
         current = hit;
         placeButton(hit);
       } else {
@@ -128,6 +155,19 @@
     },
     { passive: true, capture: true }
   );
+  // Re-check the media the button is on after a setting or display change.
+  function refreshButton() {
+    if (current && !isCompatible(current)) {
+      current = null;
+      btn.style.display = 'none';
+      menu.style.display = 'none';
+    }
+  }
+  window.addEventListener('resize', refreshButton, { passive: true });
+  try {
+    window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', refreshButton);
+  } catch (e) {}
+
   document.addEventListener('scroll', () => {
     btn.style.display = 'none';
     menu.style.display = 'none';

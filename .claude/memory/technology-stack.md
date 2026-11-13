@@ -42,7 +42,14 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
 - Fixed extension ID through the `key` field; same ID in
   `BrowserIntegration::kExtensionId` and the host's origin check.
 - Files: `background.js` (service worker), `content.js` (hover button, shadow DOM),
-  `popup.html`/`popup.js`.
+  `popup.html`/`popup.js`, `compat.js` (resolution compatibility, loaded before
+  `content.js`).
+- Resolution-Based Compatibility (verified with node on `compat.js` only; not
+  yet tried in a live browser): hover button is hidden unless the media, drawn
+  cover-style on the window's display (`screen.*` x `devicePixelRatio`), has
+  scale <= 1.25 and crop <= 30%. Setting `resolutionCompat` in
+  `chrome.storage.local` (default on), toggled in the extension popup, not in
+  Motiva's Qt settings. Image `naturalWidth/Height`, video `videoWidth/Height`.
 
 ## Packaging
 

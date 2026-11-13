@@ -8,6 +8,12 @@ chrome.storage.local.get('overlay').then((d) => {
 });
 overlay.addEventListener('change', () => chrome.storage.local.set({ overlay: overlay.checked }));
 
+const compat = document.getElementById('compat');
+chrome.storage.local.get('resolutionCompat').then((d) => {
+  compat.checked = d.resolutionCompat !== false; // default: enabled
+});
+compat.addEventListener('change', () => chrome.storage.local.set({ resolutionCompat: compat.checked }));
+
 chrome.runtime.sendMessage({ type: 'status' }).then((r) => {
   if (r && r.connected) {
     dot.className = 'dot ok';
