@@ -12,12 +12,15 @@
 
   let overlayEnabled = true;
   let compatEnabled = true; // "Resolution-Based Compatibility", default on
+  let compatDebug = false; // chrome.storage.local.debugCompat = true -> console trace
   try {
-    chrome.storage.local.get(['overlay', 'resolutionCompat']).then((d) => {
+    chrome.storage.local.get(['overlay', 'resolutionCompat', 'debugCompat']).then((d) => {
       overlayEnabled = d.overlay !== false;
       compatEnabled = d.resolutionCompat !== false;
+      compatDebug = d.debugCompat === true;
     });
     chrome.storage.onChanged.addListener((changes) => {
+      if (changes.debugCompat) compatDebug = changes.debugCompat.newValue === true;
       if (changes.overlay) overlayEnabled = changes.overlay.newValue !== false;
       if (changes.resolutionCompat) {
         compatEnabled = changes.resolutionCompat.newValue !== false;
@@ -43,9 +46,25 @@
     return { width: el.naturalWidth, height: el.naturalHeight };
   }
 
-  function isCompatible(hit) {
-    if (!compatEnabled) return true; // setting off: previous behaviour
-    return MotivaCompat.evaluateCached(mediaSize(hit.el), displaySize()).compatible;
+  // visible = compatEnabled ? compatible : previous behaviour (always true).
+  // Unknown size (metadata not loaded / invalid) is not shown; the load and
+  // loadedmetadata listeners below re-run this when it becomes known.
+  let lastTrace = '';
+  function isCompatible(el) {
+    const media = mediaSize(el);
+    const display = displaySize();
+    const d = MotivaCompat.decide(compatEnabled, media, display);
+    if (compatDebug) {
+      const line = `${d.state}|${media.width}x${media.height}|${display.width}x${display.height}`;
+      if (line !== lastTrace) {
+        lastTrace = line;
+        console.debug('[Motiva compat]', d.state, {
+          media, display, dpr: window.devicePixelRatio, screen: [screen.width, screen.height],
+          enabled: compatEnabled, reason: d.result && d.result.reason, src: mediaSource(el).slice(0, 80),
+        });
+      }
+    }
+    return d.visible;
   }
 
   // ----------------------------------------------------------------- UI
@@ -164,7 +183,7 @@
     }
     if (!overlayEnabled || menu.style.display === 'block' || overHost || lastX < 0) return;
     const hit = findUnder(lastX, lastY);
-    const ok = !hit || isCompatible(hit);
+    const ok = !hit || isCompatible(hit.el);
     reportContextMenu(ok);
     if (hit && ok) {
       current = hit;
@@ -223,14 +242,14 @@
       const hit = findUnder(e.clientX, e.clientY);
       const el = hit ? hit.el : e.composedPath()[0];
       const media = el instanceof HTMLImageElement || el instanceof HTMLVideoElement;
-      reportContextMenu(!media || MotivaCompat.evaluateCached(mediaSize(el), displaySize()).compatible);
+      reportContextMenu(!media || isCompatible(el));
     },
     { capture: true, passive: true }
   );
 
   // Re-check the media the button is on after a setting or display change.
   function refreshButton() {
-    if (current && !isCompatible(current)) menu.style.display = 'none';
+    if (current && !isCompatible(current.el)) menu.style.display = 'none';
     syncButton();
   }
   window.addEventListener('resize', refreshButton, { passive: true });

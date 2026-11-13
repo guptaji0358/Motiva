@@ -50,5 +50,22 @@
     return r;
   }
 
-  globalThis.MotivaCompat = { THRESHOLDS, evaluate, evaluateCached };
+  // Single visibility rule for the hover button and the right-click entry:
+  //   visible = enabled ? compatible : true   (true = previous behaviour)
+  // 'unknown' (size metadata not available yet or invalid) is reported as its
+  // own state and is not shown; callers re-run decide() when metadata arrives.
+  // An unusable DISPLAY size (screen.* reporting 0, e.g. a window without a
+  // screen) says nothing about the wallpaper, so it must not hide everything:
+  // it falls back to the previous behaviour (state 'display-unknown').
+  function decide(enabled, media, display) {
+    if (!enabled) return { visible: true, state: 'disabled' };
+    if (!(display && display.width > 0 && display.height > 0)) {
+      return { visible: true, state: 'display-unknown' };
+    }
+    const r = evaluateCached(media || {}, display || {});
+    if (!r.known) return { visible: false, state: 'unknown', result: r };
+    return { visible: r.compatible, state: r.compatible ? 'compatible' : 'incompatible', result: r };
+  }
+
+  globalThis.MotivaCompat = { THRESHOLDS, evaluate, evaluateCached, decide };
 })();

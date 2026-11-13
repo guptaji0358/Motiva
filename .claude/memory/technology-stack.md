@@ -54,7 +54,17 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   with trailing run, plus `load`/`loadedmetadata`/`emptied` re-check); verified
   in the browser pane with a shimmed `chrome.*` page: compatible shows,
   incompatible hides, fast move and src swap under a still pointer update.
-  Real Chrome load of the unpacked extension: not verified.
+  Verified 2026-11-13 in real Chrome 157 (1920x1080 @125%, Extensions.loadUnpacked via CDP,
+  needs --enable-unsafe-extension-debugging; --load-extension is ignored): image/video
+  compatible shows, incompatible hides, toggle off shows. Pre-fix HEAD behaved the same
+  here, so a user-side hide-all was NOT reproduced; use debugCompat to capture it.
+- Visibility rule is `MotivaCompat.decide(enabled, media, display)`: setting off
+  -> shown; unusable display size (`screen.*` = 0, seen in the hidden browser
+  pane) -> `display-unknown`, shown (previously this hid EVERYTHING); unknown
+  media size -> hidden until `load`/`loadedmetadata`. Debug: set
+  `chrome.storage.local.debugCompat = true` to log state/media/display/dpr in
+  the page console. Tests: `node --test extension/tests` (evaluator only; the
+  DOM path was checked by hand in the browser pane, video not run there).
 
 ## Packaging
 
