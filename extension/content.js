@@ -21,6 +21,7 @@
       if (changes.overlay) overlayEnabled = changes.overlay.newValue !== false;
       if (changes.resolutionCompat) {
         compatEnabled = changes.resolutionCompat.newValue !== false;
+        reportContextMenu(true);
         refreshButton();
       }
     });
@@ -145,6 +146,7 @@
       const path = e.composedPath();
       if (path.includes(host)) return;
       const hit = findUnder(e.clientX, e.clientY);
+      reportContextMenu(!hit || isCompatible(hit));
       if (hit && isCompatible(hit)) {
         current = hit;
         placeButton(hit);
@@ -155,6 +157,32 @@
     },
     { passive: true, capture: true }
   );
+  // Right-click "Motiva" entry follows the same result as the hover button.
+  // Reported ahead of time (on hover, only when it changes) so the menu is
+  // already correct when the user right-clicks; reset when the pointer leaves
+  // this frame so another frame's stale answer is never reused.
+  let lastCtx = null;
+  function reportContextMenu(ok) {
+    if (!compatEnabled) ok = true;
+    if (ok === lastCtx) return;
+    lastCtx = ok;
+    try {
+      chrome.runtime.sendMessage({ type: 'ctxCompat', compatible: ok }).catch(() => {});
+    } catch (err) {}
+  }
+  document.documentElement.addEventListener('mouseleave', () => (lastCtx = null), { passive: true });
+  document.addEventListener(
+    'contextmenu',
+    (e) => {
+      lastCtx = null; // always resend: the target is known exactly now
+      const hit = findUnder(e.clientX, e.clientY);
+      const el = hit ? hit.el : e.composedPath()[0];
+      const media = el instanceof HTMLImageElement || el instanceof HTMLVideoElement;
+      reportContextMenu(!media || MotivaCompat.evaluateCached(mediaSize(el), displaySize()).compatible);
+    },
+    { capture: true, passive: true }
+  );
+
   // Re-check the media the button is on after a setting or display change.
   function refreshButton() {
     if (current && !isCompatible(current)) {

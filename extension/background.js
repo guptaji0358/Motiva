@@ -327,6 +327,10 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return false;
+  if (msg.type === 'ctxCompat') {
+    chrome.contextMenus.update('motiva', { visible: !!msg.compatible }).catch(() => {});
+    return false;
+  }
   if (msg.type === 'getPlaylists') {
     storedPlaylists().then((playlists) => sendResponse({ playlists }));
     refreshPlaylists();
@@ -367,3 +371,11 @@ chrome.runtime.onStartup.addListener(() => {
   rebuildMenus().then(() => refreshPlaylists(true));
 });
 chrome.tabs.onActivated.addListener(() => refreshPlaylists());
+
+// The 'motiva' right-click entry may have been hidden for an incompatible
+// image. Pages without the content script never reset it, so show it again
+// whenever the user switches tab or a page starts loading.
+chrome.tabs.onActivated.addListener(() => chrome.contextMenus.update('motiva', { visible: true }).catch(() => {}));
+chrome.tabs.onUpdated.addListener((id, info) => {
+  if (info.status === 'loading') chrome.contextMenus.update('motiva', { visible: true }).catch(() => {});
+});
