@@ -1,0 +1,23 @@
+{
+  "id": "pr-create",
+  "name": "Create pull request",
+  "description": "Push current non-main branch and open a PR against main via gh; returns the URL.",
+  "entry": "pr_create.py",
+  "version": "1.0.0",
+  "risk": 2,
+  "timeout": 300,
+  "status": "active",
+  "args": {
+    "title": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string",
+      "default": ""
+    },
+    "base": {
+      "type": "string",
+      "default": "main"
+    }
+  }
+}
