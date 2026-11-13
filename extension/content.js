@@ -214,13 +214,72 @@
   );
   // Image/video metadata arriving or a carousel swapping the source under a
   // stationary pointer changes the answer without any mouse movement.
-  for (const type of ['load', 'loadedmetadata', 'emptied']) {
+  // 'resize' (capture only, it does not bubble) fires on a <video> whose
+  // intrinsic dimensions change.
+  function scheduleSync(delay) {
+    if (!trailTimer) trailTimer = setTimeout(syncButton, delay);
+  }
+  for (const type of ['load', 'loadedmetadata', 'emptied', 'resize']) {
     document.addEventListener(type, (e) => {
       if (e.target === (current && current.el) || e.target instanceof HTMLImageElement || e.target instanceof HTMLVideoElement) {
-        if (!trailTimer) trailTimer = setTimeout(syncButton, 0);
+        scheduleSync(0);
       }
     }, { passive: true, capture: true });
   }
+
+  // DOM changes under a stationary pointer: media inserted/removed, or its
+  // source swapped (lazy loading, carousels, SPAs). Everything is funnelled
+  // into the same debounced syncButton(), so bursts cost one evaluation and
+  // metadata that is not there yet is picked up by the load listeners above.
+  // Mutations caused by the extension's own host element are ignored, so
+  // mounting the button can never retrigger the observer.
+  function isMediaNode(n) {
+    if (n.nodeType !== 1 || n === host) return false;
+    if (n instanceof HTMLImageElement || n instanceof HTMLVideoElement) return true;
+    return !!(n.querySelector && n.querySelector('img,video'));
+  }
+  const observer = new MutationObserver((records) => {
+    if (!alive()) return stopObserving();
+    if (lastX < 0) return;
+    for (const m of records) {
+      if (m.type === 'attributes') {
+        if (m.target !== host && (m.target instanceof HTMLImageElement || m.target instanceof HTMLVideoElement)) {
+          return scheduleSync(50);
+        }
+        continue;
+      }
+      for (const n of m.addedNodes) if (isMediaNode(n)) return scheduleSync(50);
+      for (const n of m.removedNodes) if (isMediaNode(n)) return scheduleSync(50);
+    }
+  });
+  let observing = false;
+  function startObserving() {
+    if (observing) return;
+    observing = true;
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src', 'srcset', 'poster'],
+    });
+  }
+  function stopObserving() {
+    observing = false;
+    observer.disconnect();
+    clearTimeout(trailTimer);
+    trailTimer = 0;
+  }
+  startObserving();
+  // Initial page initialisation, and bfcache restore (pagehide disconnects).
+  document.addEventListener('DOMContentLoaded', () => scheduleSync(0), { once: true });
+  window.addEventListener('load', () => scheduleSync(0), { once: true });
+  window.addEventListener('pagehide', stopObserving);
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) {
+      startObserving();
+      scheduleSync(0);
+    }
+  });
   // Right-click "Motiva" entry follows the same result as the hover button.
   // Reported ahead of time (on hover, only when it changes) so the menu is
   // already correct when the user right-clicks; reset when the pointer leaves

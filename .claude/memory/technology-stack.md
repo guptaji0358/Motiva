@@ -51,7 +51,14 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   `chrome.storage.local` (default on), toggled in the extension popup, not in
   Motiva's Qt settings. Image `naturalWidth/Height`, video `videoWidth/Height`.
   Button state is derived by `syncButton()` in `content.js` (throttled move
-  with trailing run, plus `load`/`loadedmetadata`/`emptied` re-check); verified
+  with trailing run, plus `load`/`loadedmetadata`/`emptied`/video `resize`
+  re-check, a `MutationObserver` (img/video add/remove, src/srcset/poster
+  changes; ignores the extension's own host; disconnects on pagehide/orphaning,
+  restarts on bfcache pageshow) and DOMContentLoaded/load syncs; all go through
+  one debounced `scheduleSync`. Pointer position is only known after the first
+  mousemove (no sync without it). Stationary-pointer dynamic insert, src swap,
+  lazy src and removal verified on a shimmed page with synthetic mousemove
+  (real videos not tested); verified
   in the browser pane with a shimmed `chrome.*` page: compatible shows,
   incompatible hides, fast move and src swap under a still pointer update.
   Verified 2026-11-13 in real Chrome 157 (1920x1080 @125%, Extensions.loadUnpacked via CDP,
