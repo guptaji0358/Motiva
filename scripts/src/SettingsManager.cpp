@@ -330,38 +330,37 @@ void SettingsManager::setTheme(Theme::AppTheme theme) {
     m_settings.setValue("app/theme", Theme::themeSettingsKey(theme));
 }
 
-Theme::ColorOverrides SettingsManager::themeOverrides(Theme::AppTheme theme) const {
-    Theme::ColorOverrides out;
-    const QString key = QStringLiteral("themeEditor/%1/colors").arg(Theme::themeSettingsKey(theme));
-    const QJsonObject obj = QJsonDocument::fromJson(m_settings.value(key).toString().toUtf8()).object();
-    for (const Theme::EditableColor& e : Theme::editableColors()) {
-        const QColor c(obj.value(e.key).toString());
-        if (c.isValid()) {
-            out.insert(e.key, c);
-        }
+QColor SettingsManager::accentColor() const {
+    const QColor c(m_settings.value("theme/accent").toString());
+    if (c.isValid()) {
+        return c;
     }
-    return out;
+    // One-time migration: older builds stored per-theme color overrides under
+    // themeEditor/<Theme>/colors. Adopt the active theme's saved accent (if
+    // any) as the single app-wide accent; other overrides are no longer used.
+    const QString key =
+        QStringLiteral("themeEditor/%1/colors").arg(Theme::themeSettingsKey(theme()));
+    const QJsonObject obj = QJsonDocument::fromJson(m_settings.value(key).toString().toUtf8()).object();
+    return QColor(obj.value(QStringLiteral("accent")).toString()); // invalid if absent
 }
 
-void SettingsManager::setThemeOverrides(Theme::AppTheme theme, const Theme::ColorOverrides& overrides) {
-    const QString key = QStringLiteral("themeEditor/%1/colors").arg(Theme::themeSettingsKey(theme));
-    if (overrides.isEmpty()) {
-        m_settings.remove(key);
+void SettingsManager::setAccentColor(const QColor& color) {
+    if (color.isValid()) {
+        m_settings.setValue("theme/accent", color.name(QColor::HexRgb));
     } else {
-        QJsonObject obj;
-        for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it) {
-            obj.insert(it.key(), it.value().name(QColor::HexRgb));
-        }
-        m_settings.setValue(key, QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+        m_settings.remove("theme/accent");
+    }
+    // Legacy per-theme overrides are obsolete; drop them so a cleared accent
+    // does not resurrect an old one through the migration path above.
+    for (const QString& g : {QStringLiteral("DarkAurora"), QStringLiteral("LightAurora"),
+                             QStringLiteral("DarkOnyx"), QStringLiteral("LightOnyx")}) {
+        m_settings.remove(QStringLiteral("themeEditor/%1/colors").arg(g));
     }
     m_settings.sync();
 }
 
 void SettingsManager::loadThemeOverrides() const {
-    for (auto t : {Theme::AppTheme::DarkAurora, Theme::AppTheme::LightAurora, Theme::AppTheme::DarkOnyx,
-                   Theme::AppTheme::LightOnyx}) {
-        Theme::setOverrides(t, themeOverrides(t));
-    }
+    Theme::setAccent(accentColor());
 }
 
 QStringList SettingsManager::playlistPaths() const {

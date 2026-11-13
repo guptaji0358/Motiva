@@ -126,12 +126,12 @@ public:
     Theme::AppTheme theme() const;
     void setTheme(Theme::AppTheme theme);
 
-    // Per-theme color customizations from the Theme editor (sparse
-    // key -> color, stored as ONE JSON value per theme so a write is
-    // all-or-nothing). Absent/invalid data means "original palette".
-    Theme::ColorOverrides themeOverrides(Theme::AppTheme theme) const;
-    void setThemeOverrides(Theme::AppTheme theme, const Theme::ColorOverrides& overrides);
-    // Pushes every theme's saved customization into Theme (call before applyTheme).
+    // The single app-wide accent color (applies to every theme; stored once
+    // as "theme/accent"). Invalid QColor = none chosen, each theme keeps its
+    // own built-in accent. Migrates a legacy per-theme accent on first read.
+    QColor accentColor() const;
+    void setAccentColor(const QColor& color); // invalid clears
+    // Pushes the saved accent into Theme (call before applyTheme).
     void loadThemeOverrides() const;
 
     // --- Legacy (Motiva 1.1) single image playlist ---

@@ -171,10 +171,9 @@ void SettingsDialog::buildUi() {
     m_themeCombo->setToolTip(tr("Choose Motiva's visual theme."));
     connect(m_themeCombo, &GlDropdown::currentIndexChanged, this, &SettingsDialog::onThemeChanged);
     auto* customizeThemeButton =
-        addButtonRow(PgAppearance, makeDesc(tr("Edit colors, pick an accent preset, check contrast.")), tr("Customize Theme..."));
+        addButtonRow(PgAppearance, makeDesc(tr("Choose one accent color for every theme.")), tr("Accent Color..."));
     customizeThemeButton->setToolTip(
-        tr("Edit the colors of the current theme, pick an accent preset, or check text contrast. "
-           "Each theme keeps its own customization, and the original palette can always be restored."));
+        tr("Pick a single accent color used by all themes. Text and controls stay readable automatically."));
     connect(customizeThemeButton, &GlButton::clicked, this, [this] {
         ThemeEditorDialog editor(m_settings, this);
         editor.exec();

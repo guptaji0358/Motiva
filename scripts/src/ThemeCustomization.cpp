@@ -3,26 +3,17 @@
 #include <QtMath>
 #include <algorithm>
 
-// User customization of the four themes: the editable-color table, how a
-// sparse override set composes over an original palette, accent presets and
-// the WCAG contrast helper behind the theme editor's "Check contrast".
+// User customization of the four themes: the single editable accent, how it
+// composes over an original palette (hover/pressed/text-on-accent derived,
+// WCAG contrast enforced), accent presets and the contrast helper.
 // Nothing here writes settings or touches QApplication.
 namespace Theme {
 
 const QList<EditableColor>& editableColors() {
+    // Only the accent is user-editable; hover/pressed/soft/text-on-accent are
+    // derived from it in composePalette().
     static const QList<EditableColor> colors = {
-        {QStringLiteral("accent"), QStringLiteral("Main accent"), &ThemePalette::accent},
-        {QStringLiteral("accentHover"), QStringLiteral("Accent (hover)"), &ThemePalette::accentHover},
-        {QStringLiteral("accentPressed"), QStringLiteral("Accent (pressed)"), &ThemePalette::accentPressed},
-        {QStringLiteral("selectionText"), QStringLiteral("Text on accent"), &ThemePalette::selectionText},
-        {QStringLiteral("windowBg"), QStringLiteral("Window background"), &ThemePalette::windowBg},
-        {QStringLiteral("panelBg"), QStringLiteral("Panels and cards"), &ThemePalette::panelBg},
-        {QStringLiteral("baseBg"), QStringLiteral("Inputs and lists"), &ThemePalette::baseBg},
-        {QStringLiteral("buttonBg"), QStringLiteral("Buttons"), &ThemePalette::buttonBg},
-        {QStringLiteral("textPrimary"), QStringLiteral("Text"), &ThemePalette::textPrimary},
-        {QStringLiteral("textSecondary"), QStringLiteral("Secondary text"), &ThemePalette::textSecondary},
-        {QStringLiteral("border"), QStringLiteral("Borders"), &ThemePalette::border},
-        {QStringLiteral("borderStrong"), QStringLiteral("Strong borders and focus"), &ThemePalette::borderStrong},
+        {QStringLiteral("accent"), QStringLiteral("Accent color"), &ThemePalette::accent},
     };
     return colors;
 }
@@ -37,6 +28,10 @@ QColor opaque(QColor c) {
     c.setAlpha(255);
     return c;
 }
+
+// Moves `fg` toward white or black (whichever direction increases contrast
+// against `bg`) in small steps until `minRatio` is met or it hits the limit.
+QColor nudgeForContrast(const QColor& fg, const QColor& bg, double minRatio);
 } // namespace
 
 double contrastRatio(const QColor& a, const QColor& b) {
@@ -56,6 +51,9 @@ ThemePalette composePalette(const ThemePalette& base, const ColorOverrides& o) {
     // Values the user did not set explicitly follow the accent they did set,
     // so one accent pick re-colors hover/pressed/selection coherently.
     if (o.contains(QStringLiteral("accent"))) {
+        // WCAG non-text contrast (3:1) against the window background, so any
+        // chosen accent stays visible on both dark and light themes.
+        p.accent = nudgeForContrast(p.accent, p.windowBg, 3.0);
         const QColor a = p.accent;
         if (!o.contains(QStringLiteral("accentHover"))) {
             p.accentHover = p.isDark ? a.lighter(118) : a.lighter(112);
@@ -72,37 +70,35 @@ ThemePalette composePalette(const ThemePalette& base, const ColorOverrides& o) {
     return p;
 }
 
+void setAccent(const QColor& accent) {
+    ColorOverrides o;
+    if (accent.isValid()) {
+        o.insert(QStringLiteral("accent"), accent);
+    }
+    for (auto t : {AppTheme::DarkAurora, AppTheme::LightAurora, AppTheme::DarkOnyx, AppTheme::LightOnyx}) {
+        setOverrides(t, o);
+    }
+}
+
 const QList<AccentPreset>& accentPresets() {
     static const QList<AccentPreset> presets = {
         {QStringLiteral("Electric Violet"), QColor(0x7c, 0x3a, 0xed)},
-        {QStringLiteral("Magenta Pop"), QColor(0xd9, 0x2b, 0x8f)},
+        {QStringLiteral("Indigo"), QColor(0x4f, 0x46, 0xe5)},
         {QStringLiteral("Ocean Blue"), QColor(0x1f, 0x7a, 0xe0)},
+        {QStringLiteral("Sky"), QColor(0x0e, 0x9e, 0xd9)},
         {QStringLiteral("Teal Surge"), QColor(0x0e, 0x9f, 0x9a)},
+        {QStringLiteral("Emerald"), QColor(0x2e, 0x9e, 0x4f)},
+        {QStringLiteral("Lime"), QColor(0x84, 0xb8, 0x1a)},
+        {QStringLiteral("Amber"), QColor(0xe0, 0x9a, 0x0c)},
         {QStringLiteral("Sunset Orange"), QColor(0xe8, 0x6a, 0x1c)},
         {QStringLiteral("Crimson"), QColor(0xd1, 0x34, 0x4a)},
+        {QStringLiteral("Magenta Pop"), QColor(0xd9, 0x2b, 0x8f)},
+        {QStringLiteral("Rose"), QColor(0xf4, 0x5b, 0x8d)},
     };
     return presets;
 }
 
 namespace {
-struct Pair {
-    const char* fg;
-    const char* bg;
-    double minRatio;
-    const char* reason;
-};
-
-QColor* slot(ThemePalette& p, const QString& key) {
-    for (const EditableColor& e : editableColors()) {
-        if (e.key == key) {
-            return &(p.*(e.member));
-        }
-    }
-    return nullptr;
-}
-
-// Moves `fg` toward white or black (whichever direction increases contrast
-// against `bg`) in small steps until `minRatio` is met or it hits the limit.
 QColor nudgeForContrast(const QColor& fg, const QColor& bg, double minRatio) {
     const bool towardWhite = relativeLuminance(bg) < 0.5;
     const QColor target = towardWhite ? QColor(Qt::white) : QColor(Qt::black);
@@ -115,62 +111,5 @@ QColor nudgeForContrast(const QColor& fg, const QColor& bg, double minRatio) {
     return c;
 }
 } // namespace
-
-QList<ContrastFix> proposeContrastFixes(const ThemePalette& palette) {
-    static const Pair pairs[] = {
-        {"textPrimary", "windowBg", 4.5, "Text on the window background"},
-        {"textPrimary", "panelBg", 4.5, "Text on panels and cards"},
-        {"textPrimary", "baseBg", 4.5, "Text in inputs and lists"},
-        {"textPrimary", "buttonBg", 4.5, "Text on buttons"},
-        {"textSecondary", "windowBg", 4.5, "Secondary text on the window background"},
-        {"selectionText", "accent", 4.5, "Text on the accent color"},
-        {"accent", "windowBg", 3.0, "Accent against the window background"},
-    };
-
-    ThemePalette work = palette; // fixes accumulate so later pairs see earlier ones
-    QHash<QString, ContrastFix> byKey;
-    QStringList order;
-    for (const Pair& pr : pairs) {
-        QColor* fg = slot(work, QLatin1String(pr.fg));
-        QColor* bg = slot(work, QLatin1String(pr.bg));
-        if (!fg || !bg || contrastRatio(*fg, *bg) >= pr.minRatio) {
-            continue;
-        }
-        const QString key = QLatin1String(pr.fg);
-        QColor fixed;
-        if (key == QLatin1String("selectionText")) {
-            fixed = contrastRatio(Qt::white, *bg) >= contrastRatio(Qt::black, *bg) ? QColor(Qt::white)
-                                                                                   : QColor(Qt::black);
-        } else {
-            fixed = nudgeForContrast(*fg, *bg, pr.minRatio);
-        }
-        if (fixed == opaque(*fg)) {
-            continue;
-        }
-        if (!byKey.contains(key)) {
-            ContrastFix f;
-            f.key = key;
-            for (const EditableColor& e : editableColors()) {
-                if (e.key == key) {
-                    f.label = e.label;
-                }
-            }
-            f.reason = QLatin1String(pr.reason);
-            f.from = *fg;
-            f.before = contrastRatio(*fg, *bg);
-            byKey.insert(key, f);
-            order << key;
-        }
-        ContrastFix& f = byKey[key];
-        f.to = fixed;
-        f.after = contrastRatio(fixed, *bg);
-        *fg = fixed;
-    }
-    QList<ContrastFix> out;
-    for (const QString& k : order) {
-        out << byKey.value(k);
-    }
-    return out;
-}
 
 } // namespace Theme

@@ -89,28 +89,19 @@ ThemePalette composePalette(const ThemePalette& base, const ColorOverrides& over
 ColorOverrides overrides(AppTheme theme);
 void setOverrides(AppTheme theme, const ColorOverrides& overrides);
 
+// The one app-wide accent: applies the same accent override to ALL four
+// themes (an invalid color clears it, restoring each theme's own accent).
+// Updates the in-memory palettes only; callers re-run applyTheme().
+void setAccent(const QColor& accent);
+
 struct AccentPreset {
     QString name;
     QColor accent;
 };
-const QList<AccentPreset>& accentPresets(); // first entry = Electric Violet
+const QList<AccentPreset>& accentPresets(); // 12 selectable accents, first = Electric Violet
 
 // WCAG contrast ratio (1..21).
 double contrastRatio(const QColor& a, const QColor& b);
-
-struct ContrastFix {
-    QString key;     // editable color to change
-    QString label;
-    QString reason;  // e.g. "Text on window background"
-    QColor from;
-    QColor to;
-    double before;
-    double after;
-};
-// Never mutates anything: returns the adjustments that would bring the
-// palette's key foreground/background pairs up to readable contrast, for
-// the caller to explain and preview.
-QList<ContrastFix> proposeContrastFixes(const ThemePalette& palette);
 
 // "Dark Aurora" etc - for the Settings Theme combo box, in the exact
 // order that combo lists them (matches AppTheme's own ordinal order).

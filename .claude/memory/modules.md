@@ -41,7 +41,7 @@ Read the header first; this file only says what each piece owns.
 - **VideoPlayer** — QMediaPlayer/QVideoSink, shared decode, `durationMs()`,
   `loadFile()` accepts local paths or http(s) URLs; `isUsableVideoSource()` checks.
 - **SettingsManager** — QSettings wrapper (`app/*`, `backup/*`, `cloud/*`,
-  `notifications/*`, `themeEditor/<Theme>/colors`, `explorerLastPlaylistId`,
+  `notifications/*`, `theme/accent` (legacy `themeEditor/<Theme>/colors` migrated+removed), `explorerLastPlaylistId`,
   `settingsLayout`, `wasWallpaperActive`).
 - **SettingsDialog** — pages: General, Appearance, Display and Playback,
   Notifications, Integration; layout styles 0 Tabs / 1 Sidebar / 2 Grouped.
@@ -110,9 +110,12 @@ Read the header first; this file only says what each piece owns.
 - **GlWindow** — borderless utility-window base, title strip, `GlStack` layout,
   shared delegates (`GlTextDelegate`, `GlCheckRowDelegate`, `GlTableDelegate`).
 - **GlPopups** — `GlMenu` (QMenu-shaped) and `GlMessageBox` (`getText`, `getItem`).
-- **GlColor** — `GlColorDialog`, `GlSwatchButton`, contrast-fix list.
-- **Theme / ThemeCustomization** — palette tokens, per-theme sparse overrides,
-  accent presets, WCAG contrast fixes; `Theme::tintedIcon` (cached).
+- **GlColor** — `GlColorDialog`, `GlSwatchButton`.
+- **Theme / ThemeCustomization** — palette tokens; ONE global accent
+  (`Theme::setAccent` sets an accent override on all 4 themes; hover/pressed/
+  soft/text-on-accent derived, accent nudged to >=3:1 vs window bg); 12 presets;
+  `ThemeEditorDialog` = "Accent Color" chip picker (+custom, live preview,
+  Apply/Cancel; built, not runtime-verified); `Theme::tintedIcon` (cached).
 - **NotificationManager** — single routing point for toasts (`ToastHost`) and
   desktop notifications; de-duplication and flood guard.
 - **MotivaToolTip** — one app-level tooltip popup replacing Qt's tip label.

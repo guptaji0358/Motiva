@@ -58,7 +58,7 @@ Native C++ · Qt 6 · Win32 · DirectComposition · a GPU-drawn UI. No Electron.
 <summary><b>🎨 Make it yours</b></summary>
 
 - Four built-in themes: Dark/Light **Aurora**, Dark/Light **Onyx**
-- Theme editor with per-color overrides, accent presets and automatic **WCAG contrast fixes**
+- Single app-wide **Accent Color** (12 presets or custom) that works with every theme, with automatic WCAG contrast
 - Tabs, sidebar or grouped Settings layouts
 - A custom Motiva tooltip and toast system that follow your theme
 
