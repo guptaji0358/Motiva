@@ -7,7 +7,11 @@
 (() => {
   if (window.top !== window && window.innerWidth < 160) return; // tiny ad frames
 
-  const MIN_SIZE = 120; // px - skip icons, avatars, tracking pixels
+  // px - skip icons, avatars, tracking pixels. Wide/tall thumbnails (e.g. the
+  // 200x103 cells of a Google Images grid) are real media, so the two sides
+  // are bounded separately instead of requiring both to reach 120.
+  const MIN_LONG = 120;
+  const MIN_SHORT = 80;
   const CHUNK = 384 * 1024;
 
   let overlayEnabled = true;
@@ -150,7 +154,9 @@
   let toastTimer = 0;
 
   function mount() {
-    if (!host.isConnected) (document.body || document.documentElement).appendChild(host);
+    // On <html>, not <body>: a transform/filter/contain on body would make this
+    // position:fixed host (and the button) relative to body instead of the viewport.
+    if (!host.isConnected) document.documentElement.appendChild(host);
   }
 
   function showToast(text, level) {
@@ -176,11 +182,38 @@
   function eligible(el) {
     if (!(el instanceof HTMLImageElement || el instanceof HTMLVideoElement)) return null;
     const r = el.getBoundingClientRect();
-    if (r.width < MIN_SIZE || r.height < MIN_SIZE) return null;
+    if (Math.min(r.width, r.height) < MIN_SHORT || Math.max(r.width, r.height) < MIN_LONG) return null;
     const src = mediaSource(el);
     if (!/^(https?|blob|data):/i.test(src)) return null;
     if (/^data:image\/svg/i.test(src)) return null;
     return { el, src, kind: el instanceof HTMLVideoElement ? 'video' : 'image', rect: r };
+  }
+
+  // Debug only (chrome.storage.local.debugCompat = true): says which stage
+  // stopped the button for the element under the pointer. Logged on change.
+  function whyNot(el) {
+    if (!(el instanceof HTMLImageElement || el instanceof HTMLVideoElement)) return 'not-media';
+    const r = el.getBoundingClientRect();
+    if (Math.min(r.width, r.height) < MIN_SHORT || Math.max(r.width, r.height) < MIN_LONG) return `too-small ${Math.round(r.width)}x${Math.round(r.height)}`;
+    const src = mediaSource(el);
+    if (!/^(https?|blob|data):/i.test(src)) return 'bad-src:' + src.slice(0, 12);
+    if (/^data:image\/svg/i.test(src)) return 'svg';
+    return 'eligible';
+  }
+  let lastStage = '';
+  function traceStages(hit, a) {
+    let stack = [];
+    try {
+      stack = document.elementsFromPoint(lastX, lastY).slice(0, 5).map((e) => {
+        const t = (e.tagName || '?').toLowerCase();
+        return `${t}:${whyNot(e)}`;
+      });
+    } catch (e) {}
+    const stage = hit ? (a && a.visible ? (a.lowRes ? 'placed(low-res)' : 'placed') : 'hidden-by-compat') : 'no-eligible-media';
+    const line = `${stage}|${stack.join(',')}`;
+    if (line === lastStage) return;
+    lastStage = line;
+    console.debug('[Motiva stage]', stage, { x: lastX, y: lastY, stack, src: hit ? hit.src.slice(0, 60) : '' });
   }
 
   function findUnder(x, y) {
@@ -267,6 +300,7 @@
     const hit = findUnder(lastX, lastY);
     const a = hit ? assess(hit.el) : null;
     const ok = !a || a.visible;
+    if (compatDebug) traceStages(hit, a);
     reportContextMenu(ok);
     if (hit && ok) {
       hit.lowRes = a.lowRes;

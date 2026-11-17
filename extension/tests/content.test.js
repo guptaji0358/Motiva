@@ -41,7 +41,7 @@ function setup() {
   class HTMLVideoElement { constructor(w, h, src) { Object.assign(this, { videoWidth: w, videoHeight: h, src, currentSrc: src, isConnected: true, nodeType: 1, rect: { left: 50, top: 50, width: 400, height: 300 } }); } getBoundingClientRect() { return this.rect; } querySelector() { return null; } }
   const host = { isConnected: false, style: {}, attachShadow: () => ({ set innerHTML(v) {}, getElementById: (id) => parts[id === 'toast' ? 'toast' : id] }) };
   let stack = []; // elements under the pointer
-  const documentElement = { addEventListener() {}, querySelector: () => null };
+  const documentElement = { addEventListener() {}, querySelector: () => null, appendChild: () => { host.isConnected = true; } };
   const document = {
     createElement: () => host.__used ? stub() : ((host.__used = true), host),
     documentElement, body: { appendChild: () => { host.isConnected = true; } },
@@ -271,4 +271,98 @@ test('thresholds unchanged', () => {
   require('../compat.js');
   const { THRESHOLDS } = globalThis.MotivaCompat;
   assert.deepEqual({ ...THRESHOLDS }, { MAX_UPSCALE: 1.25, MAX_CROP: 0.3 });
+});
+
+// ---- Google Images grid regression: thumbnails render ~200x103 (wide), which
+// the old "both sides >= 120" rule rejected.
+const thumb = (t, w = 246, h = 138, rect = { left: 10, top: 10, width: 200, height: 103 }) => {
+  const im = t.img(w, h, 'data:image/jpeg;base64,/9j/4AA');
+  im.rect = rect;
+  return im;
+};
+
+test('wide grid thumbnail (200x103, data: src) shows low-res button', () => {
+  const t = setup();
+  assert.deepEqual(show(t, thumb(t)), [true, 'btn low']);
+});
+
+test('tiny/square icons, avatars and thin banners are still ignored', () => {
+  const t = setup();
+  for (const rect of [{ width: 64, height: 64 }, { width: 100, height: 100 }, { width: 400, height: 60 }, { width: 1, height: 1 }]) {
+    const im = t.img(1920, 1080); im.rect = { left: 0, top: 0, ...rect };
+    t.advance(200);
+    assert.equal(show(t, im)[0], false, JSON.stringify(rect));
+  }
+});
+
+test('thumbnail inside nested clickable containers: overlays skipped, image selected', () => {
+  const t = setup(), im = thumb(t);
+  const overlay = { nodeType: 1 }, anchor = { nodeType: 1 }; // non-media parents/overlays
+  t.under(overlay, im, anchor); t.advance(200); t.move(100, 100);
+  assert.equal(t.visible(), true);
+  assert.equal(t.parts.btn.style.left, '18px'); // anchored to the img, not a container
+});
+
+test('moving between adjacent thumbnails re-targets the button each time', () => {
+  const t = setup();
+  const a = thumb(t), b = thumb(t, 246, 134, { left: 220, top: 10, width: 200, height: 103 });
+  t.under(a); t.move(50, 50); assert.equal(t.parts.btn.style.left, '18px');
+  t.advance(200); t.under(b); t.move(260, 50);
+  assert.equal(t.parts.btn.style.left, '228px');
+  t.advance(200); t.under(); t.move(215, 50); // gap between cells
+  assert.equal(t.visible(), false);
+});
+
+test('mixed grid: compatible, low-res and unknown-size thumbnails', () => {
+  const t = setup();
+  const big = thumb(t, 1920, 1080), small = thumb(t), unknown = thumb(t, 0, 0);
+  assert.deepEqual(show(t, big), [true, 'btn']);
+  t.advance(200); assert.deepEqual(show(t, small), [true, 'btn low']);
+  t.advance(200); assert.equal(show(t, unknown)[0], false);
+});
+
+test('lazy-loaded thumbnail: placeholder -> real src/size under stationary pointer', () => {
+  const t = setup(), im = thumb(t, 0, 0, { left: 10, top: 10, width: 200, height: 103 });
+  im.src = im.currentSrc = 'data:image/gif;base64,R0lGOD';
+  assert.equal(show(t, im)[0], false); // size unknown yet
+  im.naturalWidth = 246; im.naturalHeight = 138;
+  im.src = im.currentSrc = 'data:image/jpeg;base64,/9j/4AA';
+  t.mos[0]([{ type: 'attributes', target: im }]); t.advance(100);
+  assert.deepEqual([t.visible(), t.parts.btn.className], [true, 'btn low']);
+});
+
+test('dynamically added grid thumbnails are picked up', () => {
+  const t = setup();
+  t.move(100, 100); // pointer over empty area
+  assert.equal(t.visible(), false);
+  const im = thumb(t); t.under(im);
+  t.mos[0]([{ type: 'childList', addedNodes: [im], removedNodes: [] }]); t.advance(100);
+  assert.equal(t.visible(), true);
+});
+
+test('grid thumbnail -> opened preview -> back to grid', () => {
+  const t = setup();
+  const th = thumb(t), preview = t.img(1920, 1080, 'https://a/full.jpg');
+  preview.rect = { left: 400, top: 40, width: 700, height: 394 };
+  assert.deepEqual(show(t, th), [true, 'btn low']);
+  t.advance(200); t.under(preview, th); t.move(500, 100); // preview overlays grid
+  assert.deepEqual([t.visible(), t.parts.btn.className, t.parts.btn.style.left], [true, 'btn', '408px']);
+  t.advance(200); t.under(th); t.move(50, 50); // preview closed
+  assert.deepEqual([t.visible(), t.parts.btn.className, t.parts.btn.style.left], [true, 'btn low', '18px']);
+});
+
+test('debug trace names the stage that stopped the button; silent when off', () => {
+  const t = setup();
+  const lines = [];
+  t.ctx.console = { debug: (...a) => lines.push(a) };
+  t.under(t.img(200, 103, 'data:image/jpeg;base64,AAAA')); t.move(100, 100);
+  assert.equal(lines.length, 0, 'no output unless debugCompat is on');
+  t.ctx.__storageChanged({ debugCompat: { newValue: true } });
+  t.advance(200); t.move(101, 101);
+  assert.equal(lines.some((l) => l[0] === '[Motiva stage]' && l[1] === 'placed(low-res)'), true);
+  const tiny = t.img(40, 40); tiny.rect = { left: 0, top: 0, width: 40, height: 40 };
+  t.advance(200); t.under(tiny); t.move(102, 102);
+  const last = lines.filter((l) => l[0] === '[Motiva stage]').pop();
+  assert.equal(last[1], 'no-eligible-media');
+  assert.match(last[2].stack[0], /too-small 40x40/);
 });
