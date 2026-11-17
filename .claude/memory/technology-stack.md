@@ -41,7 +41,7 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   `nativeMessaging`, `storage`; `host_permissions` `<all_urls>`.
 - Fixed extension ID through the `key` field; same ID in
   `BrowserIntegration::kExtensionId` and the host's origin check.
-- Files: `background.js` (service worker), `content.js` (hover button, shadow DOM),
+- Files: `background.js` (service worker), `content.js` (hover button, closed shadow DOM host mounted on <html>, not <body>),
   `popup.html`/`popup.js`, `compat.js` (resolution compatibility, loaded before
   `content.js`).
 - Resolution-Based Compatibility (verified with node on `compat.js` only; not
@@ -78,7 +78,8 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   pane) -> `display-unknown`, shown (previously this hid EVERYTHING); unknown
   media size -> hidden until `load`/`loadedmetadata`. Debug: set
   `chrome.storage.local.debugCompat = true` to log state/media/display/dpr in
-  the page console. Tests: `node --test extension/tests` (`compat.test.js`
+  the page console, plus a `[Motiva stage]` line (placed / hidden-by-compat /
+  no-eligible-media + top-5 `elementsFromPoint` with reject reasons). Tests: `node --test extension/tests` (`compat.test.js`
   evaluator; `content.test.js` runs `content.js` in a fake-DOM vm harness).
 - Visibility state (2026-11-13, verified by `content.test.js`, not in a live
   browser): `syncButton()` owns visibility; every branch ends shown-on-`current`
@@ -88,6 +89,9 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   re-checks it. Overlay toggle in storage calls `syncButton()`. Scroll hides at
   once, one 120ms-debounced re-sync at the stationary pointer. `mouseout` with
   null `relatedTarget` clears pointer/media state and hides.
+  Eligibility (verified on Google Images grid): rendered short side >= 80px and
+  long side >= 120px (was both >= 120, which rejected 200x103 grid thumbnails;
+  those are data: URIs ~246x138 natural, shown with the low-res marker).
 
 ## Packaging
 
