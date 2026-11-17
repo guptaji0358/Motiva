@@ -24,4 +24,12 @@ try:
 except OSError as e:
     print(json.dumps({"ok": False, "error": "copy failed: %s" % e}))
     sys.exit(0)
-print(json.dumps({"ok": True, "deployed": dst, "bytes": os.path.getsize(dst)}))
+# Chrome loads the extension from the deployed folder, so keep it in sync.
+ext_src = os.path.join(root, "extension")
+ext_dst = os.path.join(root, "deployment", "resources", "bin", "extension")
+try:
+    shutil.copytree(ext_src, ext_dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("tests"))
+except OSError as e:
+    print(json.dumps({"ok": False, "error": "extension copy failed: %s" % e}))
+    sys.exit(0)
+print(json.dumps({"ok": True, "deployed": dst, "bytes": os.path.getsize(dst), "extension": ext_dst}))
