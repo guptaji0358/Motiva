@@ -7,7 +7,11 @@
 (() => {
   if (window.top !== window && window.innerWidth < 160) return; // tiny ad frames
 
-  const MIN_SIZE = 120; // px - skip icons, avatars, tracking pixels
+  // px - skip icons, avatars, tracking pixels. Wide/tall thumbnails (e.g. the
+  // 200x103 cells of a Google Images grid) are real media, so the two sides
+  // are bounded separately instead of requiring both to reach 120.
+  const MIN_LONG = 120;
+  const MIN_SHORT = 80;
   const CHUNK = 384 * 1024;
 
   let overlayEnabled = true;
@@ -21,7 +25,10 @@
     });
     chrome.storage.onChanged.addListener((changes) => {
       if (changes.debugCompat) compatDebug = changes.debugCompat.newValue === true;
-      if (changes.overlay) overlayEnabled = changes.overlay.newValue !== false;
+      if (changes.overlay) {
+        overlayEnabled = changes.overlay.newValue !== false;
+        syncButton(); // disabled -> hides immediately; enabled -> re-derives
+      }
       if (changes.resolutionCompat) {
         compatEnabled = changes.resolutionCompat.newValue !== false;
         reportContextMenu(true);
@@ -46,25 +53,71 @@
     return { width: el.naturalWidth, height: el.naturalHeight };
   }
 
-  // visible = compatEnabled ? compatible : previous behaviour (always true).
-  // Unknown size (metadata not loaded / invalid) is not shown; the load and
-  // loadedmetadata listeners below re-run this when it becomes known.
+  // Best-known source size of an <img>, with no decoding and no requests:
+  // the decoded natural size, or a larger candidate the page itself declares
+  // in srcset ('w' = width, 'x' = density x rendered width; aspect ratio
+  // from the natural size, else the rendered box). URL words like "original"
+  // prove nothing and are ignored. Parsed once per distinct srcset string.
+  const srcsetCache = new WeakMap(); // el -> { str, list: [{ w?, x? }] }
+  function parseSrcset(el) {
+    const str = el.srcset || '';
+    const hit = srcsetCache.get(el);
+    if (hit && hit.str === str) return hit.list;
+    const list = [];
+    for (const part of str.split(',')) {
+      const bits = part.trim().split(/\s+/);
+      if (!bits[0] || bits.length > 2) continue;
+      const m = bits[1] && /^(\d+(?:\.\d+)?)([wx])$/i.exec(bits[1]);
+      if (!m) continue;
+      const n = parseFloat(m[1]);
+      if (!(n > 0) || !isFinite(n)) continue;
+      list.push(m[2].toLowerCase() === 'w' ? { w: n } : { x: n });
+    }
+    srcsetCache.set(el, { str, list });
+    return list;
+  }
+
+  function sourceSize(el) {
+    if (!(el instanceof HTMLImageElement)) return mediaSize(el);
+    const nat = mediaSize(el);
+    const natOk = nat.width > 0 && nat.height > 0;
+    const box = el.getBoundingClientRect();
+    const ar = natOk ? nat.width / nat.height : box.height > 0 ? box.width / box.height : 0;
+    let best = natOk ? nat : { width: 0, height: 0 };
+    if (!(ar > 0)) return best;
+    for (const c of parseSrcset(el)) {
+      const width = c.w || (box.width > 0 ? box.width * c.x : 0);
+      if (width > best.width) best = { width, height: width / ar };
+    }
+    return best;
+  }
+
+  // Three outcomes, never a silent "compatible":
+  //   visible && !lowRes  compatible source
+  //   visible && lowRes   best-known image source fails the unchanged
+  //                       thresholds: shown with a low-resolution marker
+  //   !visible            unknown size (not invented) or incompatible video
   let lastTrace = '';
-  function isCompatible(el) {
-    const media = mediaSize(el);
+  function assess(el) {
+    const media = sourceSize(el);
     const display = displaySize();
     const d = MotivaCompat.decide(compatEnabled, media, display);
     if (compatDebug) {
-      const line = `${d.state}|${media.width}x${media.height}|${display.width}x${display.height}`;
+      const nat = mediaSize(el);
+      const line = `${d.state}|${nat.width}x${nat.height}|${media.width}x${media.height}|${display.width}x${display.height}`;
       if (line !== lastTrace) {
         lastTrace = line;
         console.debug('[Motiva compat]', d.state, {
-          media, display, dpr: window.devicePixelRatio, screen: [screen.width, screen.height],
+          natural: nat, best: media, display, dpr: window.devicePixelRatio, screen: [screen.width, screen.height],
           enabled: compatEnabled, reason: d.result && d.result.reason, src: mediaSource(el).slice(0, 80),
         });
       }
     }
-    return d.visible;
+    const lowRes = d.state === 'incompatible' && el instanceof HTMLImageElement;
+    return { visible: d.visible || lowRes, lowRes };
+  }
+  function isCompatible(el) {
+    return assess(el).visible;
   }
 
   // ----------------------------------------------------------------- UI
@@ -78,6 +131,7 @@
         background:rgba(18,18,24,.88);color:#fff;font:600 12px/1 system-ui,Segoe UI,sans-serif;cursor:pointer;
         border:1px solid rgba(255,255,255,.22);box-shadow:0 2px 10px rgba(0,0,0,.45);user-select:none;backdrop-filter:blur(6px)}
       .btn:hover{background:rgba(52,92,255,.95)}
+      .btn.low .dot{background:#f5a524}.btn.low::after{content:'low-res';font-weight:500;opacity:.75;font-size:11px}
       .dot{width:8px;height:8px;border-radius:50%;background:#5b8cff}
       .menu{position:fixed;display:none;min-width:190px;max-width:260px;max-height:320px;overflow:auto;padding:4px;border-radius:10px;
         background:rgba(24,24,32,.97);color:#f2f2f6;font:13px/1.3 system-ui,Segoe UI,sans-serif;
@@ -100,7 +154,9 @@
   let toastTimer = 0;
 
   function mount() {
-    if (!host.isConnected) (document.body || document.documentElement).appendChild(host);
+    // On <html>, not <body>: a transform/filter/contain on body would make this
+    // position:fixed host (and the button) relative to body instead of the viewport.
+    if (!host.isConnected) document.documentElement.appendChild(host);
   }
 
   function showToast(text, level) {
@@ -126,11 +182,38 @@
   function eligible(el) {
     if (!(el instanceof HTMLImageElement || el instanceof HTMLVideoElement)) return null;
     const r = el.getBoundingClientRect();
-    if (r.width < MIN_SIZE || r.height < MIN_SIZE) return null;
+    if (Math.min(r.width, r.height) < MIN_SHORT || Math.max(r.width, r.height) < MIN_LONG) return null;
     const src = mediaSource(el);
     if (!/^(https?|blob|data):/i.test(src)) return null;
     if (/^data:image\/svg/i.test(src)) return null;
     return { el, src, kind: el instanceof HTMLVideoElement ? 'video' : 'image', rect: r };
+  }
+
+  // Debug only (chrome.storage.local.debugCompat = true): says which stage
+  // stopped the button for the element under the pointer. Logged on change.
+  function whyNot(el) {
+    if (!(el instanceof HTMLImageElement || el instanceof HTMLVideoElement)) return 'not-media';
+    const r = el.getBoundingClientRect();
+    if (Math.min(r.width, r.height) < MIN_SHORT || Math.max(r.width, r.height) < MIN_LONG) return `too-small ${Math.round(r.width)}x${Math.round(r.height)}`;
+    const src = mediaSource(el);
+    if (!/^(https?|blob|data):/i.test(src)) return 'bad-src:' + src.slice(0, 12);
+    if (/^data:image\/svg/i.test(src)) return 'svg';
+    return 'eligible';
+  }
+  let lastStage = '';
+  function traceStages(hit, a) {
+    let stack = [];
+    try {
+      stack = document.elementsFromPoint(lastX, lastY).slice(0, 5).map((e) => {
+        const t = (e.tagName || '?').toLowerCase();
+        return `${t}:${whyNot(e)}`;
+      });
+    } catch (e) {}
+    const stage = hit ? (a && a.visible ? (a.lowRes ? 'placed(low-res)' : 'placed') : 'hidden-by-compat') : 'no-eligible-media';
+    const line = `${stage}|${stack.join(',')}`;
+    if (line === lastStage) return;
+    lastStage = line;
+    console.debug('[Motiva stage]', stage, { x: lastX, y: lastY, stack, src: hit ? hit.src.slice(0, 60) : '' });
   }
 
   function findUnder(x, y) {
@@ -149,6 +232,7 @@
     const r = hit.rect;
     const left = Math.max(4, Math.min(window.innerWidth - 90, r.left + 8));
     const top = Math.max(4, Math.min(window.innerHeight - 34, r.top + 8));
+    btn.className = hit.lowRes ? 'btn low' : 'btn';
     btn.style.left = left + 'px';
     btn.style.top = top + 'px';
     btn.style.display = 'flex';
@@ -175,17 +259,51 @@
     }
   }
 
-  function syncButton() {
+  // syncButton() is the single owner of button visibility; every branch ends
+  // in an explicit state: shown on `current`, or hidden with current = null.
+  function hideAll() {
+    btn.style.display = 'none';
+    menu.style.display = 'none';
+    current = null;
+  }
+
+  // The media a menu/button action would act on is still the same live,
+  // compatible element it was when the menu opened.
+  function currentValid() {
+    const c = current;
+    return !!(c && c.el.isConnected && mediaSource(c.el) === c.src && isCompatible(c.el));
+  }
+
+  // The single owner of trailTimer: every timer fires through here, so the
+  // handle is cleared exactly when its timer has run. syncButton() never
+  // touches trailTimer, so a direct call cannot orphan a pending timer.
+  function runTrail() {
     trailTimer = 0;
-    if (!alive()) {
-      btn.style.display = 'none';
+    lastMove = performance.now();
+    syncButton();
+  }
+
+  function syncButton() {
+    if (!alive() || !overlayEnabled || lastX < 0) {
+      hideAll();
       return;
     }
-    if (!overlayEnabled || menu.style.display === 'block' || overHost || lastX < 0) return;
+    if (menu.style.display === 'block') {
+      // Menu open: keep it (and its media) only while that media is valid.
+      if (currentValid()) return;
+      hideAll();
+    } else if (overHost) {
+      // Pointer is on the button itself: keep it, but never for dead media.
+      if (currentValid()) return;
+      hideAll();
+    }
     const hit = findUnder(lastX, lastY);
-    const ok = !hit || isCompatible(hit.el);
+    const a = hit ? assess(hit.el) : null;
+    const ok = !a || a.visible;
+    if (compatDebug) traceStages(hit, a);
     reportContextMenu(ok);
     if (hit && ok) {
+      hit.lowRes = a.lowRes;
       current = hit;
       placeButton(hit);
     } else {
@@ -204,8 +322,15 @@
       lastY = e.clientY;
       const now = performance.now();
       if (now - lastMove < 80) {
-        if (!trailTimer) trailTimer = setTimeout(syncButton, 90);
+        // Trailing edge: one timer, due when the current window ends.
+        if (!trailTimer) trailTimer = setTimeout(runTrail, lastMove + 80 - now);
         return;
+      }
+      // Leading edge: this sync reads the latest coordinates, so any pending
+      // timer is redundant and is cleared rather than left to run again.
+      if (trailTimer) {
+        clearTimeout(trailTimer);
+        trailTimer = 0;
       }
       lastMove = now;
       syncButton();
@@ -217,7 +342,7 @@
   // 'resize' (capture only, it does not bubble) fires on a <video> whose
   // intrinsic dimensions change.
   function scheduleSync(delay) {
-    if (!trailTimer) trailTimer = setTimeout(syncButton, delay);
+    if (!trailTimer) trailTimer = setTimeout(runTrail, delay);
   }
   for (const type of ['load', 'loadedmetadata', 'emptied', 'resize']) {
     document.addEventListener(type, (e) => {
@@ -268,6 +393,8 @@
     observer.disconnect();
     clearTimeout(trailTimer);
     trailTimer = 0;
+    clearTimeout(scrollTimer); // pending post-scroll sync must not run later
+    scrollTimer = 0;
   }
   startObserving();
   // Initial page initialisation, and bfcache restore (pagehide disconnects).
@@ -316,15 +443,45 @@
     window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', refreshButton);
   } catch (e) {}
 
+  // Scrolling moves media under a stationary pointer: hide at once (the
+  // button would be misplaced), then re-evaluate once scrolling settles.
+  // One timer, restarted per event, so rapid scrolling costs one sync.
+  let scrollTimer = 0;
   document.addEventListener('scroll', () => {
     btn.style.display = 'none';
     menu.style.display = 'none';
+    current = null;
+    overHost = false;
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => {
+      scrollTimer = 0;
+      syncButton();
+    }, 120);
+  }, { passive: true, capture: true });
+
+  // Pointer left the page/frame (relatedTarget null; moving into our own
+  // shadow host stays inside the document so it never fires this).
+  function pointerLeft() {
+    clearTimeout(trailTimer);
+    clearTimeout(scrollTimer);
+    trailTimer = scrollTimer = 0;
+    lastX = lastY = -1;
+    overHost = false;
+    lastCtx = null;
+    hideAll();
+  }
+  document.addEventListener('mouseout', (e) => {
+    if (!e.relatedTarget) pointerLeft();
   }, { passive: true, capture: true });
 
   // ------------------------------------------------------------- menu
   function send(action, playlistId) {
     if (!current) return;
     menu.style.display = 'none';
+    if (!currentValid()) {
+      syncButton();
+      return;
+    }
     chrome.runtime.sendMessage({
       type: 'send',
       action,
@@ -332,6 +489,7 @@
       src: current.src,
       pageUrl: location.href,
       kind: current.kind,
+      lowRes: !!current.lowRes,
     });
   }
 

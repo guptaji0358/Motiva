@@ -41,7 +41,7 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   `nativeMessaging`, `storage`; `host_permissions` `<all_urls>`.
 - Fixed extension ID through the `key` field; same ID in
   `BrowserIntegration::kExtensionId` and the host's origin check.
-- Files: `background.js` (service worker), `content.js` (hover button, shadow DOM),
+- Files: `background.js` (service worker), `content.js` (hover button, closed shadow DOM host mounted on <html>, not <body>),
   `popup.html`/`popup.js`, `compat.js` (resolution compatibility, loaded before
   `content.js`).
 - Resolution-Based Compatibility (verified with node on `compat.js` only; not
@@ -50,8 +50,10 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   scale <= 1.25 and crop <= 30%. Setting `resolutionCompat` in
   `chrome.storage.local` (default on), toggled in the extension popup, not in
   Motiva's Qt settings. Image `naturalWidth/Height`, video `videoWidth/Height`.
-  Button state is derived by `syncButton()` in `content.js` (throttled move
-  with trailing run, plus `load`/`loadedmetadata`/`emptied`/video `resize`
+  Button state is derived by `syncButton()` in `content.js` (mousemove throttled
+  to an 80 ms window with one pending trailing timer owned by `runTrail()`;
+  measured ~12 syncs/s under continuous (~60 Hz) or rapid CDP pointer movement in
+  headless Chrome (HEAD before the fix: ~42-53/s); plus `load`/`loadedmetadata`/`emptied`/video `resize`
   re-check, a `MutationObserver` (img/video add/remove, src/srcset/poster
   changes; ignores the extension's own host; disconnects on pagehide/orphaning,
   restarts on bfcache pageshow) and DOMContentLoaded/load syncs; all go through
@@ -65,13 +67,31 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   needs --enable-unsafe-extension-debugging; --load-extension is ignored): image/video
   compatible shows, incompatible hides, toggle off shows. Pre-fix HEAD behaved the same
   here, so a user-side hide-all was NOT reproduced; use debugCompat to capture it.
+- Source-aware states (`content.js` `sourceSize()`/`assess()`; verified by node
+  tests only, NOT yet in real Chrome): size = decoded natural size or a larger
+  `srcset` candidate (`w`, or `x` * rendered width; no requests, parse cached
+  per srcset string). Compatible -> normal button; known-but-failing image ->
+  button with `low` class ("low-res" marker), `send` carries `lowRes`; unknown
+  size or incompatible video -> hidden. Thresholds unchanged (1.25 / 0.3).
 - Visibility rule is `MotivaCompat.decide(enabled, media, display)`: setting off
   -> shown; unusable display size (`screen.*` = 0, seen in the hidden browser
   pane) -> `display-unknown`, shown (previously this hid EVERYTHING); unknown
   media size -> hidden until `load`/`loadedmetadata`. Debug: set
   `chrome.storage.local.debugCompat = true` to log state/media/display/dpr in
-  the page console. Tests: `node --test extension/tests` (evaluator only; the
-  DOM path was checked by hand in the browser pane, video not run there).
+  the page console, plus a `[Motiva stage]` line (placed / hidden-by-compat /
+  no-eligible-media + top-5 `elementsFromPoint` with reject reasons). Tests: `node --test extension/tests` (`compat.test.js`
+  evaluator; `content.test.js` runs `content.js` in a fake-DOM vm harness).
+- Visibility state (2026-11-13, verified by `content.test.js`, not in a live
+  browser): `syncButton()` owns visibility; every branch ends shown-on-`current`
+  or `hideAll()` (button+menu hidden, `current=null`). Overlay off, orphaned
+  script or no pointer -> hide. Menu open or pointer on the button keeps state
+  only while `currentValid()` (connected, same src, compatible). `send()`
+  re-checks it. Overlay toggle in storage calls `syncButton()`. Scroll hides at
+  once, one 120ms-debounced re-sync at the stationary pointer. `mouseout` with
+  null `relatedTarget` clears pointer/media state and hides.
+  Eligibility (verified on Google Images grid): rendered short side >= 80px and
+  long side >= 120px (was both >= 120, which rejected 200x103 grid thumbnails;
+  those are data: URIs ~246x138 natural, shown with the low-res marker).
 
 ## Packaging
 
