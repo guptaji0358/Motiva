@@ -67,18 +67,19 @@ Read the header first; this file only says what each piece owns.
   `ActiveWallpaperPreviewSource` (consumer-only listener on the shared player; never loads/plays/pauses it)
   and `IndependentPreviewSource` (own muted `VideoPlayer`, for non-active items / Binary Rain).
   Entry: `MainWindow::enterVirtualDesktop(source = "")` via the "Virtual Desktop" button over the
-  preview well (hides MainWindow, restores it on finish). Phase 2: playlist item context menu
+  preview well (hides MainWindow after `VirtualDesktopSession::firstFramePresented`, restores it on finish). Phase 2: playlist item context menu
   "Preview on Virtual Desktop" -> `PlaylistDialog::virtualDesktopPreviewRequested(path)` ->
   `enterVirtualDesktop(path)` (independent source; available items only). Phase 3 (battery now lives in the
   session, see Phase 4): F11 / button toggles
-  windowed (normal resizable window, flags swapped) vs fullscreen; I / button toggles `VdDesktopChrome`
+  windowed (normal resizable window, restyled IN PLACE via `QWindow::setFlags`, no HWND recreate) vs fullscreen
+  (window rect = `VdDesktop::coverRect`, monitor + 1 px, never exactly monitor-sized; see [[known-issues]]); I / button toggles `VdDesktopChrome`
   (painted fake icons + taskbar, no shell data). Phase 4: `VirtualDesktopSession` owns one window per monitor
   (controller = starting screen: buttons + chrome; others wallpaper only), windowed = controller only,
   `screenAdded/Removed` -> deferred `syncScreens()`; the session alone decides play/pause (5 s
   `GetSystemPowerStatus` poll, INDEPENDENT source only, + "nothing showing"; active source follows
   WallpaperManager). `VdDesktopChrome` now has a clickable Start menu + two draggable fake windows.
   Pure logic in header-only `VdDesktopModel.h` (`Model`, `shouldPausePlayback`, `planScreenSync`), tested by
-  `tests/VdDesktopTests.cpp` (13 pass; opt-in `tests/CMakeLists.txt`). See [[known-issues]].
+  `scripts/tests/VdDesktopTests.cpp` (14 pass) + GUI `VdWindowTests.cpp` (5 pass, real desktop+GL; opt-in `scripts/tests/CMakeLists.txt`). See [[known-issues]].
 
 ## Playlists & library
 

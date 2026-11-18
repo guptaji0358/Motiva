@@ -101,4 +101,38 @@ a fix.
 - Phase 5: `Qt::AA_ShareOpenGLContexts` is now set in `main.cpp` (app-wide). Its memory/CPU effect and any
   regression in the main window or dialogs are UNMEASURED/unverified (no multi-monitor machine, app not driven).
 
+- **Repaint-rate fix (2026-11-18, uncommitted):** `VdWallpaperSurface::setFrame` now calls
+  `canvas()->QWidget::update()` instead of `GlItem::update()` (which re-armed `GlCanvas`'s 16 ms hot-frame
+  timer, so video/rain repainted ~60/s for ~30 fps input). Measured in a scratch harness (one 60 Hz monitor,
+  Intel UHD, 1080p; not in the repo): video paints ~56-60/s -> ~28-32/s, rain ~60 -> ~30, timer ticks ~55 -> 0-4;
+  static previews idle at 0 paints both before and after; no wrong-thread calls; last synthetic frame rendered
+  correctly; hover/button animation scheduling identical. Paint cost ~1 ms. Unit tests (59) pass.
+  **Not verified:** that this removes the reported full-screen flicker (never observed); 4K, multi-monitor,
+  chrome-visible + video, F11 toggle; hover pixel change (harness check was inconclusive, 0 diff in baseline too).
+  Other flicker hypotheses (exact-screen-size topmost GL window vs DWM, shared texture cache) are untested.
+
 Related: [[overview]] · [[decisions]] · [[index]]
+
+## Virtual Desktop startup + F11 flicker (root cause found + fixed 2026-11-19; uncommitted)
+
+- **Measured (scratch harness linking the real `VirtualDesktopWindow`/session + `MOTIVA_VD_DIAG`, 1 monitor, Intel UHD, 125% DPI):**
+  an OpenGL window whose rect EXACTLY equals the monitor makes Windows fire `WM_DISPLAYCHANGE` bursts (2 while the HWND is
+  created + 3 after show; also the `screenAdded/Removed` re-enumerations seen in Motiva.log). Same window 1 px shorter/taller
+  (and a non-GL exact window) -> 0 such messages. Fix: `VdDesktop::coverRect()` = monitor rect + 1 px below the screen
+  (covers everything, no sliver); used by the window ctor and `fitToScreen()`.
+- **F11 root cause (measured):** `setWindowFlags()` hid the window, destroyed + recreated the HWND (2x `WinIdChange`), then re-showed
+  it (~165 ms gap on some toggles) and re-entered exact-size fullscreen (display-change burst). GL context was NOT destroyed.
+  Fix: `VirtualDesktopWindow::setWindowed` restyles the live HWND with `QWindow::setFlags()`; order matters (windowed: set geometry
+  then flags; fullscreen: flags then geometry) because Qt uses stale frame margins otherwise (client came out 18x47 px small).
+  `QWidget::windowFlags()` goes stale; `m_windowed` is authoritative. After: 0 Hide/Show/WinIdChange/WM_DISPLAYCHANGE per toggle.
+- **Startup root cause:** (1) `MainWindow::hide()` ran before the ~1.1-1.5 s synchronous GL init, so the bare desktop showed; now the
+  window hides on `VirtualDesktopSession::firstFramePresented` (controller's first `frameSwapped`) with a 3 s fallback timer;
+  (2) the display-change burst above ~0.4 s after show + swap gaps 250-376 ms. Both gone in the harness (10 starts: 0 WM_DISPLAYCHANGE).
+- **Tests:** `VdDesktopTests` 14 pass (`coverRect`); new opt-in GUI `VdWindowTests` (5 pass, needs real desktop+GL, skips otherwise): F11 keeps HWND,
+  GL context, 0 hide/show, exact geometry; first-frame signal once. It FAILS (6 hides) if the old `setWindowFlags` path is restored.
+- **NOT verified:** the real Motiva.exe was not driven (user's instance was running; not touched); real video file wallpaper (no sample file; a
+  timer source + real Binary Rain `VideoPlayer` source were used); multi-monitor / hot-plug (1 monitor); other GPUs/drivers (NVIDIA/AMD may
+  differ); a visible flicker can't be seen from here - results are event logs + screen-capture coverage. Flat partial-coverage plateaus
+  (0.67-0.93) seen in some harness runs, not oscillation; attributed to an external overlay, unproven.
+- **Diagnostics kept:** `VdDiag` (env `MOTIVA_VD_DIAG=1`, logs `[VdDiag]` lines to Motiva.log: handle/show/hide/resize, GL context,
+  swap gaps >150 ms, DISPLAYCHANGE/DWM msgs). Idle when env unset.
