@@ -95,6 +95,7 @@ void VirtualDesktopSession::addWindowFor(QScreen* screen) {
     connect(w, &VirtualDesktopWindow::closed, this, &VirtualDesktopSession::onWindowClosed);
     connect(w, &VirtualDesktopWindow::windowedToggleRequested, this, &VirtualDesktopSession::toggleWindowed);
     connect(w, &VirtualDesktopWindow::visibilityChanged, this, &VirtualDesktopSession::applyPlayState);
+    connect(w, &VirtualDesktopWindow::firstFramePresented, this, &VirtualDesktopSession::maybeEmitFirstFrame);
     // Resolution / arrangement change on a live monitor: refit its window.
     connect(screen, &QScreen::geometryChanged, w, [w] { w->fitToScreen(); });
     m_entries.push_back(std::move(e));
@@ -136,6 +137,18 @@ void VirtualDesktopSession::ensureController() {
     m_controllerScreen = chosen->screen;
     for (Entry& e : m_entries) {
         e.window->setController(&e == chosen);
+    }
+    maybeEmitFirstFrame(); // the new controller may already have presented
+}
+
+void VirtualDesktopSession::maybeEmitFirstFrame() {
+    if (m_firstFrameEmitted || !m_active || m_finishedEmitted) {
+        return;
+    }
+    Entry* c = controllerEntry();
+    if (c && c->window && c->window->hasPresented()) {
+        m_firstFrameEmitted = true;
+        emit firstFramePresented();
     }
 }
 
