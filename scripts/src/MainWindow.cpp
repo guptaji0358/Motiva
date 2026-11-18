@@ -783,6 +783,8 @@ void MainWindow::buildUi() {
     m_playlistDialog->setBackupManager(m_backup);
     m_playlistDialog->setSettings(&m_settings);
     connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
+    connect(m_playlistDialog, &PlaylistDialog::virtualDesktopPreviewRequested, this,
+            [this](const QString& path) { enterVirtualDesktop(path); });
 
     m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, m_backup, this);
     qInfo() << "[Startup] stage: SettingsDialog done";

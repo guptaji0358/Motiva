@@ -132,6 +132,9 @@ signals:
     // current item through the normal Set as Wallpaper path.
     // categoryId 0 = the whole playlist ("All").
     void applyToDesktopRequested(qint64 playlistId, qint64 categoryId);
+    // "Preview on Virtual Desktop": MainWindow opens the simulated desktop with
+    // this file via an independent source - the live wallpaper is untouched.
+    void virtualDesktopPreviewRequested(const QString& path);
 
 protected:
     void showEvent(QShowEvent* event) override;
