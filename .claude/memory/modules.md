@@ -46,6 +46,40 @@ Read the header first; this file only says what each piece owns.
 - **SettingsDialog** — pages: General, Appearance, Display and Playback,
   Notifications, Integration; layout styles 0 Tabs / 1 Sidebar / 2 Grouped.
 
+- **Binary Rain** (procedural wallpaper, no file) — `BinaryRainConfig` (presets
+  table, ranges, validation, "edit => Custom", QSettings `binaryRain/*`
+  load/save), `BinaryRainEngine` (CPU raster of falling 0/1 streams, seedable,
+  no per-frame allocation) + `BinaryRainFramePool`. `VideoPlayer` runs it as
+  `MediaKind::Procedural` (source string `motiva-procedural:binary-rain`, 33 ms
+  timer, frames via the normal `frameReady`); `WallpaperManager` passes the first
+  target monitor size and suspends it with the battery policy; UI = Settings >
+  "Binary Rain" page, "Use Binary Rain" -> `MainWindow::loadVideoSource`.
+  Play/Pause is the existing button. Compiled+unit-tested only for config/engine
+  (see [[known-issues]]).
+
+- **Virtual Desktop Preview** (Phase 1, simulated; never touches the real desktop) —
+  `VirtualDesktopSession` (lifecycle owner: one source + one window; idempotent `end()`,
+  also on `aboutToQuit`), `VirtualDesktopWindow` (frameless top-most full-screen `QWidget` with one
+  `GlCanvas`; Esc / "Exit Preview" button close it; pauses an independent source while hidden),
+  `VdWallpaperSurface` (GlItem; draws the shared frame straight to GL, placement via `DesktopScaling`),
+  `DesktopScaling.h` (header-only Fill/Fit/Stretch/Original geometry; `destRect` + `uvTransform`, now also
+  used by `D3DWallpaperRenderer::computeUvTransform`), `PreviewSource`:
+  `ActiveWallpaperPreviewSource` (consumer-only listener on the shared player; never loads/plays/pauses it)
+  and `IndependentPreviewSource` (own muted `VideoPlayer`, for non-active items / Binary Rain).
+  Entry: `MainWindow::enterVirtualDesktop(source = "")` via the "Virtual Desktop" button over the
+  preview well (hides MainWindow, restores it on finish). Phase 2: playlist item context menu
+  "Preview on Virtual Desktop" -> `PlaylistDialog::virtualDesktopPreviewRequested(path)` ->
+  `enterVirtualDesktop(path)` (independent source; available items only). Phase 3 (battery now lives in the
+  session, see Phase 4): F11 / button toggles
+  windowed (normal resizable window, flags swapped) vs fullscreen; I / button toggles `VdDesktopChrome`
+  (painted fake icons + taskbar, no shell data). Phase 4: `VirtualDesktopSession` owns one window per monitor
+  (controller = starting screen: buttons + chrome; others wallpaper only), windowed = controller only,
+  `screenAdded/Removed` -> deferred `syncScreens()`; the session alone decides play/pause (5 s
+  `GetSystemPowerStatus` poll, INDEPENDENT source only, + "nothing showing"; active source follows
+  WallpaperManager). `VdDesktopChrome` now has a clickable Start menu + two draggable fake windows.
+  Pure logic in header-only `VdDesktopModel.h` (`Model`, `shouldPausePlayback`, `planScreenSync`), tested by
+  `tests/VdDesktopTests.cpp` (13 pass; opt-in `tests/CMakeLists.txt`). See [[known-issues]].
+
 ## Playlists & library
 
 - **LibraryDatabase** — SQLite `.mtv`, schema migrations (current schema **9**;

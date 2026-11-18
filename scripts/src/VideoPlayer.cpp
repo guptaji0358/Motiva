@@ -111,6 +111,112 @@ VideoPlayer::VideoPlayer(QObject* parent) : QObject(parent), m_movie(this) {
     connect(&m_conversionWatcher, &QFutureWatcher<QImage>::finished, this, &VideoPlayer::onConversionFinished);
     connect(&m_movie, &QMovie::frameChanged, this, &VideoPlayer::onGifFrameChanged);
     connect(&m_movie, &QMovie::finished, this, &VideoPlayer::onGifFinished);
+    // Procedural frames are paced by this timer (~30 fps); it only runs
+    // while a procedural source is loaded, playing and not suspended.
+    m_rainTimer.setInterval(33);
+    m_rainTimer.setTimerType(Qt::PreciseTimer);
+    connect(&m_rainTimer, &QTimer::timeout, this, &VideoPlayer::onProceduralTick);
+}
+
+QString VideoPlayer::binaryRainSource() {
+    return QStringLiteral("motiva-procedural:binary-rain");
+}
+
+bool VideoPlayer::isProceduralSource(const QString& source) {
+    return source == binaryRainSource();
+}
+
+QSize VideoPlayer::proceduralFrameSize(const QSize& monitorSize) {
+    // Aspect ratio of the target monitor, long side capped at 1920 px: the
+    // renderer upsamples, so a 4K display costs the same CPU as 1080p.
+    QSize s = monitorSize.isValid() && !monitorSize.isEmpty() ? monitorSize : QSize(1920, 1080);
+    const int longest = qMax(s.width(), s.height());
+    if (longest > 1920) {
+        const double k = 1920.0 / longest;
+        s = QSize(qMax(16, int(std::lround(s.width() * k))), qMax(16, int(std::lround(s.height() * k))));
+    }
+    return s;
+}
+
+void VideoPlayer::setBinaryRainConfig(const BinaryRain::Config& config) {
+    m_rainConfig = config;
+    m_rainConfig.validate();
+    if (m_rainEngine) {
+        m_rainEngine->setParams(m_rainConfig.params);
+        if (m_mediaKind == MediaKind::Procedural && !m_rainTimer.isActive()) {
+            renderProceduralFrame(false); // paused: show the change right away
+        }
+    }
+}
+
+void VideoPlayer::setProceduralTargetSize(const QSize& monitorSize) {
+    if (monitorSize == m_rainTargetMonitor) {
+        return;
+    }
+    m_rainTargetMonitor = monitorSize;
+    if (m_rainEngine) {
+        m_rainEngine->resize(proceduralFrameSize(monitorSize));
+        if (m_mediaKind == MediaKind::Procedural && !m_rainTimer.isActive()) {
+            renderProceduralFrame(false);
+        }
+    }
+}
+
+void VideoPlayer::setProceduralSuspended(bool suspended) {
+    if (m_rainSuspended == suspended) {
+        return;
+    }
+    m_rainSuspended = suspended;
+    updateProceduralTimer();
+}
+
+void VideoPlayer::startProcedural() {
+    m_player.setSource(QUrl());
+    m_movie.setFileName(QString());
+    m_mediaKind = MediaKind::Procedural;
+    if (!m_rainEngine) {
+        m_rainEngine = std::make_unique<BinaryRainEngine>();
+    }
+    m_rainEngine->setParams(m_rainConfig.params);
+    m_rainEngine->resize(proceduralFrameSize(m_rainTargetMonitor));
+    m_rainRunning = false;
+    m_lastFrameSize = m_rainEngine->size();
+    StartupDiagnostics::instance().mark("videoFileOpened");
+    renderProceduralFrame(false); // first frame so the preview is never empty
+    emit mediaChanged();
+}
+
+void VideoPlayer::updateProceduralTimer() {
+    const bool run = m_mediaKind == MediaKind::Procedural && m_rainRunning && !m_rainSuspended;
+    if (run && !m_rainTimer.isActive()) {
+        m_rainClock.start();
+        m_rainTimer.start();
+    } else if (!run && m_rainTimer.isActive()) {
+        m_rainTimer.stop();
+    }
+}
+
+void VideoPlayer::onProceduralTick() {
+    renderProceduralFrame(true);
+}
+
+void VideoPlayer::renderProceduralFrame(bool advanceTime) {
+    if (m_mediaKind != MediaKind::Procedural || !m_rainEngine) {
+        return;
+    }
+    if (advanceTime) {
+        const double dt = m_rainClock.restart() / 1000.0;
+        m_rainEngine->advance(dt);
+    }
+    // No free buffer = consumers are still busy with earlier frames: skip
+    // this frame instead of allocating or queueing more work.
+    std::shared_ptr<QImage> buffer = m_rainPool.acquire(m_rainEngine->size());
+    if (!buffer || !m_rainEngine->render(*buffer)) {
+        return;
+    }
+    m_lastFrameSize = buffer->size();
+    m_currentFrame = std::shared_ptr<const QImage>(buffer);
+    emit frameReady(m_currentFrame);
 }
 
 bool VideoPlayer::loadFile(const QString& pathOrUrl) {
@@ -132,9 +238,15 @@ bool VideoPlayer::loadFile(const QString& pathOrUrl) {
     // leave the previous one still ticking in the background.
     m_player.stop();
     m_movie.stop();
+    releaseProcedural();
     m_currentFrame.reset();
     m_pendingFrame = QVideoFrame();
     m_hasPendingFrame = false;
+
+    if (isProceduralSource(pathOrUrl)) {
+        startProcedural();
+        return true;
+    }
 
     // GIF is never a QMediaPlayer source (Qt Multimedia doesn't treat it
     // as a video container at all) - local-file-only, no networking code
@@ -285,7 +397,22 @@ bool VideoPlayer::loadStaticImage(const QString& path) {
     return true;
 }
 
+void VideoPlayer::releaseProcedural() {
+    m_rainTimer.stop();
+    m_rainRunning = false;
+    m_rainEngine.reset();
+    m_rainPool.clear();
+}
+
 void VideoPlayer::play() {
+    if (m_mediaKind == MediaKind::Procedural) {
+        m_rainRunning = true;
+        updateProceduralTimer();
+        if (m_currentFrame) {
+            emit frameReady(m_currentFrame); // new windows receive the current frame
+        }
+        return;
+    }
     if (m_mediaKind == MediaKind::StaticImage) {
         // No playback clock - (re)publish the one decoded frame to every
         // current receiver (preview + any WallpaperWindow created since
@@ -303,6 +430,11 @@ void VideoPlayer::play() {
 }
 
 void VideoPlayer::pause() {
+    if (m_mediaKind == MediaKind::Procedural) {
+        m_rainRunning = false;
+        updateProceduralTimer();
+        return;
+    }
     if (m_mediaKind == MediaKind::StaticImage) {
         return;
     }
@@ -314,6 +446,11 @@ void VideoPlayer::pause() {
 }
 
 void VideoPlayer::stop() {
+    if (m_mediaKind == MediaKind::Procedural) {
+        m_rainRunning = false;
+        updateProceduralTimer();
+        return;
+    }
     if (m_mediaKind == MediaKind::StaticImage) {
         // Nothing is running; the decoded image is kept so a later play()
         // (e.g. Set as Wallpaper again after Remove Wallpaper) can show it.
@@ -327,6 +464,7 @@ void VideoPlayer::stop() {
 }
 
 void VideoPlayer::unload() {
+    releaseProcedural();
     m_player.stop();
     m_player.setSource(QUrl());
     m_movie.stop();
@@ -385,6 +523,9 @@ bool VideoPlayer::isPlaying() const {
     }
     if (m_mediaKind == MediaKind::AnimatedImage) {
         return m_movie.state() == QMovie::Running;
+    }
+    if (m_mediaKind == MediaKind::Procedural) {
+        return m_rainRunning;
     }
     return m_player.playbackState() == QMediaPlayer::PlayingState;
 }

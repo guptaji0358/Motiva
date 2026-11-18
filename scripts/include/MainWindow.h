@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <QMainWindow>
+#include <QPointer>
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QLabel>
@@ -32,6 +33,7 @@ class CleanupManager;
 class BackupManager;
 class WebMediaCache;
 class ThemeTransitionOverlay;
+class VirtualDesktopSession;
 class QDragEnterEvent;
 class QDragMoveEvent;
 class QDragLeaveEvent;
@@ -55,6 +57,14 @@ public:
     explicit MainWindow(bool startMinimized, const QString& initialExplorerFile = QString(),
         qint64 initialPlaylistId = 0, const QString& initialPlaylistFile = QString(), QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // Opens the simulated Virtual Desktop Preview full screen on this
+    // window's monitor. Empty `independentSource` previews the media currently
+    // in Motiva's shared player (what the desktop wallpaper shows) without
+    // controlling it; a non-empty source (path / URL / Binary Rain) is played
+    // in its own muted player, so the real wallpaper is never affected.
+    // No-op while a preview is already open.
+    void enterVirtualDesktop(const QString& independentSource = QString());
 
     // Call once the window has been shown (or deliberately kept hidden for a
     // tray start). Runs the heavy half of startup - previous-media restore,
@@ -136,6 +146,7 @@ private slots:
     void onTrayActivated(QSystemTrayIcon::ActivationReason reason);
     void onPreviewFrameReady();
     void onExitRequested();
+    void onVirtualDesktopFinished();
     void recoverOrActivate();
     void openSettings();
     // Connected to InstanceIpc::fileReceived - a running instance's
@@ -326,6 +337,9 @@ private:
     GlButton* m_openVideoButton = nullptr;
     GlButton* m_removeVideoButton = nullptr;
     GlButton* m_pasteLinkButton = nullptr;
+    GlButton* m_virtualDesktopButton = nullptr;
+    QPointer<VirtualDesktopSession> m_virtualDesktop;
+    bool m_restoreAfterVirtualDesktop = false; // main window was visible when the preview opened
     GlButton* m_playPauseButton = nullptr;
     GlButton* m_primaryButton = nullptr;
 

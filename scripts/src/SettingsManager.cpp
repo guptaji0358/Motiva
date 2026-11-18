@@ -171,6 +171,14 @@ void SettingsManager::setPlayVideosOnBattery(bool enabled) {
     m_settings.setValue("app/playVideosOnBattery", enabled);
     m_settings.remove("app/showVideoOnBattery");
 }
+BinaryRain::Config SettingsManager::binaryRainConfig() const {
+    return BinaryRain::Config::fromSettings(m_settings);
+}
+
+void SettingsManager::setBinaryRainConfig(const BinaryRain::Config& config) {
+    config.toSettings(m_settings);
+}
+
 bool SettingsManager::playImagesOnBattery() const {
     return m_settings.value("app/playImagesOnBattery", false).toBool();
 }
@@ -439,6 +447,7 @@ void SettingsManager::resetPreferences() {
         m_settings.remove(QLatin1String(key));
     }
     m_settings.remove(QStringLiteral("themeEditor"));
+    m_settings.remove(QStringLiteral("binaryRain"));
     m_settings.sync();
 }
 

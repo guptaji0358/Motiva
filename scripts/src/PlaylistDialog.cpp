@@ -1787,6 +1787,10 @@ void PlaylistDialog::showItemMenu(const QPoint& global, int sourceRow) {
     if (!available) {
         findFile = menu.addAction(tr("Find File…"));
     }
+    QAction* vdPreview = nullptr;
+    if (available) {
+        vdPreview = menu.addAction(tr("Preview on Virtual Desktop"));
+    }
     if (row > 0) {
         moveLeft = menu.addAction(tr("Move Left"));
         moveLeft->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Left));
@@ -1842,6 +1846,8 @@ void PlaylistDialog::showItemMenu(const QPoint& global, int sourceRow) {
         onShowNow();
     } else if (chosen == findFile) {
         onFindFile(row);
+    } else if (chosen == vdPreview) {
+        emit virtualDesktopPreviewRequested(m->pathAt(row));
     } else if (chosen == moveLeft) {
         moveRow(row, -1);
     } else if (chosen == moveRight) {

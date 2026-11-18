@@ -26,6 +26,7 @@ is the final authority; these notes say where to look. Last full pass: 2026-11-1
 - Browser extension: [data-flow](data-flow.md) §6, `extension/`, [technology-stack](technology-stack.md).
 - Cloud: [data-flow](data-flow.md) §7, [modules](modules.md) Backup/cleanup/cloud.
 - UI or theme work: [architecture](architecture.md) layer 2, [modules](modules.md) UI toolkit, [development-workflow](development-workflow.md) editing rules.
+- Virtual Desktop Preview: [modules](modules.md) Virtual Desktop Preview, [known-issues](known-issues.md) §Virtual Desktop.
 - Build or installer: [development-workflow](development-workflow.md), [technology-stack](technology-stack.md) Packaging.
 
 ## Historical archive (not current architecture)

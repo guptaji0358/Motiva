@@ -3,6 +3,10 @@
 #include "GlUi.h"
 #include "SettingsDialog.h"
 #include "ThemeTransitionOverlay.h"
+#include "PreviewSource.h"
+#include "VirtualDesktopSession.h"
+#include <QScreen>
+#include <QWindow>
 #include "StartupDiagnostics.h"
 #include "WindowsDesktopWallpaper.h"
 #include "WindowsShellIntegration.h"
@@ -726,6 +730,13 @@ void MainWindow::buildUi() {
     m_pasteLinkButton->setToolTip(tr("Load a video from a direct URL (or press Ctrl+V anywhere in this window)"));
     connect(m_pasteLinkButton, &GlButton::clicked, this, &MainWindow::onPasteVideoLink);
 
+    // Opens the simulated Virtual Desktop Preview. Created after m_preview so
+    // it paints above the media well.
+    m_virtualDesktopButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
+    m_virtualDesktopButton->setText(tr("Virtual Desktop"));
+    m_virtualDesktopButton->setToolTip(tr("Preview this wallpaper on a simulated desktop (nothing on your real desktop changes)"));
+    connect(m_virtualDesktopButton, &GlButton::clicked, this, [this] { enterVirtualDesktop(); });
+
     // --- Dock: media info, secondary actions, status, the one primary action ---
     m_dockPanel = new GlPanel(m_canvas);
     m_dockPanel->setBlock(GlPanel::Block::Accent2);
@@ -772,9 +783,16 @@ void MainWindow::buildUi() {
     m_playlistDialog->setBackupManager(m_backup);
     m_playlistDialog->setSettings(&m_settings);
     connect(m_playlistDialog, &PlaylistDialog::applyToDesktopRequested, this, &MainWindow::onApplyPlaylistToDesktop);
+    connect(m_playlistDialog, &PlaylistDialog::virtualDesktopPreviewRequested, this,
+            [this](const QString& path) { enterVirtualDesktop(path); });
 
     m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, m_backup, this);
     qInfo() << "[Startup] stage: SettingsDialog done";
+    // Settings > Binary Rain > "Use Binary Rain": same convergence point as
+    // Open Media / drop / paste, so preview, persistence and Set as Wallpaper
+    // all work unchanged.
+    connect(m_settingsDialog, &SettingsDialog::binaryRainRequested, this,
+            [this] { loadVideoSource(VideoPlayer::binaryRainSource()); });
     connect(m_settingsDialog, &SettingsDialog::mutedChanged, this, [this](bool muted) {
         if (m_trayMuteAction) {
             m_trayMuteAction->blockSignals(true);
@@ -835,6 +853,9 @@ void MainWindow::layoutGl(const QSizeF& size) {
     m_preview->setRect(prev);
     m_pasteLinkButton->setRect(m_preview->dropActionRect());
     m_pasteLinkButton->setVisible(m_preview->showsDropZone());
+    // Top-right corner of the media well; only when there is media to preview.
+    m_virtualDesktopButton->setRect(QRectF(prev.right() - 150 - 14, prev.top() + 14, 150, 32));
+    m_virtualDesktopButton->setVisible(!m_preview->showsDropZone() && prev.width() > 260 && prev.height() > 120);
 
     // Dock contents.
     const qreal pad = 22;
@@ -925,8 +946,12 @@ void MainWindow::applyVideoInfoUi() {
 
     const QUrl asUrl(m_selectedVideoPath);
     const bool isWebSource = isWebVideoUrl(asUrl);
+    const bool isProcedural = VideoPlayer::isProceduralSource(m_selectedVideoPath);
     QString suffix;
-    if (isWebSource) {
+    if (isProcedural) {
+        m_fileNameLabel->setText(tr("Binary Rain"));
+        suffix = tr("GENERATED");
+    } else if (isWebSource) {
         // A URL's own QFileInfo() split is misleading (no real
         // filesystem semantics), so show the URL itself as the name.
         m_fileNameLabel->setText(m_selectedVideoPath);
@@ -1167,6 +1192,11 @@ void MainWindow::onPasteShortcut() {
 bool MainWindow::isUsableVideoSource(const QString& source) {
     if (source.isEmpty()) {
         return false;
+    }
+    // The generated Binary Rain wallpaper has no file: its pseudo-source is
+    // always usable.
+    if (VideoPlayer::isProceduralSource(source)) {
+        return true;
     }
     const QUrl asUrl(source);
     if (isWebVideoUrl(asUrl)) {
@@ -1571,7 +1601,9 @@ void MainWindow::onWallpaperVerified() {
     n.title = tr("Wallpaper Active");
     n.message = m_selectedVideoPath.isEmpty()
         ? tr("Your wallpaper is now showing on the desktop.")
-        : tr("\"%1\" is now showing on the desktop.").arg(QFileInfo(m_selectedVideoPath).fileName());
+        : tr("\"%1\" is now showing on the desktop.")
+              .arg(VideoPlayer::isProceduralSource(m_selectedVideoPath) ? tr("Binary Rain")
+                                                                        : QFileInfo(m_selectedVideoPath).fileName());
     n.key = QStringLiteral("playback-active");
     n.rateLimit = true;
     n.cooldownMs = 5000;
@@ -1638,6 +1670,73 @@ void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
             raise();
             activateWindow();
         }
+    }
+}
+
+// DesktopScaling::Mode mirrors ScalingMode value-for-value so the saved
+// scaling preference can be used directly by the preview.
+static_assert(int(ScalingMode::Fill) == int(DesktopScaling::Mode::Fill) &&
+                  int(ScalingMode::Fit) == int(DesktopScaling::Mode::Fit) &&
+                  int(ScalingMode::Stretch) == int(DesktopScaling::Mode::Stretch) &&
+                  int(ScalingMode::Original) == int(DesktopScaling::Mode::Original),
+              "DesktopScaling::Mode must match ScalingMode");
+
+void MainWindow::enterVirtualDesktop(const QString& independentSource) {
+    if (m_virtualDesktop) {
+        return; // already open
+    }
+    QScreen* screen = windowHandle() ? windowHandle()->screen() : nullptr;
+    if (!screen) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    if (!screen) {
+        return;
+    }
+
+    PreviewSource* source = nullptr;
+    if (independentSource.isEmpty()) {
+        // Consumer only: never loads, plays, pauses or stops the shared player.
+        source = new ActiveWallpaperPreviewSource(m_manager->player());
+    } else {
+        auto* independent = new IndependentPreviewSource(independentSource, m_settings.binaryRainConfig(),
+                                                         screen->size() * screen->devicePixelRatio());
+        if (!independent->isValid()) {
+            delete independent;
+            Notification n;
+            n.kind = Notification::Kind::Error;
+            n.category = Notification::Category::Playback;
+            n.title = tr("Preview unavailable");
+            n.message = tr("That media could not be opened for the virtual desktop preview.");
+            n.key = QStringLiteral("virtual-desktop-error");
+            NotificationManager::instance()->notify(n);
+            return;
+        }
+        source = independent;
+    }
+
+    const auto mode = static_cast<DesktopScaling::Mode>(m_settings.scalingMode());
+    m_virtualDesktop = new VirtualDesktopSession(source, mode, screen, this);
+    m_virtualDesktop->setPauseOnBattery(!m_settings.playVideosOnBattery());
+    connect(m_virtualDesktop, &VirtualDesktopSession::finished, this, &MainWindow::onVirtualDesktopFinished);
+
+    // Get the main window out of the way for the duration, and remember to
+    // bring it back exactly as it was.
+    m_restoreAfterVirtualDesktop = isVisible() && !isMinimized();
+    hide();
+    m_virtualDesktop->start();
+}
+
+void MainWindow::onVirtualDesktopFinished() {
+    VirtualDesktopSession* session = m_virtualDesktop;
+    m_virtualDesktop = nullptr;
+    if (session) {
+        session->deleteLater();
+    }
+    if (m_restoreAfterVirtualDesktop) {
+        m_restoreAfterVirtualDesktop = false;
+        showNormal();
+        raise();
+        activateWindow();
     }
 }
 
@@ -2153,6 +2252,12 @@ void MainWindow::restartAfterFactoryReset() {
 }
 
 void MainWindow::onExitRequested() {
+    // A virtual-desktop preview (and its independent decoder, if any) goes
+    // first, while the event loop is still alive.
+    if (m_virtualDesktop) {
+        m_restoreAfterVirtualDesktop = false;
+        m_virtualDesktop->end();
+    }
     // A running backup stops at the next chunk and removes its partial file.
     if (m_backup) {
         m_backup->cancelAndWait();

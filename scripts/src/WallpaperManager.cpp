@@ -245,6 +245,7 @@ void WallpaperManager::suspendForBattery() {
         w->hideNative();
     }
     m_batterySuspended = true;
+    m_player->setProceduralSuspended(true); // no frames for a hidden wallpaper
     // Same redraw nudge removeWallpaper() already uses - our own window
     // detaching doesn't by itself make Explorer repaint the real
     // wallpaper underneath. m_active stays true throughout, so this
@@ -261,6 +262,7 @@ void WallpaperManager::resumeFromBattery() {
     }
     qInfo() << "[Battery] Restoring wallpaper (battery restriction no longer applies).";
     m_batterySuspended = false;
+    m_player->setProceduralSuspended(false);
     // Reuses the existing async/generation-guarded/verified attach
     // pipeline - the same one Explorer-restart and IPC recovery already
     // drive. The render windows were only detached, never destroyed, so
@@ -329,6 +331,7 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
     const bool shouldStartHidden = batteryPolicyHidesCurrentMedia();
     if (shouldStartHidden) {
         m_batterySuspended = true;
+        m_player->setProceduralSuspended(true);
         qInfo() << "[Battery] Wallpaper set while on battery and the battery policy hides it - "
                     "staying hidden until AC power returns.";
     } else {
@@ -337,6 +340,7 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
         // video the verdict, and so this flag, can't differ). The windows
         // were just rebuilt above, so there is nothing hidden to restore.
         m_batterySuspended = false;
+        m_player->setProceduralSuspended(false);
         attachAllWindows();
     }
 
@@ -376,6 +380,7 @@ void WallpaperManager::removeWallpaper() {
     // reevaluateBatteryPolicy() correctly does nothing (Test 5: Remove
     // Wallpaper while battery-hidden must not auto-restore on AC return).
     m_batterySuspended = false;
+    m_player->setProceduralSuspended(false);
     if (m_recoveryState) {
         m_recoveryState->setWallpaperAttached(false);
     }
@@ -549,6 +554,11 @@ void WallpaperManager::rebuildWindows() {
                 mon.rect.right - mon.rect.left,
                 mon.rect.bottom - mon.rect.top);
         win->setMonitorRect(r);
+        if (m_windows.empty()) {
+            // Binary Rain renders one shared frame at the first target
+            // monitor's aspect ratio (no-op for every other media kind).
+            m_player->setProceduralTargetSize(r.size());
+        }
         connect(win.get(), &WallpaperWindow::readyForReattach, this, &WallpaperManager::onWindowReadyForReattach);
         // Deliberately not shown here: showing a normal top-level window
         // would put it on top of everything else, which is exactly the

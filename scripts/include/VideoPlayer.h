@@ -9,6 +9,10 @@
 #include <QVideoFrame>
 #include <QFutureWatcher>
 #include <QMovie>
+#include <QElapsedTimer>
+#include <QTimer>
+#include "BinaryRainConfig.h"
+#include "BinaryRainEngine.h"
 #include <QSet>
 #include <QString>
 #include <memory>
@@ -47,7 +51,14 @@ public:
     // What the currently loaded source is, decided once in loadFile().
     // AnimatedImage = anything played through QMovie (GIF, and animated
     // WebP - QMovie::supportedFormats() on this Qt build is "gif webp").
-    enum class MediaKind { None, Video, AnimatedImage, StaticImage };
+    // Procedural = generated at runtime by BinaryRainEngine (no file).
+    enum class MediaKind { None, Video, AnimatedImage, StaticImage, Procedural };
+
+    // Pseudo-source identifying the procedural Binary Rain wallpaper. It
+    // flows through the same "source string" plumbing as a file path
+    // (settings, restore, Set as Wallpaper) and is never a real file.
+    static QString binaryRainSource();
+    static bool isProceduralSource(const QString& source);
 
     explicit VideoPlayer(QObject* parent = nullptr);
 
@@ -92,6 +103,18 @@ public:
     void unload();
 
     bool isPlaying() const;
+    bool isProcedural() const { return m_mediaKind == MediaKind::Procedural; }
+
+    // Binary Rain settings: applied immediately; while paused one frame is
+    // re-rendered so the change is visible. Safe to call before loading.
+    void setBinaryRainConfig(const BinaryRain::Config& config);
+    const BinaryRain::Config& binaryRainConfig() const { return m_rainConfig; }
+    // Size of the monitor the frame will mostly be shown on; the engine
+    // renders at that aspect ratio, capped to 1920 px on the long side.
+    void setProceduralTargetSize(const QSize& monitorSize);
+    // Stops frame generation while the wallpaper is hidden (battery policy)
+    // without changing the user's play/pause state.
+    void setProceduralSuspended(bool suspended);
     MediaKind mediaKind() const { return m_mediaKind; }
     bool isStaticImage() const { return m_mediaKind == MediaKind::StaticImage; }
     QSize videoNativeSize() const { return m_lastFrameSize; }
@@ -137,6 +160,7 @@ private slots:
     // the same "loop forever until told otherwise" behavior setLooping()
     // already gives video via QMediaPlayer::setLoops(Infinite).
     void onGifFinished();
+    void onProceduralTick();
 
 private:
     QMediaPlayer m_player;
@@ -173,4 +197,19 @@ private:
     void startConversion(const QVideoFrame& frame);
     bool startMovie(const QString& path);
     bool loadStaticImage(const QString& path);
+
+    // --- Procedural (Binary Rain) ---
+    static QSize proceduralFrameSize(const QSize& monitorSize);
+    void startProcedural();
+    void releaseProcedural();
+    void renderProceduralFrame(bool advanceTime);
+    void updateProceduralTimer();
+    BinaryRain::Config m_rainConfig;
+    std::unique_ptr<BinaryRainEngine> m_rainEngine;
+    BinaryRainFramePool m_rainPool;
+    QTimer m_rainTimer;
+    QElapsedTimer m_rainClock;
+    QSize m_rainTargetMonitor{1920, 1080};
+    bool m_rainRunning = false;   // play state (user pause = false)
+    bool m_rainSuspended = false; // hidden by the battery policy
 };
