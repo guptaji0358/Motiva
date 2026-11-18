@@ -50,6 +50,15 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/ThemeTransitionOverlay.h
     scripts/src/VideoPlayer.cpp
     scripts/include/VideoPlayer.h
+    scripts/src/PreviewSource.cpp
+    scripts/include/PreviewSource.h
+    scripts/include/DesktopScaling.h
+    scripts/src/VdWallpaperSurface.cpp
+    scripts/include/VdWallpaperSurface.h
+    scripts/src/VirtualDesktopWindow.cpp
+    scripts/include/VirtualDesktopWindow.h
+    scripts/src/VirtualDesktopSession.cpp
+    scripts/include/VirtualDesktopSession.h
     scripts/src/BinaryRainConfig.cpp
     scripts/include/BinaryRainConfig.h
     scripts/src/BinaryRainEngine.cpp

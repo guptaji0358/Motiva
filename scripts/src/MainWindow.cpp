@@ -3,6 +3,10 @@
 #include "GlUi.h"
 #include "SettingsDialog.h"
 #include "ThemeTransitionOverlay.h"
+#include "PreviewSource.h"
+#include "VirtualDesktopSession.h"
+#include <QScreen>
+#include <QWindow>
 #include "StartupDiagnostics.h"
 #include "WindowsDesktopWallpaper.h"
 #include "WindowsShellIntegration.h"
@@ -726,6 +730,13 @@ void MainWindow::buildUi() {
     m_pasteLinkButton->setToolTip(tr("Load a video from a direct URL (or press Ctrl+V anywhere in this window)"));
     connect(m_pasteLinkButton, &GlButton::clicked, this, &MainWindow::onPasteVideoLink);
 
+    // Opens the simulated Virtual Desktop Preview. Created after m_preview so
+    // it paints above the media well.
+    m_virtualDesktopButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
+    m_virtualDesktopButton->setText(tr("Virtual Desktop"));
+    m_virtualDesktopButton->setToolTip(tr("Preview this wallpaper on a simulated desktop (nothing on your real desktop changes)"));
+    connect(m_virtualDesktopButton, &GlButton::clicked, this, [this] { enterVirtualDesktop(); });
+
     // --- Dock: media info, secondary actions, status, the one primary action ---
     m_dockPanel = new GlPanel(m_canvas);
     m_dockPanel->setBlock(GlPanel::Block::Accent2);
@@ -840,6 +851,9 @@ void MainWindow::layoutGl(const QSizeF& size) {
     m_preview->setRect(prev);
     m_pasteLinkButton->setRect(m_preview->dropActionRect());
     m_pasteLinkButton->setVisible(m_preview->showsDropZone());
+    // Top-right corner of the media well; only when there is media to preview.
+    m_virtualDesktopButton->setRect(QRectF(prev.right() - 150 - 14, prev.top() + 14, 150, 32));
+    m_virtualDesktopButton->setVisible(!m_preview->showsDropZone() && prev.width() > 260 && prev.height() > 120);
 
     // Dock contents.
     const qreal pad = 22;
@@ -1657,6 +1671,72 @@ void MainWindow::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
     }
 }
 
+// DesktopScaling::Mode mirrors ScalingMode value-for-value so the saved
+// scaling preference can be used directly by the preview.
+static_assert(int(ScalingMode::Fill) == int(DesktopScaling::Mode::Fill) &&
+                  int(ScalingMode::Fit) == int(DesktopScaling::Mode::Fit) &&
+                  int(ScalingMode::Stretch) == int(DesktopScaling::Mode::Stretch) &&
+                  int(ScalingMode::Original) == int(DesktopScaling::Mode::Original),
+              "DesktopScaling::Mode must match ScalingMode");
+
+void MainWindow::enterVirtualDesktop(const QString& independentSource) {
+    if (m_virtualDesktop) {
+        return; // already open
+    }
+    QScreen* screen = windowHandle() ? windowHandle()->screen() : nullptr;
+    if (!screen) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    if (!screen) {
+        return;
+    }
+
+    PreviewSource* source = nullptr;
+    if (independentSource.isEmpty()) {
+        // Consumer only: never loads, plays, pauses or stops the shared player.
+        source = new ActiveWallpaperPreviewSource(m_manager->player());
+    } else {
+        auto* independent = new IndependentPreviewSource(independentSource, m_settings.binaryRainConfig(),
+                                                         screen->size() * screen->devicePixelRatio());
+        if (!independent->isValid()) {
+            delete independent;
+            Notification n;
+            n.kind = Notification::Kind::Error;
+            n.category = Notification::Category::Playback;
+            n.title = tr("Preview unavailable");
+            n.message = tr("That media could not be opened for the virtual desktop preview.");
+            n.key = QStringLiteral("virtual-desktop-error");
+            NotificationManager::instance()->notify(n);
+            return;
+        }
+        source = independent;
+    }
+
+    const auto mode = static_cast<DesktopScaling::Mode>(m_settings.scalingMode());
+    m_virtualDesktop = new VirtualDesktopSession(source, mode, screen, this);
+    connect(m_virtualDesktop, &VirtualDesktopSession::finished, this, &MainWindow::onVirtualDesktopFinished);
+
+    // Get the main window out of the way for the duration, and remember to
+    // bring it back exactly as it was.
+    m_restoreAfterVirtualDesktop = isVisible() && !isMinimized();
+    hide();
+    m_virtualDesktop->start();
+}
+
+void MainWindow::onVirtualDesktopFinished() {
+    VirtualDesktopSession* session = m_virtualDesktop;
+    m_virtualDesktop = nullptr;
+    if (session) {
+        session->deleteLater();
+    }
+    if (m_restoreAfterVirtualDesktop) {
+        m_restoreAfterVirtualDesktop = false;
+        showNormal();
+        raise();
+        activateWindow();
+    }
+}
+
 void MainWindow::openSettings() {
     if (!m_settingsDialog) {
         return;
@@ -2169,6 +2249,12 @@ void MainWindow::restartAfterFactoryReset() {
 }
 
 void MainWindow::onExitRequested() {
+    // A virtual-desktop preview (and its independent decoder, if any) goes
+    // first, while the event loop is still alive.
+    if (m_virtualDesktop) {
+        m_restoreAfterVirtualDesktop = false;
+        m_virtualDesktop->end();
+    }
     // A running backup stops at the next chunk and removes its partial file.
     if (m_backup) {
         m_backup->cancelAndWait();
