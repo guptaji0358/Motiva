@@ -50,6 +50,10 @@ set(IMPLEMENTATION_SOURCES
     scripts/include/ThemeTransitionOverlay.h
     scripts/src/VideoPlayer.cpp
     scripts/include/VideoPlayer.h
+    scripts/src/BinaryRainConfig.cpp
+    scripts/include/BinaryRainConfig.h
+    scripts/src/BinaryRainEngine.cpp
+    scripts/include/BinaryRainEngine.h
     scripts/src/WallpaperWindow.cpp
     scripts/include/WallpaperWindow.h
     scripts/src/D3DWallpaperRenderer.cpp
