@@ -33,6 +33,7 @@ void VirtualDesktopSession::start() {
     }
     QScreen* screen = m_screen ? m_screen.data() : QGuiApplication::primaryScreen();
     m_window = std::make_unique<VirtualDesktopWindow>(m_source, m_mode, screen);
+    m_window->setPauseOnBattery(m_pauseOnBattery && m_source && m_source->isIndependent());
     connect(m_window.get(), &VirtualDesktopWindow::closed, this, &VirtualDesktopSession::onWindowClosed);
     m_active = true;
     qInfo() << "[VirtualDesktop] preview started, independentSource="

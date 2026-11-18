@@ -30,6 +30,8 @@ public:
     // Closes the window; safe to call repeatedly or after the user closed it.
     void end();
     bool isActive() const { return m_active; }
+    // Set before start(): pause an independent source while on battery.
+    void setPauseOnBattery(bool pause) { m_pauseOnBattery = pause; }
 
 signals:
     // Emitted exactly once, after the window is closed.
@@ -43,5 +45,6 @@ private:
     DesktopScaling::Mode m_mode;
     QPointer<QScreen> m_screen;
     bool m_active = false;
+    bool m_pauseOnBattery = false;
     bool m_finishedEmitted = false;
 };

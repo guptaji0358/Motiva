@@ -22,6 +22,14 @@ void VdWallpaperSurface::setPlaceholderText(const QString& text) {
     update();
 }
 
+void VdWallpaperSurface::setNote(const QString& text) {
+    if (m_note == text) {
+        return;
+    }
+    m_note = text;
+    update();
+}
+
 void VdWallpaperSurface::paint(QPainter& p, const GlUi::Style&) {
     const QRectF area = rect();
     p.save();
@@ -36,6 +44,15 @@ void VdWallpaperSurface::paint(QPainter& p, const GlUi::Style&) {
         p.setFont(GlUi::uiFont(13));
         p.setPen(QColor(150, 150, 165));
         p.drawText(area, Qt::AlignCenter, m_placeholder);
+    }
+    if (!m_note.isEmpty()) {
+        p.setFont(GlUi::uiFont(11));
+        const QRectF box(area.left() + 16, area.top() + 16, 260, 30);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 150));
+        p.drawRoundedRect(box, 6, 6);
+        p.setPen(QColor(235, 235, 240));
+        p.drawText(box, Qt::AlignCenter, m_note);
     }
     p.restore();
 }

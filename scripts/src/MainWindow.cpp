@@ -1716,6 +1716,7 @@ void MainWindow::enterVirtualDesktop(const QString& independentSource) {
 
     const auto mode = static_cast<DesktopScaling::Mode>(m_settings.scalingMode());
     m_virtualDesktop = new VirtualDesktopSession(source, mode, screen, this);
+    m_virtualDesktop->setPauseOnBattery(!m_settings.playVideosOnBattery());
     connect(m_virtualDesktop, &VirtualDesktopSession::finished, this, &MainWindow::onVirtualDesktopFinished);
 
     // Get the main window out of the way for the duration, and remember to
