@@ -95,8 +95,10 @@ a fix.
   is unplugged.
 - **Not built yet:** hot-plug handling outside the preview (the app itself has none).
 - **Unmeasured:** 4K decode, real multi-monitor. Phase 0: each physical-4K GL window costs ~300-350 MB;
-  GPU draw ~33% of a core vs 130-150% for CPU pre-scale at 30 fps. `AA_ShareOpenGLContexts` is not set.
-- `DesktopScaling.h` duplicates the scaling rules of `D3DWallpaperRenderer`; the renderer was deliberately
-  not refactored to use it.
+  GPU draw ~33% of a core vs 130-150% for CPU pre-scale at 30 fps. `AA_ShareOpenGLContexts` was not set then (set since Phase 5).
+- `D3DWallpaperRenderer::computeUvTransform` now delegates to `DesktopScaling::uvTransform` (Phase 5); a test
+  checks it against the old formulas (100 combos). The renderer change itself was built, not run live.
+- Phase 5: `Qt::AA_ShareOpenGLContexts` is now set in `main.cpp` (app-wide). Its memory/CPU effect and any
+  regression in the main window or dialogs are UNMEASURED/unverified (no multi-monitor machine, app not driven).
 
 Related: [[overview]] · [[decisions]] · [[index]]

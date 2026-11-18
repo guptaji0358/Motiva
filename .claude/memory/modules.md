@@ -62,8 +62,8 @@ Read the header first; this file only says what each piece owns.
   also on `aboutToQuit`), `VirtualDesktopWindow` (frameless top-most full-screen `QWidget` with one
   `GlCanvas`; Esc / "Exit Preview" button close it; pauses an independent source while hidden),
   `VdWallpaperSurface` (GlItem; draws the shared frame straight to GL, placement via `DesktopScaling`),
-  `DesktopScaling.h` (header-only Fill/Fit/Stretch/Original geometry; same rules as
-  `D3DWallpaperRenderer::computeUvTransform`, not yet shared with it), `PreviewSource`:
+  `DesktopScaling.h` (header-only Fill/Fit/Stretch/Original geometry; `destRect` + `uvTransform`, now also
+  used by `D3DWallpaperRenderer::computeUvTransform`), `PreviewSource`:
   `ActiveWallpaperPreviewSource` (consumer-only listener on the shared player; never loads/plays/pauses it)
   and `IndependentPreviewSource` (own muted `VideoPlayer`, for non-active items / Binary Rain).
   Entry: `MainWindow::enterVirtualDesktop(source = "")` via the "Virtual Desktop" button over the
