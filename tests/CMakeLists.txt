@@ -18,6 +18,10 @@ qt_add_executable(BinaryRainTests
 target_include_directories(BinaryRainTests PRIVATE ../scripts/include)
 target_link_libraries(BinaryRainTests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
 
+qt_add_executable(DesktopScalingTests DesktopScalingTests.cpp)
+target_include_directories(DesktopScalingTests PRIVATE ../scripts/include)
+target_link_libraries(DesktopScalingTests PRIVATE Qt6::Core Qt6::Test)
+
 # VideoPlayer lifecycle test: needs Qt Multimedia and the D3D libs (VideoPlayer
 # links D3DWallpaperRenderer::tagAsStill). Skipped when Multimedia is absent.
 find_package(Qt6 QUIET COMPONENTS Widgets Multimedia Concurrent)
