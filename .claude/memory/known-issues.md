@@ -88,9 +88,12 @@ a fix.
   sources, Esc close, idempotent end, active source leaves the shared player's state unchanged, OS wallpaper
   path unchanged, no window left after abrupt session deletion; `DesktopScalingTests` 9 passed; full `Motiva`
   target builds. The "Virtual Desktop" button was NOT clicked in the real app (UI not driven).
-- **Phase 3 (windowed mode, sim icons/taskbar, battery pause): built, NOT run in the real app** (build only).
-  Battery check is a 5 s poll, not a power notification; untested on a real laptop unplug.
-- **Not built yet:** multi-monitor (one window only, on MainWindow's screen), Start menu/sim windows, monitor hot-plug handling (none exists in the app).
+- **Phases 3-4 (windowed, sim icons/taskbar/Start/windows, battery pause, multi-monitor, hot-plug): built, NOT run
+  in the real app** (Motiva builds; `VdDesktopTests` 13 pass). Multi-monitor + hot-plug untested: dev laptop has
+  one monitor. Battery check is a 5 s poll; untested on a real unplug. Canvas may route keys (Esc/F11/I) to the
+  focused chrome item after a click: unverified. Controller window is rebuilt (icons state lost) if its monitor
+  is unplugged.
+- **Not built yet:** hot-plug handling outside the preview (the app itself has none).
 - **Unmeasured:** 4K decode, real multi-monitor. Phase 0: each physical-4K GL window costs ~300-350 MB;
   GPU draw ~33% of a core vs 130-150% for CPU pre-scale at 30 fps. `AA_ShareOpenGLContexts` is not set.
 - `DesktopScaling.h` duplicates the scaling rules of `D3DWallpaperRenderer`; the renderer was deliberately
