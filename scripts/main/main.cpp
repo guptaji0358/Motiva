@@ -76,6 +76,11 @@ int main(int argc, char* argv[]) {
     StartupDiagnostics::instance().start();
     StartupDiagnostics::instance().mark("mainStart");
     qInstallMessageHandler(fileLogHandler);
+    // One GL share group for every QOpenGLWidget (main window, dialogs, and the
+    // virtual-desktop preview's per-monitor windows) so GPU resources such as
+    // textures and glyph caches are not duplicated per window. Must be set
+    // before the QApplication exists.
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QApplication app(argc, argv);
     app.setApplicationName("Motiva");
     app.setOrganizationName("Motiva");

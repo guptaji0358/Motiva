@@ -40,4 +40,20 @@ inline QRectF destRect(Mode mode, const QSizeF& source, const QSizeF& surface) {
     return QRectF(QPointF((surface.width() - size.width()) / 2.0, (surface.height() - size.height()) / 2.0), size);
 }
 
+// Texture-coordinate form of destRect for a shader that samples the whole
+// surface: uv = surfaceUv * scale + offset. Fit gives scale > 1 on the slack
+// axis (UV outside [0,1] renders black). Degenerate input -> identity.
+inline void uvTransform(Mode mode, const QSizeF& source, const QSizeF& surface, float outScale[2], float outOffset[2]) {
+    outScale[0] = outScale[1] = 1.0f;
+    outOffset[0] = outOffset[1] = 0.0f;
+    if (source.width() <= 0 || source.height() <= 0 || surface.width() <= 0 || surface.height() <= 0) {
+        return;
+    }
+    const QRectF dst = destRect(mode, source, surface);
+    outScale[0] = static_cast<float>(surface.width() / dst.width());
+    outScale[1] = static_cast<float>(surface.height() / dst.height());
+    outOffset[0] = static_cast<float>(-dst.left() / dst.width());
+    outOffset[1] = static_cast<float>(-dst.top() / dst.height());
+}
+
 } // namespace DesktopScaling

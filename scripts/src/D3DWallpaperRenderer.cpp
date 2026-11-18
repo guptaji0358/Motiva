@@ -1,4 +1,5 @@
 #include "D3DWallpaperRenderer.h"
+#include "DesktopScaling.h"
 #include "StartupDiagnostics.h"
 #include <QDebug>
 #include <QTimer>
@@ -368,53 +369,11 @@ void D3DWallpaperRenderer::resize(int width, int height) {
 }
 
 void D3DWallpaperRenderer::computeUvTransform(const QSize& imgSize, float outScale[2], float outOffset[2]) const {
-    if (imgSize.width() <= 0 || imgSize.height() <= 0 || m_width <= 0 || m_height <= 0) {
-        outScale[0] = outScale[1] = 1.0f;
-        outOffset[0] = outOffset[1] = 0.0f;
-        return;
-    }
-    const float imgAR = static_cast<float>(imgSize.width()) / static_cast<float>(imgSize.height());
-    const float widgetAR = static_cast<float>(m_width) / static_cast<float>(m_height);
-
-    switch (m_scalingMode) {
-        case ScalingMode::Stretch:
-            outScale[0] = 1.0f; outScale[1] = 1.0f;
-            outOffset[0] = 0.0f; outOffset[1] = 0.0f;
-            break;
-        case ScalingMode::Fill:
-            // Cover: crop whichever axis has excess.
-            if (widgetAR > imgAR) {
-                outScale[0] = 1.0f;
-                outScale[1] = imgAR / widgetAR;
-            } else {
-                outScale[0] = widgetAR / imgAR;
-                outScale[1] = 1.0f;
-            }
-            outOffset[0] = (1.0f - outScale[0]) / 2.0f;
-            outOffset[1] = (1.0f - outScale[1]) / 2.0f;
-            break;
-        case ScalingMode::Fit:
-            // Contain: letterbox/pillarbox whichever axis has slack -
-            // achieved by letting the UV range exceed [0,1] on that axis,
-            // which the pixel shader renders as black.
-            if (widgetAR > imgAR) {
-                outScale[0] = widgetAR / imgAR;
-                outScale[1] = 1.0f;
-            } else {
-                outScale[0] = 1.0f;
-                outScale[1] = imgAR / widgetAR;
-            }
-            outOffset[0] = (1.0f - outScale[0]) / 2.0f;
-            outOffset[1] = (1.0f - outScale[1]) / 2.0f;
-            break;
-        case ScalingMode::Original:
-        default:
-            outScale[0] = static_cast<float>(m_width) / static_cast<float>(imgSize.width());
-            outScale[1] = static_cast<float>(m_height) / static_cast<float>(imgSize.height());
-            outOffset[0] = (1.0f - outScale[0]) / 2.0f;
-            outOffset[1] = (1.0f - outScale[1]) / 2.0f;
-            break;
-    }
+    // Placement rules live in DesktopScaling.h (shared with the virtual
+    // desktop preview and unit-tested); ScalingMode and DesktopScaling::Mode
+    // have the same order (static_assert in MainWindow.cpp).
+    DesktopScaling::uvTransform(static_cast<DesktopScaling::Mode>(m_scalingMode), QSizeF(imgSize),
+                                QSizeF(m_width, m_height), outScale, outOffset);
 }
 
 void D3DWallpaperRenderer::updateSourceTexture(const QImage& img) {
