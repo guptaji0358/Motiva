@@ -4,6 +4,7 @@
 #include <functional>
 #include <vector>
 #include <QString>
+#include "BinaryRainConfig.h"
 
 class QComboBox;
 class QSlider;
@@ -69,6 +70,8 @@ signals:
     // The Explorer menu was just (un)registered - MainWindow fills in the
     // playlist entries from the library it owns.
     void explorerIntegrationChanged(bool enabled);
+    // "Use Binary Rain" was clicked: MainWindow loads the procedural source.
+    void binaryRainRequested();
 
     // Fired around a live Appearance/Visual Style change so MainWindow can
     // show/hide its own ThemeTransitionOverlay in lockstep with this
@@ -95,6 +98,13 @@ private:
     void onThemeChanged(int index);
     void onShowInWindowsSearchToggled(bool checked);
     void onExplorerIntegrationToggled(bool checked);
+    // Binary Rain page: preset / slider edits go through BinaryRain::Config
+    // (validation + "Custom" rule), then to the live player and settings.
+    void onRainPresetChanged(int index);
+    void onRainSliderChanged(BinaryRain::Param param, int value);
+    void onRainReset();
+    void applyRainConfig(bool persist);
+    void syncRainControls();
 
     // Shared machinery behind a live Theme change: shows the transition
     // overlay (this dialog's own + MainWindow's, via the signals above),
@@ -179,4 +189,8 @@ private:
     // Single "Theme" selector (Dark Aurora / Light Aurora / Dark Onyx /
     // Light Onyx). Index order matches Theme::AppTheme's ordinal order exactly.
     GlDropdown* m_themeCombo = nullptr;
+
+    BinaryRain::Config m_rainConfig;
+    GlDropdown* m_rainPresetCombo = nullptr;
+    GlSlider* m_rainSliders[BinaryRain::kParamCount] = {};
 };

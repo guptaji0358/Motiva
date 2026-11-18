@@ -775,6 +775,11 @@ void MainWindow::buildUi() {
 
     m_settingsDialog = new SettingsDialog(m_manager.get(), &m_settings, m_cleanup, m_backup, this);
     qInfo() << "[Startup] stage: SettingsDialog done";
+    // Settings > Binary Rain > "Use Binary Rain": same convergence point as
+    // Open Media / drop / paste, so preview, persistence and Set as Wallpaper
+    // all work unchanged.
+    connect(m_settingsDialog, &SettingsDialog::binaryRainRequested, this,
+            [this] { loadVideoSource(VideoPlayer::binaryRainSource()); });
     connect(m_settingsDialog, &SettingsDialog::mutedChanged, this, [this](bool muted) {
         if (m_trayMuteAction) {
             m_trayMuteAction->blockSignals(true);
@@ -925,8 +930,12 @@ void MainWindow::applyVideoInfoUi() {
 
     const QUrl asUrl(m_selectedVideoPath);
     const bool isWebSource = isWebVideoUrl(asUrl);
+    const bool isProcedural = VideoPlayer::isProceduralSource(m_selectedVideoPath);
     QString suffix;
-    if (isWebSource) {
+    if (isProcedural) {
+        m_fileNameLabel->setText(tr("Binary Rain"));
+        suffix = tr("GENERATED");
+    } else if (isWebSource) {
         // A URL's own QFileInfo() split is misleading (no real
         // filesystem semantics), so show the URL itself as the name.
         m_fileNameLabel->setText(m_selectedVideoPath);
@@ -1167,6 +1176,11 @@ void MainWindow::onPasteShortcut() {
 bool MainWindow::isUsableVideoSource(const QString& source) {
     if (source.isEmpty()) {
         return false;
+    }
+    // The generated Binary Rain wallpaper has no file: its pseudo-source is
+    // always usable.
+    if (VideoPlayer::isProceduralSource(source)) {
+        return true;
     }
     const QUrl asUrl(source);
     if (isWebVideoUrl(asUrl)) {
@@ -1571,7 +1585,9 @@ void MainWindow::onWallpaperVerified() {
     n.title = tr("Wallpaper Active");
     n.message = m_selectedVideoPath.isEmpty()
         ? tr("Your wallpaper is now showing on the desktop.")
-        : tr("\"%1\" is now showing on the desktop.").arg(QFileInfo(m_selectedVideoPath).fileName());
+        : tr("\"%1\" is now showing on the desktop.")
+              .arg(VideoPlayer::isProceduralSource(m_selectedVideoPath) ? tr("Binary Rain")
+                                                                        : QFileInfo(m_selectedVideoPath).fileName());
     n.key = QStringLiteral("playback-active");
     n.rateLimit = true;
     n.cooldownMs = 5000;

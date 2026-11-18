@@ -77,8 +77,9 @@ void SettingsDialog::buildUi() {
                {1, tr("Appearance")},
                {2, tr("Display and Playback")},
                {3, tr("Notifications")},
-               {4, tr("Integration")}};
-    enum { PgGeneral, PgAppearance, PgDisplay, PgNotify, PgIntegration };
+               {4, tr("Integration")},
+               {5, tr("Binary Rain")}};
+    enum { PgGeneral, PgAppearance, PgDisplay, PgNotify, PgIntegration, PgRain };
 
     // Panels first so every control paints above them.
     m_titlePanel = new GlPanel(m_canvas);
@@ -200,6 +201,32 @@ void SettingsDialog::buildUi() {
     connect(m_muteCheck, &GlToggle::toggled, this, &SettingsDialog::onMuteToggled);
     m_loopCheck = addToggle(PgDisplay, tr("Loop video"));
     connect(m_loopCheck, &GlToggle::toggled, this, &SettingsDialog::onLoopToggled);
+
+    // Binary Rain (procedural wallpaper). Edits apply to the live player at
+    // once (the main window preview / desktop update) and are saved.
+    addSection(PgRain, tr("Binary Rain"));
+    {
+        auto* useButton = addButtonRow(
+            PgRain, makeDesc(tr("Generated live, no video file. Load it as the current wallpaper source.")),
+            tr("Use Binary Rain"));
+        connect(useButton, &GlButton::clicked, this, [this] { emit binaryRainRequested(); });
+    }
+    m_rainPresetCombo = addDropdown(PgRain, tr("Preset"));
+    for (int i = 0; i < BinaryRain::kPresetCount; ++i) {
+        m_rainPresetCombo->addItem(BinaryRain::presetName(static_cast<BinaryRain::Preset>(i)));
+    }
+    connect(m_rainPresetCombo, &GlDropdown::currentIndexChanged, this, &SettingsDialog::onRainPresetChanged);
+    for (int i = 0; i < BinaryRain::kParamCount; ++i) {
+        const auto param = static_cast<BinaryRain::Param>(i);
+        auto* v = new GlSlider(m_canvas);
+        v->setText(BinaryRain::paramLabel(param));
+        v->setRange(BinaryRain::rangeOf(param).min, BinaryRain::rangeOf(param).max);
+        m_rows.push_back({Row::Slider, PgRain, v, nullptr, 54});
+        m_rainSliders[i] = v;
+        connect(v, &GlSlider::valueChanged, this, [this, param](int value) { onRainSliderChanged(param, value); });
+    }
+    connect(addButtonRow(PgRain, makeDesc(tr("Restore the Classic Matrix preset.")), tr("Reset to Defaults")),
+            &GlButton::clicked, this, &SettingsDialog::onRainReset);
 
     // Notifications (see NotificationManager). Each switch is saved the
     // moment it is toggled and read live by the notifier - no restart.
@@ -524,6 +551,52 @@ void SettingsDialog::restoreFromSettings() {
     m_manager->setVolume(m_settings->volume());
     m_manager->setMuted(m_settings->muted());
     m_manager->setLooping(m_settings->loop());
+
+    m_rainConfig = m_settings->binaryRainConfig();
+    syncRainControls();
+    applyRainConfig(false);
+}
+
+void SettingsDialog::syncRainControls() {
+    // Reflecting state must not re-enter the edit handlers (which would turn
+    // a preset into Custom).
+    QSignalBlocker presetBlock(m_rainPresetCombo);
+    m_rainPresetCombo->setCurrentIndex(static_cast<int>(m_rainConfig.preset));
+    for (int i = 0; i < BinaryRain::kParamCount; ++i) {
+        QSignalBlocker block(m_rainSliders[i]);
+        m_rainSliders[i]->setValue(m_rainConfig.params.get(static_cast<BinaryRain::Param>(i)));
+    }
+}
+
+void SettingsDialog::applyRainConfig(bool persist) {
+    m_rainConfig.validate();
+    m_manager->player()->setBinaryRainConfig(m_rainConfig);
+    if (persist) {
+        m_settings->setBinaryRainConfig(m_rainConfig);
+    }
+}
+
+void SettingsDialog::onRainPresetChanged(int index) {
+    if (index < 0 || index >= BinaryRain::kPresetCount) {
+        return;
+    }
+    m_rainConfig.applyPreset(static_cast<BinaryRain::Preset>(index)); // Custom keeps current values
+    syncRainControls();
+    applyRainConfig(true);
+}
+
+void SettingsDialog::onRainSliderChanged(BinaryRain::Param param, int value) {
+    if (!m_rainConfig.setParam(param, value)) {
+        return;
+    }
+    syncRainControls(); // preset combo now reads "Custom"
+    applyRainConfig(true);
+}
+
+void SettingsDialog::onRainReset() {
+    m_rainConfig.resetToDefaults();
+    syncRainControls();
+    applyRainConfig(true);
 }
 
 void SettingsDialog::refreshMonitorList() {

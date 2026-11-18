@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include "Theme.h"
+#include "BinaryRainConfig.h"
 
 // Thin wrapper around QSettings (stored in the registry under
 // HKCU\Software\Motiva via the default Windows QSettings backend).
@@ -116,6 +117,13 @@ public:
     void setPlayVideosOnBattery(bool enabled);
     bool playImagesOnBattery() const;
     void setPlayImagesOnBattery(bool enabled);
+
+    // Procedural Binary Rain wallpaper: the selected preset (or Custom) and
+    // the parameter values, stored under "binaryRain/*". Reads are validated
+    // (unknown preset -> Classic, out-of-range values clamped); a named
+    // preset always loads with that preset's current table values.
+    BinaryRain::Config binaryRainConfig() const;
+    void setBinaryRainConfig(const BinaryRain::Config& config);
 
     // The single selected Motiva Theme (see Theme::AppTheme) - replaces
     // the old two-axis Appearance x Visual Style settings. If neither
