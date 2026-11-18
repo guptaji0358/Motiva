@@ -71,4 +71,15 @@ a fix.
 - `CloudManager` lines in the cloud sections of the history may describe pages
   that the 2026-10-24 policy removed.
 
+## Binary Rain (added 2026-11-18; uncommitted)
+
+- **Compiled** (2026-11-18, scratch build with Qt kit at `C:\Qt\6.12.0\mingw_64`, Qt Multimedia installed): the
+  full `Motiva` target builds with no errors. The app was NOT launched (user's PC in use), so the Settings page,
+  preview, desktop attach and battery suspension are unverified at runtime.
+- Not visually verified; no CPU/GPU measurement in the app. Engine only: ~4.7 ms/frame (Dense, 1080p, one core).
+- One shared frame at the first target monitor's aspect ratio: other monitors with a different aspect
+  are Fill/Fit-scaled. No display-change handling (same as the rest of the app).
+- Preview-only (wallpaper not active) keeps rendering at ~30 fps while loaded, even with the window hidden.
+- Settings sliders write QSettings on every change.
+
 Related: [[overview]] · [[decisions]] · [[index]]

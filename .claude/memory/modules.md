@@ -46,6 +46,17 @@ Read the header first; this file only says what each piece owns.
 - **SettingsDialog** — pages: General, Appearance, Display and Playback,
   Notifications, Integration; layout styles 0 Tabs / 1 Sidebar / 2 Grouped.
 
+- **Binary Rain** (procedural wallpaper, no file) — `BinaryRainConfig` (presets
+  table, ranges, validation, "edit => Custom", QSettings `binaryRain/*`
+  load/save), `BinaryRainEngine` (CPU raster of falling 0/1 streams, seedable,
+  no per-frame allocation) + `BinaryRainFramePool`. `VideoPlayer` runs it as
+  `MediaKind::Procedural` (source string `motiva-procedural:binary-rain`, 33 ms
+  timer, frames via the normal `frameReady`); `WallpaperManager` passes the first
+  target monitor size and suspends it with the battery policy; UI = Settings >
+  "Binary Rain" page, "Use Binary Rain" -> `MainWindow::loadVideoSource`.
+  Play/Pause is the existing button. Compiled+unit-tested only for config/engine
+  (see [[known-issues]]).
+
 ## Playlists & library
 
 - **LibraryDatabase** — SQLite `.mtv`, schema migrations (current schema **9**;
