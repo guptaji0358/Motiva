@@ -3,31 +3,31 @@
 ## Build (dev)
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="D:/Apps/Qt6/6.12.0/mingw_64" -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -S . -B out/build -G Ninja -DCMAKE_PREFIX_PATH="D:/Apps/Qt6/6.12.0/mingw_64" -DCMAKE_BUILD_TYPE=Release
+cmake --build out/build
 ```
 
 - Use the Qt-bundled MinGW (`D:\Apps\Qt6\Tools\mingw1310_64\bin`), put it first on PATH.
-- `build-and-deploy.bat` does: `taskkill /F /IM Motiva.exe`, `cmake --build build`,
+- `build-and-deploy.bat` does: `taskkill /F /IM Motiva.exe`, `cmake --build out/build`,
   copies `build\Motiva.exe` to `deployment\resources\bin\`.
 - Kill a running `Motiva.exe` before rebuilding; the running exe locks the
   output. Git Bash form: `taskkill //F //IM Motiva.exe`.
-- Clean deployment: `deploy/Deploy.ps1` (needs Release build with
-  `MotivaLauncher`); installer: `installer/build-installer.ps1` -> `release/MotivaSetup.exe`.
+- Clean deployment: `scripts/deploy/Deploy.ps1` (needs Release build with
+  `MotivaLauncher`); installer: `scripts/installer/build-installer.ps1` -> `out/release/MotivaSetup.exe`.
 
 ## Build caveats
 
-- The repo lives under OneDrive. Sync locks on fresh `build/` files can make
+- The repo lives under OneDrive. Sync locks on fresh `out/build/` files can make
   windres/`cc1.exe` fail silently. Retry, or `rm -rf build` and reconfigure,
   before debugging source (see history log 04).
 - Qt6OpenGL.dll and Qt6OpenGLWidgets.dll must be deployed (`resources/Qt/`).
 
 ## Run and observe
 
-- Run `build/Motiva.exe` (or `deployment\...\Motiva.exe`).
+- Run `out/build/Motiva.exe` (or `deployment\...\Motiva.exe`).
 - Read `%TEMP%\Motiva.log` first when diagnosing desktop attach. Startup lines
   include `[Discover]`, `[Shell]`, `[Verify]`, `[Hierarchy]`, `[IPC]`, `[Lifecycle]`.
-- Second launch (`build/Motiva.exe` while running) triggers recovery via IPC,
+- Second launch (`out/build/Motiva.exe` while running) triggers recovery via IPC,
   a handy way to re-attach without UI automation.
 - Test processes launched from the Claude desktop session are MSIX-virtualised:
   `%APPDATA%`/HKCU writes land in the package overlay. To test real storage,
@@ -45,12 +45,12 @@ Record in memory what was verified and what was not (see [[known-issues]]).
 
 ## Binary Rain unit tests (opt-in)
 
-`tests/` is a standalone CMake project (Qt Core/Gui/Test only): `cmake -S tests -B <dir> -G Ninja
+`scripts/tests/` is a standalone CMake project (Qt Core/Gui/Test only): `cmake -S tests -B <dir> -G Ninja
 -DCMAKE_PREFIX_PATH=<Qt kit>`, build, run `BinaryRainTests.exe` (on Windows pass `-o <winpath>,txt`
-to see output; stdout is empty under msys). Three exes (`DesktopScalingTests`: 9 passed, Core/Test only): `BinaryRainTests` (26 passed 2026-11-18: config, persistence via QSettings INI, engine, frame pool)
+to see output; stdout is empty under msys). Exes (`DesktopScalingTests`: 9 passed, Core/Test only; `VdDesktopTests`: 14; `VdWindowTests`: 5, GUI, needs a real desktop + OpenGL, links the app sources): `BinaryRainTests` (26 passed 2026-11-18: config, persistence via QSettings INI, engine, frame pool)
 and `VideoPlayerRainTests` (9 passed: play/pause/unload/suspend/config/target size; needs Multimedia, run with
 `QT_QPA_PLATFORM=offscreen`). Not covered: Settings UI, preview, desktop attach, real CPU/GPU cost.
-Qt kit moved to `C:\Qt\6.12.0\mingw_64` (was `D:\Apps\Qt6`); `build/` still points at the old path.
+Qt kit moved to `C:\Qt\6.12.0\mingw_64` (was `D:\Apps\Qt6`); `out/build/` still points at the old path.
 
 ## Do not
 

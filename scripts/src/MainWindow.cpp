@@ -1720,9 +1720,20 @@ void MainWindow::enterVirtualDesktop(const QString& independentSource) {
     connect(m_virtualDesktop, &VirtualDesktopSession::finished, this, &MainWindow::onVirtualDesktopFinished);
 
     // Get the main window out of the way for the duration, and remember to
-    // bring it back exactly as it was.
+    // bring it back exactly as it was. It is hidden only once the preview has
+    // presented its first frame: the preview needs ~1.5 s to create its GL
+    // surface, and hiding first would show the bare desktop for that whole time.
+    // The timer is a fallback so a preview that never presents cannot leave the
+    // main window up forever.
     m_restoreAfterVirtualDesktop = isVisible() && !isMinimized();
-    hide();
+    VirtualDesktopSession* session = m_virtualDesktop;
+    auto hideForPreview = [this, session] {
+        if (m_virtualDesktop == session && isVisible()) {
+            hide();
+        }
+    };
+    connect(session, &VirtualDesktopSession::firstFramePresented, this, hideForPreview);
+    QTimer::singleShot(3000, this, hideForPreview);
     m_virtualDesktop->start();
 }
 

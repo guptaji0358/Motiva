@@ -43,6 +43,9 @@ public:
 signals:
     // Emitted exactly once, after the windows are closed.
     void finished();
+    // Emitted once, when the controller window has presented its first frame.
+    // Callers hide their own window then, so the real desktop never shows in between.
+    void firstFramePresented();
 
 private:
     struct Entry {
@@ -58,6 +61,7 @@ private:
     void applyPlayState();
     Entry* controllerEntry();
     void ensureController();
+    void maybeEmitFirstFrame();
 
     PreviewSource* m_source = nullptr; // child of this object
     std::vector<Entry> m_entries;
@@ -70,5 +74,6 @@ private:
     bool m_pauseOnBattery = false;
     bool m_syncQueued = false;
     bool m_finishedEmitted = false;
+    bool m_firstFrameEmitted = false;
     bool m_mutating = false; // entries being destroyed: skip playback decisions
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPointF>
+#include <QRect>
 #include <QRectF>
 #include <QSizeF>
 #include <QString>
@@ -15,6 +16,15 @@
 //  - VdDesktop::planScreenSync: which preview windows to add/remove when the
 //    set of monitors changes.
 namespace VdDesktop {
+
+// Rectangle a full-screen preview window uses for a monitor. It covers the whole
+// monitor but extends 1 px below it instead of matching it exactly: an
+// OpenGL window that exactly covers a monitor makes Windows treat it as
+// full-screen (WM_DISPLAYCHANGE bursts while it is created/shown, measured), which
+// shows up as a blink of the whole display. The extra row is off-screen.
+inline QRect coverRect(const QRect& monitor) {
+    return monitor.adjusted(0, 0, 0, 1);
+}
 
 constexpr int kSlotCount = 5;  // taskbar slots: 0 = Start, 1..2 = simulated windows, 3..4 decoration
 constexpr int kWindowCount = 2;

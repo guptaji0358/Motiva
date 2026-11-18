@@ -42,6 +42,8 @@ public:
     void fitToScreen();
     // True when this window is on screen and not minimised.
     bool isShowing() const { return isVisible() && !isMinimized(); }
+    // True once the first frame has been swapped to the screen.
+    bool hasPresented() const { return m_presented; }
 
 signals:
     // Emitted exactly once when the user (or the session) closes the window.
@@ -51,6 +53,8 @@ signals:
     void windowedToggleRequested();
     // Shown / hidden / minimised / restored.
     void visibilityChanged();
+    // Emitted once, when the first frame has actually been presented.
+    void firstFramePresented();
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -75,4 +79,5 @@ private:
     bool m_windowed = false;
     bool m_controller = true;
     bool m_closedEmitted = false;
+    bool m_presented = false;
 };
