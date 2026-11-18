@@ -57,6 +57,19 @@ Read the header first; this file only says what each piece owns.
   Play/Pause is the existing button. Compiled+unit-tested only for config/engine
   (see [[known-issues]]).
 
+- **Virtual Desktop Preview** (Phase 1, simulated; never touches the real desktop) —
+  `VirtualDesktopSession` (lifecycle owner: one source + one window; idempotent `end()`,
+  also on `aboutToQuit`), `VirtualDesktopWindow` (frameless top-most full-screen `QWidget` with one
+  `GlCanvas`; Esc / "Exit Preview" button close it; pauses an independent source while hidden),
+  `VdWallpaperSurface` (GlItem; draws the shared frame straight to GL, placement via `DesktopScaling`),
+  `DesktopScaling.h` (header-only Fill/Fit/Stretch/Original geometry; same rules as
+  `D3DWallpaperRenderer::computeUvTransform`, not yet shared with it), `PreviewSource`:
+  `ActiveWallpaperPreviewSource` (consumer-only listener on the shared player; never loads/plays/pauses it)
+  and `IndependentPreviewSource` (own muted `VideoPlayer`, for non-active items / Binary Rain).
+  Entry: `MainWindow::enterVirtualDesktop(source = "")` via the "Virtual Desktop" button over the
+  preview well (hides MainWindow, restores it on finish). Nothing yet calls it with an independent
+  source (no playlist-item entry point). See [[known-issues]].
+
 ## Playlists & library
 
 - **LibraryDatabase** — SQLite `.mtv`, schema migrations (current schema **9**;

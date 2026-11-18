@@ -82,4 +82,18 @@ a fix.
 - Preview-only (wallpaper not active) keeps rendering at ~30 fps while loaded, even with the window hidden.
 - Settings sliders write QSettings on every change.
 
+## Virtual Desktop Preview (Phase 1, added 2026-11-18; uncommitted)
+
+- **Verified** (scratch harness `SessionSmoke`, real classes, 2026-11-18): independent video + Binary Rain
+  sources, Esc close, idempotent end, active source leaves the shared player's state unchanged, OS wallpaper
+  path unchanged, no window left after abrupt session deletion; `DesktopScalingTests` 9 passed; full `Motiva`
+  target builds. The "Virtual Desktop" button was NOT clicked in the real app (UI not driven).
+- **Not built yet:** multi-monitor (one window only, on MainWindow's screen), windowed mode, icons/taskbar/
+  Start menu/sim windows, playlist-item entry point, monitor hot-plug handling (none exists in the app),
+  battery handling (active Binary Rain preview freezes on battery; video keeps decoding).
+- **Unmeasured:** 4K decode, real multi-monitor. Phase 0: each physical-4K GL window costs ~300-350 MB;
+  GPU draw ~33% of a core vs 130-150% for CPU pre-scale at 30 fps. `AA_ShareOpenGLContexts` is not set.
+- `DesktopScaling.h` duplicates the scaling rules of `D3DWallpaperRenderer`; the renderer was deliberately
+  not refactored to use it.
+
 Related: [[overview]] · [[decisions]] · [[index]]
