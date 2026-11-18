@@ -9,15 +9,20 @@ class GlButton;
 class GlCanvas;
 class PreviewSource;
 class QScreen;
-class QTimer;
 class VdDesktopChrome;
 class VdWallpaperSurface;
 
-// One full-screen preview window on one monitor (Phase 1: a single window).
-// Purely a simulated surface: it never touches the real desktop, the real
-// wallpaper windows, Explorer, or the OS wallpaper. It is frameless and
-// top-most like MediaPreview's viewer, always shows an Exit control, and
-// closes on Esc. It does not own its PreviewSource.
+// One preview window on one monitor. Purely a simulated surface: it never
+// touches the real desktop, the real wallpaper windows, Explorer, or the OS
+// wallpaper. Full screen it is frameless and top-most like MediaPreview's
+// viewer; windowed it is a normal resizable window. It does not own its
+// PreviewSource and does not decide when the source plays - the session does
+// (it sees every window and the power state); this window only reports when
+// its visibility changes.
+//
+// One window per session is the "controller": it alone shows the Exit /
+// Windowed / Icons buttons and the simulated icons, taskbar, Start menu and
+// windows (like the real primary monitor). The others show just the wallpaper.
 class VirtualDesktopWindow : public QWidget {
     Q_OBJECT
 public:
@@ -27,15 +32,25 @@ public:
     // Fullscreen (frameless, top-most) <-> a normal resizable window.
     void setWindowed(bool windowed);
     bool isWindowed() const { return m_windowed; }
-    // Simulated desktop icons + taskbar over the wallpaper.
+    void setController(bool controller);
+    bool isController() const { return m_controller; }
+    // Simulated desktop icons + taskbar (controller only).
     void setChromeVisible(bool visible);
-    // Pause an independent source while the PC runs on battery (the active
-    // source follows WallpaperManager's own battery policy instead).
-    void setPauseOnBattery(bool pause);
+    // Small status line over the wallpaper ("Paused on battery"); empty hides it.
+    void setNote(const QString& text);
+    // Fits the window to its screen again (resolution change); no-op windowed.
+    void fitToScreen();
+    // True when this window is on screen and not minimised.
+    bool isShowing() const { return isVisible() && !isMinimized(); }
 
 signals:
     // Emitted exactly once when the user (or the session) closes the window.
     void closed();
+    // The user asked for windowed <-> fullscreen; the session decides what
+    // that means for the other monitors' windows.
+    void windowedToggleRequested();
+    // Shown / hidden / minimised / restored.
+    void visibilityChanged();
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -46,9 +61,8 @@ protected:
 
 private:
     void layoutItems(const QSizeF& size);
-    void applyFrameFromSource();
-    void applyPlayState();
     void layoutButtons();
+    void applyFrameFromSource();
 
     QPointer<PreviewSource> m_source;
     GlCanvas* m_canvas = nullptr;
@@ -57,10 +71,8 @@ private:
     GlButton* m_modeButton = nullptr;
     GlButton* m_chromeButton = nullptr;
     VdDesktopChrome* m_chrome = nullptr;
-    QTimer* m_powerTimer = nullptr;
     QRect m_windowedGeometry;
     bool m_windowed = false;
-    bool m_pauseOnBattery = false;
-    bool m_batteryPaused = false;
+    bool m_controller = true;
     bool m_closedEmitted = false;
 };

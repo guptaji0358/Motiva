@@ -56,6 +56,7 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/VdWallpaperSurface.cpp
     scripts/src/VdDesktopChrome.cpp
     scripts/include/VdDesktopChrome.h
+    scripts/include/VdDesktopModel.h
     scripts/include/VdWallpaperSurface.h
     scripts/src/VirtualDesktopWindow.cpp
     scripts/include/VirtualDesktopWindow.h

@@ -6,25 +6,17 @@
 #include "VdWallpaperSurface.h"
 
 #include <QCloseEvent>
-#include <QKeyEvent>
-#include <QGuiApplication>
-#include <QScreen>
-#include <QWindow>
-#include <QTimer>
 #include <QEvent>
-#include <windows.h>
+#include <QGuiApplication>
+#include <QKeyEvent>
+#include <QScreen>
 #include <QVBoxLayout>
+#include <QWindow>
 
 namespace {
 constexpr Qt::WindowFlags kFlags = Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint;
 constexpr Qt::WindowFlags kWindowedFlags = Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
                                            Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint;
-constexpr int kPowerPollMs = 5000;
-
-bool onBattery() {
-    SYSTEM_POWER_STATUS status{};
-    return GetSystemPowerStatus(&status) && status.ACLineStatus == 0;
-}
 constexpr qreal kMargin = 20;
 constexpr qreal kExitW = 170;
 constexpr qreal kExitH = 36;
@@ -58,7 +50,7 @@ VirtualDesktopWindow::VirtualDesktopWindow(PreviewSource* source, DesktopScaling
     m_chrome = new VdDesktopChrome(m_canvas);
     m_chrome->setVisible(false);
 
-    // Created after the surface so it paints above it (items paint in creation order).
+    // Created after the surface so they paint above it (items paint in creation order).
     m_exitButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
     m_exitButton->setText(tr("Exit Preview  (Esc)"));
     m_exitButton->setToolTip(tr("Leave the virtual desktop and return to Motiva"));
@@ -67,16 +59,12 @@ VirtualDesktopWindow::VirtualDesktopWindow(PreviewSource* source, DesktopScaling
     m_modeButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
     m_modeButton->setText(tr("Windowed  (F11)"));
     m_modeButton->setToolTip(tr("Switch between full screen and a resizable window"));
-    connect(m_modeButton, &GlButton::clicked, this, [this] { setWindowed(!m_windowed); });
+    connect(m_modeButton, &GlButton::clicked, this, &VirtualDesktopWindow::windowedToggleRequested);
 
     m_chromeButton = new GlButton(m_canvas, GlButton::Kind::Secondary);
     m_chromeButton->setText(tr("Show Icons  (I)"));
-    m_chromeButton->setToolTip(tr("Show simulated desktop icons and a taskbar over the wallpaper"));
+    m_chromeButton->setToolTip(tr("Show simulated desktop icons, taskbar, Start menu and windows over the wallpaper"));
     connect(m_chromeButton, &GlButton::clicked, this, [this] { setChromeVisible(!m_chrome->isVisible()); });
-
-    m_powerTimer = new QTimer(this);
-    m_powerTimer->setInterval(kPowerPollMs);
-    connect(m_powerTimer, &QTimer::timeout, this, &VirtualDesktopWindow::applyPlayState);
 
     m_canvas->setLayoutCallback([this](const QSizeF& size) { layoutItems(size); });
     m_canvas->relayout();
@@ -107,10 +95,37 @@ void VirtualDesktopWindow::layoutButtons() {
     m_chromeButton->setRect(QRectF(x, kMargin, kExitW, kExitH));
 }
 
+void VirtualDesktopWindow::setController(bool controller) {
+    m_controller = controller;
+    m_exitButton->setVisible(controller);
+    m_modeButton->setVisible(controller);
+    m_chromeButton->setVisible(controller);
+    if (!controller) {
+        m_chrome->setVisible(false);
+    }
+    m_canvas->update();
+}
+
 void VirtualDesktopWindow::setChromeVisible(bool visible) {
+    if (!m_controller) {
+        visible = false;
+    }
     m_chrome->setVisible(visible);
     m_chromeButton->setText(visible ? tr("Hide Icons  (I)") : tr("Show Icons  (I)"));
     m_canvas->update();
+}
+
+void VirtualDesktopWindow::setNote(const QString& text) {
+    m_surface->setNote(text);
+}
+
+void VirtualDesktopWindow::fitToScreen() {
+    if (m_windowed) {
+        return;
+    }
+    if (QScreen* s = screen()) {
+        setGeometry(s->geometry());
+    }
 }
 
 void VirtualDesktopWindow::setWindowed(bool windowed) {
@@ -118,10 +133,10 @@ void VirtualDesktopWindow::setWindowed(bool windowed) {
         return;
     }
     m_windowed = windowed;
-    QScreen* screen = windowHandle() ? windowHandle()->screen() : QGuiApplication::primaryScreen();
-    const QRect avail = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 720);
-    // Changing flags recreates the native window; the hide/show pair below is
-    // handled by applyPlayState() so an independent source just resumes.
+    QScreen* scr = screen() ? screen() : QGuiApplication::primaryScreen();
+    const QRect avail = scr ? scr->availableGeometry() : QRect(0, 0, 1280, 720);
+    // Changing flags recreates the native window; the session reacts to the
+    // visibility change and keeps an independent source playing.
     setWindowFlags(windowed ? kWindowedFlags : kFlags);
     if (windowed) {
         if (!m_windowedGeometry.isValid()) {
@@ -130,35 +145,15 @@ void VirtualDesktopWindow::setWindowed(bool windowed) {
         }
         setGeometry(m_windowedGeometry);
         m_modeButton->setText(tr("Fullscreen  (F11)"));
-        show();
     } else {
         m_windowedGeometry = geometry();
-        setGeometry(screen ? screen->geometry() : avail);
+        setGeometry(scr ? scr->geometry() : avail);
         m_modeButton->setText(tr("Windowed  (F11)"));
-        show();
     }
+    show();
     raise();
     activateWindow();
     m_canvas->setFocus();
-}
-
-void VirtualDesktopWindow::setPauseOnBattery(bool pause) {
-    m_pauseOnBattery = pause;
-    applyPlayState();
-}
-
-void VirtualDesktopWindow::applyPlayState() {
-    if (!m_source) {
-        return;
-    }
-    const bool pause = m_pauseOnBattery && onBattery();
-    m_batteryPaused = pause;
-    m_surface->setNote(pause ? tr("Paused on battery") : QString());
-    if (pause || !isVisible()) {
-        m_source->pausePreview();
-    } else {
-        m_source->resumePreview();
-    }
 }
 
 void VirtualDesktopWindow::applyFrameFromSource() {
@@ -172,11 +167,11 @@ void VirtualDesktopWindow::keyPressEvent(QKeyEvent* event) {
         close();
         return;
     }
-    if (event->key() == Qt::Key_F11) {
-        setWindowed(!m_windowed);
+    if (m_controller && event->key() == Qt::Key_F11) {
+        emit windowedToggleRequested();
         return;
     }
-    if (event->key() == Qt::Key_I) {
+    if (m_controller && event->key() == Qt::Key_I) {
         setChromeVisible(!m_chrome->isVisible());
         return;
     }
@@ -193,27 +188,18 @@ void VirtualDesktopWindow::closeEvent(QCloseEvent* event) {
 
 void VirtualDesktopWindow::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
-    applyPlayState(); // resumes unless paused by the battery policy; no-op for the active source
-    m_powerTimer->start();
+    emit visibilityChanged();
     m_canvas->setFocus();
 }
 
 void VirtualDesktopWindow::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
-    m_powerTimer->stop();
-    if (m_source) {
-        m_source->pausePreview(); // stop decoding for a hidden preview
-    }
+    emit visibilityChanged();
 }
 
 void VirtualDesktopWindow::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
-    // A minimised windowed preview needn't decode.
-    if (event->type() == QEvent::WindowStateChange && m_source) {
-        if (isMinimized()) {
-            m_source->pausePreview();
-        } else {
-            applyPlayState();
-        }
+    if (event->type() == QEvent::WindowStateChange) {
+        emit visibilityChanged(); // a minimised windowed preview needn't decode
     }
 }
