@@ -67,8 +67,9 @@ Read the header first; this file only says what each piece owns.
   `ActiveWallpaperPreviewSource` (consumer-only listener on the shared player; never loads/plays/pauses it)
   and `IndependentPreviewSource` (own muted `VideoPlayer`, for non-active items / Binary Rain).
   Entry: `MainWindow::enterVirtualDesktop(source = "")` via the "Virtual Desktop" button over the
-  preview well (hides MainWindow, restores it on finish). Nothing yet calls it with an independent
-  source (no playlist-item entry point). See [[known-issues]].
+  preview well (hides MainWindow, restores it on finish). Phase 2: playlist item context menu
+  "Preview on Virtual Desktop" -> `PlaylistDialog::virtualDesktopPreviewRequested(path)` ->
+  `enterVirtualDesktop(path)` (independent source; available items only). See [[known-issues]].
 
 ## Playlists & library
 
