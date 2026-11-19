@@ -102,7 +102,9 @@ public:
 
     // Adds files to a playlist (picker, drops, Explorer "Add to Motiva
     // playlist") and reports the outcome in the window.
-    void addFilesTo(qint64 playlistId, const QStringList& paths, int insertRow = -1);
+    // Returns how many items were really added (0 = nothing: duplicates or
+    // unsupported files) or -1 when the playlist is missing / the write failed.
+    int addFilesTo(qint64 playlistId, const QStringList& paths, int insertRow = -1);
     void selectPlaylist(qint64 id);
 
     // MainWindow tells this window whether the active playlist is what's on

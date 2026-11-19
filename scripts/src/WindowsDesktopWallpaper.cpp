@@ -471,7 +471,20 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd, uint64_t generation) {
 }
 
 void WindowsDesktopWallpaper::DetachFromDesktop(HWND hwnd) {
-    std::lock_guard<std::mutex> lock(g_desktopStateMutex);
+    // AttachToDesktop holds this mutex on a worker thread while it calls
+    // SetWindowPos/SetParent on a window owned by THIS (GUI) thread; those
+    // calls are served only when this thread handles sent messages. A plain
+    // blocking lock here therefore deadlocked whenever a wallpaper was
+    // re-applied while an attach was still in flight (verified with a stack
+    // dump). Wait with try_lock instead, answering cross-thread sent messages
+    // (and nothing else - no posted messages, no Qt event dispatch) meanwhile.
+    std::unique_lock<std::mutex> lock(g_desktopStateMutex, std::try_to_lock);
+    while (!lock.owns_lock()) {
+        MSG msg;
+        PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+        MsgWaitForMultipleObjectsEx(0, nullptr, 5, QS_SENDMESSAGE, MWMO_INPUTAVAILABLE);
+        lock.try_lock();
+    }
     if (!hwnd || !IsWindow(hwnd)) {
         return;
     }

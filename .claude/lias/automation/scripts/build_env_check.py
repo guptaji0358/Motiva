@@ -24,10 +24,10 @@ checks = {
     "mingw_gpp": any(os.path.isfile(os.path.join(m, "g++.exe")) for m in mingw),
     "cmake": shutil.which("cmake") is not None,
     "ninja": shutil.which("ninja") is not None,
-    "build_dir": os.path.isdir(os.path.join(root, "build")),
+    "build_dir": os.path.isdir(os.path.join(root, "out", "build")),
 }
 cache_prefix = None
-cache = os.path.join(root, "build", "CMakeCache.txt")
+cache = os.path.join(root, "out", "build", "CMakeCache.txt")
 if os.path.isfile(cache):
     with open(cache, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -36,7 +36,7 @@ if os.path.isfile(cache):
                 break
 warnings = []
 if cache_prefix and qt and os.path.normcase(os.path.normpath(cache_prefix)) != os.path.normcase(os.path.normpath(qt)):
-    warnings.append("build/CMakeCache.txt CMAKE_PREFIX_PATH differs from newest installed Qt kit")
+    warnings.append("out/build/CMakeCache.txt CMAKE_PREFIX_PATH differs from newest installed Qt kit")
 print(json.dumps({"ok": all(v for k, v in checks.items() if k != "build_dir"), "checks": checks,
                   "qt_kit": qt, "mingw_bin": mingw[-1] if mingw else "", "cmake_prefix_in_cache": cache_prefix,
                   "notes": warnings}))

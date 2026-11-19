@@ -16,6 +16,7 @@ const HOST_NAME = 'com.motiva.browser';
 const CHUNK_BYTES = 384 * 1024;
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // matches the limit enforced by Motiva
 const CALL_TIMEOUT_MS = 10 * 60 * 1000; // a download inside Motiva can take a while
+const MEDIA_IDLE_TIMEOUT_MS = 2 * 60 * 1000; // final 'media' reply; restarted by each progress update
 
 let port = null;
 let nextId = 1;
@@ -26,11 +27,16 @@ function connectHost() {
   const p = chrome.runtime.connectNative(HOST_NAME);
   p.onMessage.addListener((msg) => {
     const entry = pending.get(msg && msg.id);
-    if (entry) {
-      pending.delete(msg.id);
-      clearTimeout(entry.timer);
-      entry.resolve(msg);
+    if (!entry) return; // late/duplicate reply for a request that already finished: ignored
+    if (msg.progress) {
+      // A status update, not the result: keep waiting, but restart the idle timer.
+      entry.restart();
+      if (entry.onProgress) entry.onProgress(msg.progress);
+      return;
     }
+    pending.delete(msg.id);
+    clearTimeout(entry.timer);
+    entry.resolve(msg);
   });
   p.onDisconnect.addListener(() => {
     const reason = (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'Disconnected';
@@ -45,14 +51,21 @@ function connectHost() {
   return p;
 }
 
-function call(message, timeoutMs = 30000) {
+function call(message, timeoutMs = 30000, onProgress = null) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
-    const timer = setTimeout(() => {
+    const limit = Math.min(timeoutMs, CALL_TIMEOUT_MS);
+    const onTimeout = () => {
       pending.delete(id);
       reject(new Error('Motiva did not answer in time'));
-    }, Math.min(timeoutMs, CALL_TIMEOUT_MS));
-    pending.set(id, { resolve, reject, timer });
+    };
+    const entry = { resolve, reject, onProgress, timer: setTimeout(onTimeout, limit) };
+    entry.restart = () => {
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(onTimeout, limit);
+    };
+    const timer = entry.timer;
+    pending.set(id, entry);
     try {
       connectHost().postMessage({ ...message, id });
     } catch (e) {
@@ -77,6 +90,9 @@ function friendlyError(e) {
   }
   if (/Access to the specified native messaging host is forbidden/i.test(m)) {
     return 'Motiva helper does not allow this extension. Re-enable the browser extension in Motiva settings.';
+  }
+  if (/did not answer in time/i.test(m)) {
+    return 'Motiva did not confirm in time - it may still finish. Check your desktop.';
   }
   return m;
 }
@@ -208,12 +224,40 @@ async function uploadViaPage(tabId, frameId, src) {
   return { uploadId, mime: reply.mime || '', name: reply.name || '' };
 }
 
+// Requests currently in flight, keyed by what they do, so a repeated click on
+// the same item cannot start a second upload.
+const inflight = new Set();
+
 async function sendMedia({ action, playlistId, src, pageUrl, kind, tabId, frameId }) {
   const labels = { wallpaper: 'Set as wallpaper', playlist: 'Add to playlist', cache: 'Save to cache' };
-  toast(tabId, 'Motiva: sending… (' + labels[action] + ')');
+  const key = action + '|' + (playlistId || 0) + '|' + src;
+  if (inflight.has(key)) {
+    toast(tabId, 'Motiva: already working on this (' + labels[action] + ')', 'pending');
+    return;
+  }
+  inflight.add(key);
+  // Timing: ms since the click reached the worker. Visible in the service worker console.
+  const t0 = performance.now();
+  const mark = (stage) => console.info('[Motiva timing] ' + labels[action] + ' ' + stage + ' t=' + Math.round(performance.now() - t0) + 'ms');
+  let finished = false; // exactly one final toast per request
+  const finish = (text, level) => {
+    if (finished) return;
+    finished = true;
+    toast(tabId, text, level);
+  };
+  // Status updates are shown only for real acknowledgements from Motiva.
+  const onProgress = (stage) => {
+    mark('progress:' + stage);
+    if (finished) return;
+    if (stage === 'received') toast(tabId, 'Motiva: received the request…', 'pending');
+    else if (stage === 'applying') toast(tabId, 'Motiva: ' + (action === 'playlist' ? 'adding to the playlist…' : 'applying the wallpaper…'), 'pending');
+  };
+
+  toast(tabId, 'Motiva: sending… (' + labels[action] + ')', 'pending');
+  mark('start');
   call({ type: 'ping' }, 5000)
     .then((r) => {
-      if (r && r.ok && !r.appRunning) toast(tabId, 'Motiva is starting - the first request can take a minute…');
+      if (r && r.ok && !r.appRunning && !finished) toast(tabId, 'Motiva is starting - the first request can take a minute…', 'pending');
     })
     .catch(() => {});
   try {
@@ -229,6 +273,7 @@ async function sendMedia({ action, playlistId, src, pageUrl, kind, tabId, frameI
     } else {
       throw new Error('Unsupported address type');
     }
+    mark(upload ? 'uploaded' : 'upload skipped (Motiva downloads)');
     const reply = await call(
       {
         type: 'media',
@@ -241,13 +286,20 @@ async function sendMedia({ action, playlistId, src, pageUrl, kind, tabId, frameI
         mime: upload ? upload.mime : '',
         name: upload ? upload.name : nameFromUrl(src),
       },
-      CALL_TIMEOUT_MS
+      MEDIA_IDLE_TIMEOUT_MS,
+      onProgress
     );
+    mark('final reply ok=' + !!reply.ok);
+    // Success is shown only for Motiva's final confirmation (for a wallpaper:
+    // after it was verified on the desktop), never for "request sent".
     if (!reply.ok) throw new Error(reply.error || 'Motiva could not use this file');
-    toast(tabId, reply.message || 'Motiva: done', 'ok');
+    finish(reply.message || 'Motiva: done', 'ok');
     refreshPlaylists();
   } catch (e) {
-    toast(tabId, 'Motiva: ' + friendlyError(e), 'error');
+    mark('failed: ' + ((e && e.message) || e));
+    finish('Motiva: ' + friendlyError(e), 'error');
+  } finally {
+    inflight.delete(key);
   }
 }
 

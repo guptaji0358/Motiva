@@ -76,7 +76,7 @@ real Explorer right-click and the Windows 11 top-level menu are NOT verified.
 
 ## 6. Browser extension
 
-1. Content script / background (`extension/`) gathers the media. Chrome launches
+1. Content script / background (`scripts/extension/`) gathers the media. Chrome launches
    `MotivaBrowserHost.exe` through Native Messaging.
 2. Host forwards each compact JSON request as WM_COPYDATA command 5 to the
    running app (starting it with `--autostart` if needed, except `playlists`/`abort`).
@@ -86,6 +86,16 @@ real Explorer right-click and the Windows 11 top-level menu are NOT verified.
    chunks; if that fails, Motiva downloads the URL itself with the page as Referer.
    blob:/data: URLs come from the content script.
 4. Replies return as command 6 to the host window passed in WPARAM.
+5. Reply lifecycle (implemented 2026-11-19, built, NOT run live): a reply with
+   `progress` (`received`, `applying`) is non-final; the extension keeps the
+   pending toast and restarts its 2-min idle timeout. For `wallpaper`, the final
+   reply is sent by `MainWindow::finishBrowserApply` only on `wallpaperVerified`,
+   `wallpaperSuspendedForBattery` (applied but hidden), a definitive
+   `errorOccurred` (the retryable "Could not attach" is not final), a newer
+   request replacing it, or a 45 s timeout. `playlist` replies after
+   `onAddToPlaylistReceived` reports something really added. Stage timings are
+   logged as `[Browser][timing]` (Motiva.log) and `[Motiva timing]` (worker console).
+   One wallpaper request is tracked at a time. Tests: `node --test scripts/extension/tests`.
 
 ## 7. Cloud (read-only)
 

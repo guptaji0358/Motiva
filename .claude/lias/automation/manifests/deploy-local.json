@@ -1,7 +1,7 @@
 {
   "id": "deploy-local",
   "name": "Build and deploy exe",
-  "description": "Build, then copy build/Motiva.exe and extension/ (without tests) to deployment/resources/bin.",
+  "description": "Build, then copy out/build/Motiva.exe and scripts/extension/ (without tests) to out/deployment/resources/bin.",
   "entry": "deploy_local.py",
   "version": "1.0.0",
   "risk": 1,

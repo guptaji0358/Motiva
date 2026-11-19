@@ -15,4 +15,4 @@ after (re)creating rclone.exe. (The SHA-256 above is of the unmodified zip.)
 Motiva branding of the executable itself (icon + version info shown in Explorer / Task Manager / taskbar):
   python -I scripts/tools/brand_rclone_exe.py Assets/application/motiva.ico third_party/rclone/rclone.exe
 Run it after patch_rclone_page.py whenever rclone.exe is (re)created, and on every shipped copy
-(build/rclone, deployment/resources/bin/rclone). Only PE resources change; rclone's copyright is kept (MIT).
+(out/build/rclone, out/deployment/resources/bin/rclone). Only PE resources change; rclone's copyright is kept (MIT).

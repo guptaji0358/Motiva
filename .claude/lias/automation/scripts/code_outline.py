@@ -7,7 +7,7 @@ import sys
 
 args = json.loads(sys.stdin.read() or "{}")
 root = os.environ["LIAS_PROJECT_ROOT"]
-rel = args.get("file", "extension/content.js")
+rel = args.get("file", "scripts/extension/content.js")
 path = os.path.normpath(os.path.join(root, rel))
 if not path.startswith(os.path.normpath(root)) or not os.path.isfile(path):
     print(json.dumps({"ok": False, "error": "file not found inside project: " + rel}))

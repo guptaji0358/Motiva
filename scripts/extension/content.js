@@ -165,7 +165,9 @@
     toastEl.className = 'toast ' + (level || '');
     toastEl.style.display = 'block';
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (toastEl.style.display = 'none'), level === 'error' ? 7000 : 3500);
+    // 'pending' (request in flight) stays up until the final result replaces
+    // it; the long cap only guards against a lost update.
+    toastTimer = setTimeout(() => (toastEl.style.display = 'none'), level === 'pending' ? 180000 : level === 'error' ? 7000 : 3500);
   }
 
   // ------------------------------------------------- finding the media

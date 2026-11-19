@@ -50,9 +50,9 @@
     previous deploy.
 #>
 param(
-    [string]$BuildDir = "build",
+    [string]$BuildDir = "out/build",
     [string]$QtBinDir,
-    [string]$OutDir = "deployment"
+    [string]$OutDir = "out/deployment"
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,7 +107,7 @@ if (Test-Path (Join-Path $extSrc "manifest.json")) {
 }
 
 # --- rclone (MIT): the cloud-storage engine. Its licence must travel with it. ---
-$rcloneSrc = Join-Path $PSScriptRoot "..\third_party\rclone"
+$rcloneSrc = Join-Path $PSScriptRoot "..\..\third_party\rclone"
 $rcloneDst = Join-Path $binDir "rclone"
 if (Test-Path (Join-Path $rcloneSrc "rclone.exe")) {
     New-Item -ItemType Directory -Force -Path $rcloneDst | Out-Null

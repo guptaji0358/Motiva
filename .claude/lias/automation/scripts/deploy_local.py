@@ -1,4 +1,4 @@
-"""Build, then copy build/Motiva.exe to deployment/resources/bin (what build-and-deploy.bat does)."""
+"""Build, then copy out/build/Motiva.exe to out/deployment/resources/bin (what build-and-deploy.bat does)."""
 import json
 import os
 import shutil
@@ -12,21 +12,21 @@ root = os.environ["LIAS_PROJECT_ROOT"]
 env = dict(os.environ)
 env["PATH"] = r"D:\Apps\Qt6\Tools\mingw1310_64\bin;D:\Apps\Qt6\6.12.0\mingw_64\bin;" + env.get("PATH", "")
 run(["taskkill", "/F", "/IM", "Motiva.exe"], root, 20)
-code, text = run(["cmake", "--build", "build"], root, 540, env)
+code, text = run(["cmake", "--build", "out/build"], root, 540, env)
 if code:
     errs = [x.strip()[:300] for x in text.splitlines() if "error" in x.lower() or "FAILED" in x][:40]
     print(json.dumps({"ok": False, "exit_code": code, "errors": errs}))
     sys.exit(0)
-src = os.path.join(root, "build", "Motiva.exe")
-dst = os.path.join(root, "deployment", "resources", "bin", "Motiva.exe")
+src = os.path.join(root, "out", "build", "Motiva.exe")
+dst = os.path.join(root, "out", "deployment", "resources", "bin", "Motiva.exe")
 try:
     shutil.copyfile(src, dst)
 except OSError as e:
     print(json.dumps({"ok": False, "error": "copy failed: %s" % e}))
     sys.exit(0)
 # Chrome loads the extension from the deployed folder, so keep it in sync.
-ext_src = os.path.join(root, "extension")
-ext_dst = os.path.join(root, "deployment", "resources", "bin", "extension")
+ext_src = os.path.join(root, "scripts", "extension")
+ext_dst = os.path.join(root, "out", "deployment", "resources", "bin", "extension")
 try:
     shutil.copytree(ext_src, ext_dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("tests"))
 except OSError as e:

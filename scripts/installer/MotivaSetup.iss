@@ -11,7 +11,7 @@
 #define AppName "Motiva"
 #define AppVersion "2.0.0"
 #define AppPublisher "Robin Gupta Studios"
-#define StagingDir "..\release\staging"
+#define StagingDir "..\..\out\release\staging"
 
 [Setup]
 AppId={{6D0F3B52-7A1E-4C1B-9B0B-4D0E5A6F2C91}
@@ -35,7 +35,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputDir=..\release
+OutputDir=..\..\out\release
 OutputBaseFilename=MotivaSetup
 SetupIconFile=assets\motiva.ico
 UninstallDisplayIcon={app}\resources\bin\Motiva.exe

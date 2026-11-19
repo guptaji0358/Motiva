@@ -9,19 +9,19 @@ Source totals: about 34.8k lines across `scripts/src`, `scripts/include`, `scrip
 |---|---|
 | `CMakeLists.txt` | Build for `Motiva`, `MotivaShell`, `MotivaBrowserHost`, `MotivaLauncher` |
 | `README.md` | User-facing readme (features, build, limitations) |
-| `build-and-deploy.bat` | Dev helper: kills Motiva, builds `build/`, copies exe to `deployment\resources\bin` |
+| `build-and-deploy.bat` | Dev helper: kills Motiva, builds `out/build/`, copies exe to `deployment\resources\bin` |
 | `scripts/` | All C++ source (see below) |
-| `resources/` | `app.rc` (icon/version), `app.qrc` (embedded Assets), `app.manifest` |
+| `scripts/resources/` | `app.rc` (icon/version), `app.qrc` (embedded Assets), `app.manifest` |
 | `Assets/` | Feature-organized images/SVGs (see below) |
-| `extension/` | Browser extension (MV3): `manifest.json`, `background.js`, `content.js`, `popup.*`, `icons/` |
+| `scripts/extension/` | Browser extension (MV3): `manifest.json`, `background.js`, `content.js`, `popup.*`, `icons/` |
 | `third_party/rclone/` | Bundled rclone sources/binary notes (rclone.exe itself is gitignored) |
-| `deploy/Deploy.ps1` | Builds the clean `deployment/` tree (launcher + `resources/bin` + Qt runtime + plugins) |
-| `installer/` | `MotivaSetup.iss` (Inno Setup), `build-installer.ps1`, `make-art.ps1`, `assets/ui` |
+| `scripts/deploy/Deploy.ps1` | Builds the clean `out/deployment/` tree (launcher + `resources/bin` + Qt runtime + plugins) |
+| `scripts/installer/` | `MotivaSetup.iss` (Inno Setup), `build-installer.ps1`, `make-art.ps1`, `assets/ui` |
 | `docs/` | `CLOUD_STORAGE.md` (cloud design; describes REMOVED sync/backup features — stale), `readme/*.svg` |
-| `website/` | Static marketing site (`index`-level HTML, `css/`, `js/`, `Assets/`) |
-| `release/` | Gitignored output (`MotivaSetup.exe`) |
-| `deployment/` | Gitignored output tree |
-| `build/` | Gitignored CMake/Ninja build dir |
+| `scripts/website/` | Static marketing site (`index`-level HTML, `css/`, `js/`, `Assets/`) |
+| `out/release/` | Gitignored output (`MotivaSetup.exe`) |
+| `out/deployment/` | Gitignored output tree |
+| `out/build/` | Gitignored CMake/Ninja build dir |
 | `.claude/` | Claude Code config: `CLAUDE.md` (legacy full status log, see [[index]]), `memory/` (this system) |
 
 ## scripts/
@@ -54,9 +54,9 @@ explicitly rejected). Do not add empty placeholder folders. Folders present:
 Qt resource aliases mirror the folder path, e.g. `:/application/motiva.ico`,
 `:/playlist/playlist-add.svg`. Code must use `:/` paths, never disk paths.
 
-## website/
+## scripts/website/
 
-Static site: `website/index.html`-level page plus `css/style.css` (currently
+Static site: `scripts/website/index.html`-level page plus `css/style.css` (currently
 has an uncommitted 1-line change), `js/`, `Assets/{icons,screenshots,logo,
 backgrounds,other,videos}`.
 
@@ -64,7 +64,7 @@ backgrounds,other,videos}`.
 
 Uncommitted: root `CLAUDE.md` deleted from the working tree (it is tracked in
 HEAD; `.gitignore` also lists `CLAUDE.md`); modified `scripts/shell/MotivaShell.cpp`,
-`scripts/src/WebMediaCache.cpp`, `website/css/style.css`. Git prints LF->CRLF
+`scripts/src/WebMediaCache.cpp`, `scripts/website/css/style.css`. Git prints LF->CRLF
 warnings for the two `.cpp` files.
 
 Related: [[architecture]] · [[modules]] · [[technology-stack]]

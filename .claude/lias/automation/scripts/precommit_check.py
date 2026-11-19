@@ -36,7 +36,7 @@ res["debug_markers"] = hits[:50]
 if a.get("build", True):
     env = dict(os.environ)
     env["PATH"] = r"D:\Apps\Qt6\Tools\mingw1310_64\bin;D:\Apps\Qt6\6.12.0\mingw_64\bin;" + env.get("PATH", "")
-    code, text = run(["cmake", "--build", "build"], root, 540, env)
+    code, text = run(["cmake", "--build", "out/build"], root, 540, env)
     res["build_exit"] = code
     if code:
         res["build_errors"] = [x.strip()[:300] for x in text.splitlines() if "error" in x.lower()][:40]

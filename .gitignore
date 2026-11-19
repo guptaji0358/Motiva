@@ -1,8 +1,6 @@
-build/
-deployment/
+out/
 *.log
 CLAUDE.md
-release/
 third_party/rclone/rclone.exe
 third_party/rclone/motiva-cloud.ini
 .claude/lias/database/

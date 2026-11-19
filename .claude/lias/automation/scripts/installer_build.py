@@ -1,4 +1,4 @@
-"""Run installer/build-installer.ps1 and report the resulting MotivaSetup.exe. One JSON line out."""
+"""Run scripts/installer/build-installer.ps1 and report the resulting MotivaSetup.exe. One JSON line out."""
 import json
 import os
 import sys
@@ -13,8 +13,8 @@ env = dict(os.environ)
 env["PATH"] = r"D:\Apps\Qt6\Tools\mingw1310_64\bin;D:\Apps\Qt6\6.12.0\mingw_64\bin;" + env.get("PATH", "")
 start = time.time()
 code, text = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                  os.path.join(root, "installer", "build-installer.ps1")], root, 580, env)
-exe = os.path.join(root, "release", "MotivaSetup.exe")
+                  os.path.join(root, "scripts", "installer", "build-installer.ps1")], root, 580, env)
+exe = os.path.join(root, "out", "release", "MotivaSetup.exe")
 fresh = os.path.isfile(exe) and os.path.getmtime(exe) >= start
 res = {"ok": code == 0 and fresh, "exit_code": code}
 if res["ok"]:

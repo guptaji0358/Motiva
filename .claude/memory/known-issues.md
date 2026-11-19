@@ -136,3 +136,4 @@ Related: [[overview]] · [[decisions]] · [[index]]
   (0.67-0.93) seen in some harness runs, not oscillation; attributed to an external overlay, unproven.
 - **Diagnostics kept:** `VdDiag` (env `MOTIVA_VD_DIAG=1`, logs `[VdDiag]` lines to Motiva.log: handle/show/hide/resize, GL context,
   swap gaps >150 ms, DISPLAYCHANGE/DWM msgs). Idle when env unset.
+- **FIXED 2026-11-19 (built, 3 live runs): deadlock on re-applying a wallpaper while a desktop attach is in flight.** Cause: `AttachToDesktop` (worker thread) held `g_desktopStateMutex` while calling SetWindowPos/SetParent on a GUI-owned HWND; the GUI thread blocked on the same mutex in `DetachFromDesktop`. `DetachFromDesktop` now try_locks and answers only cross-thread sent messages (PeekMessage PM_QS_SENDMESSAGE) while waiting. Two requests 0.2 s apart now finish; not tested with video or Explorer restart.

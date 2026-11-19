@@ -8,7 +8,7 @@
   "timeout": 20,
   "status": "active",
   "args": {
-    "file": {"type": "string", "default": "extension/content.js"},
+    "file": {"type": "string", "default": "scripts/extension/content.js"},
     "pattern": {"type": "string", "default": ""},
     "max": {"type": "integer", "default": 120}
   }

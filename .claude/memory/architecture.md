@@ -7,10 +7,10 @@ Verified against `CMakeLists.txt`, `scripts/main/main.cpp` and the headers in
 
 | Target | Kind | Source | Role |
 |---|---|---|---|
-| `Motiva` | WIN32 Qt exe | `scripts/main/main.cpp` + `scripts/src/*.cpp` + `resources/app.rc/.qrc` | The application |
+| `Motiva` | WIN32 Qt exe | `scripts/main/main.cpp` + `scripts/src/*.cpp` + `scripts/resources/app.rc/.qrc` | The application |
 | `MotivaShell` | SHARED DLL | `scripts/shell/MotivaShell.cpp` | Qt-free COM `IExplorerCommand` (Explorer menu); per-user, loaded by Explorer |
 | `MotivaBrowserHost` | plain (console) exe | `scripts/browser/MotivaBrowserHost.cpp` | Native Messaging relay for the browser extension; Qt-free, links user32 only |
-| `MotivaLauncher` | WIN32 exe, `EXCLUDE_FROM_ALL` | `scripts/main/launcher.cpp` | Used only by the deploy step (`deploy/Deploy.ps1`) |
+| `MotivaLauncher` | WIN32 exe, `EXCLUDE_FROM_ALL` | `scripts/main/launcher.cpp` | Used only by the deploy step (`scripts/deploy/Deploy.ps1`) |
 
 Qt modules linked: Widgets, OpenGL, OpenGLWidgets, Multimedia,
 MultimediaWidgets, Concurrent, Svg, Sql, Network. C++17.

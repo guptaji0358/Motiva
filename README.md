@@ -118,8 +118,8 @@ If attaching fails, the render window stays hidden rather than becoming a fake f
 Requires Qt 6 (Widgets, Multimedia, OpenGL, OpenGLWidgets, SQL), the MinGW toolchain bundled with your Qt install, CMake and Ninja.
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="<path-to-Qt>/6.x/mingw_64" -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -S . -B out/build -G Ninja -DCMAKE_PREFIX_PATH="<path-to-Qt>/6.x/mingw_64" -DCMAKE_BUILD_TYPE=Release
+cmake --build out/build
 ```
 
 > Use the MinGW that ships with Qt (e.g. `<Qt>/Tools/mingw1310_64`), not an unrelated MSYS2 install.
@@ -141,12 +141,14 @@ Motiva/
 ├── scripts/
 │   ├── main/main.cpp     entry point, single-instance lock, logging
 │   ├── src/              UI, playlists, library, wallpaper, Win32
-│   └── include/          headers
-├── resources/            app.rc, manifest, Qt resources
+│   ├── include/          headers
+│   ├── resources/        app.rc, manifest, Qt resources
+│   ├── extension/        Manifest V3 browser extension (Chrome / Edge / Brave)
+│   ├── installer/        Inno Setup script and build pipeline
+│   ├── deploy/           Deploy.ps1 (clean deployment layout)
+│   ├── tests/            standalone unit tests
+│   └── website/          static project website
 ├── Assets/               icons and artwork, organised by feature
-├── extension/            Manifest V3 browser extension (Chrome / Edge / Brave)
-├── installer/            Inno Setup script and build pipeline
-├── website/              static project website
 └── CMakeLists.txt
 ```
 

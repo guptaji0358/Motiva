@@ -11,7 +11,7 @@
 // rather than relying on resource-ID lookup, so this entry only governs
 // the .exe file's own icon as seen in Explorer/taskbar - see CLAUDE.md's
 // "Assets folder" entry.
-1 ICON "../Assets/application/motiva.ico"
+1 ICON "../../Assets/application/motiva.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 1,2,0,0

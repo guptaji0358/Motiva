@@ -42,6 +42,7 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QShortcut>
 #include <QClipboard>
 #include <QGuiApplication>
@@ -462,6 +463,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
         m_settings.setWasWallpaperActive(false);
     });
     connect(m_manager.get(), &WallpaperManager::wallpaperSuspendedForBattery, this, [this] {
+        finishBrowserApply(true, tr("is set; it stays hidden while on battery"));
         m_batterySuspended = true;
         // Reaches the Active UI state even when the wallpaper was NEVER
         // actually attached (e.g. Set as Wallpaper clicked while already
@@ -1576,6 +1578,12 @@ void MainWindow::updatePlayPauseLabel() {
 }
 
 void MainWindow::onWallpaperError(const QString& message) {
+    // "Could not attach..." is not final: WallpaperManager keeps retrying and
+    // may still verify, so a pending browser request keeps waiting for that
+    // (or its timeout). Every other error is a definitive failure.
+    if (!message.startsWith(QLatin1String("Could not attach the wallpaper window"))) {
+        finishBrowserApply(false, message);
+    }
     m_lastErrorMessage = message;
     setUiState(WallpaperUiState::Error);
 
@@ -1594,6 +1602,7 @@ void MainWindow::onWallpaperError(const QString& message) {
 }
 
 void MainWindow::onWallpaperVerified() {
+    finishBrowserApply(true, QString());
     setUiState(WallpaperUiState::Active);
     Notification n;
     n.kind = Notification::Kind::Success;
@@ -1834,7 +1843,7 @@ void MainWindow::onExplorerFileReceived(const QString& path) {
     handleExplorerRequestedFile(path);
 }
 
-void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& pathList) {
+MainWindow::PlaylistAddOutcome MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& pathList) {
     // One or more paths joined by '\n' (a multi-selection from Explorer; a
     // newline cannot occur in a Windows path).
     const QStringList requested = pathList.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
@@ -1892,41 +1901,49 @@ void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& pathL
         }
     }
     if (files.isEmpty()) {
-        showExplorerPlaylistError(requested.size() == 1 && !problem.isEmpty()
-                                      ? problem
-                                      : tr("None of the %1 selected items can be added to a playlist.").arg(requested.size()));
-        return;
+        const QString why = requested.size() == 1 && !problem.isEmpty()
+                                ? problem
+                                : tr("None of the %1 selected items can be added to a playlist.").arg(requested.size());
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
     const QString summaryName = files.size() == 1 ? QFileInfo(files.first()).fileName() : tr("%1 files").arg(files.size());
 
     if (playlistId <= 0) {
         const QFileInfo only(requested.value(0));
-        createPlaylistFromExplorer(files, hasVideo && !hasImage, requested.size() == 1 && only.isDir() ? only.fileName() : QString(),
-                                   hasVideo && hasImage);
-        return;
+        return createPlaylistFromExplorer(files, hasVideo && !hasImage,
+                                          requested.size() == 1 && only.isDir() ? only.fileName() : QString(),
+                                          hasVideo && hasImage);
     }
     PlaylistModel* target = m_library->playlist(playlistId);
     if (!target) {
         // The menu was out of date (e.g. written while this playlist still
         // existed) - refresh it rather than guessing another playlist.
         syncExplorerPlaylistMenu(true);
-        showExplorerPlaylistError(tr("That playlist no longer exists. \"%1\" was not added.").arg(summaryName));
-        return;
+        const QString why = tr("That playlist no longer exists. \"%1\" was not added.").arg(summaryName);
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
     if (!target->isMixed() && ((hasVideo && hasImage) || target->isVideo() != hasVideo)) {
-        showExplorerPlaylistError(tr("\"%1\" is a %2 playlist, so \"%3\" can't be added to it.")
-                                      .arg(target->name(), target->isVideo() ? tr("video") : tr("image"), summaryName));
-        return;
+        const QString why = tr("\"%1\" is a %2 playlist, so \"%3\" can't be added to it.")
+                                .arg(target->name(), target->isVideo() ? tr("video") : tr("image"), summaryName);
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
     if (skipped > 0) {
         qInfo() << "[Explorer]" << skipped << "selected item(s) were skipped (unsupported or missing).";
     }
     // The normal add path: one shared media record per file, a file already
     // in this playlist is reported as such and not added twice.
-    m_playlistDialog->addFilesTo(playlistId, files);
+    const int added = m_playlistDialog->addFilesTo(playlistId, files);
     m_settings.setExplorerLastPlaylistId(playlistId);
     syncExplorerPlaylistMenu(true); // refreshes the "Add to <last playlist>" shortcut
     openPlaylist();
+    if (added > 0) {
+        return {true, QString()};
+    }
+    return {false, added < 0 ? tr("\"%1\" could not be added to the playlist.").arg(summaryName)
+                             : tr("Nothing was added: \"%1\" is already in the playlist or is not supported.").arg(summaryName)};
 }
 
 void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
@@ -1942,6 +1959,15 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
             extra[ok ? QStringLiteral("message") : QStringLiteral("error")] = message;
         }
         InstanceIpc::sendBrowserReply(hostWindow, QString::fromUtf8(QJsonDocument(extra).toJson(QJsonDocument::Compact)));
+    };
+
+    // Non-final status update: the extension keeps waiting for the real reply.
+    const auto progress = [hostWindow, id](const QString& stage) {
+        InstanceIpc::sendBrowserReply(
+            hostWindow, QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("id"), static_cast<double>(id)},
+                                                                    {QStringLiteral("ok"), true},
+                                                                    {QStringLiteral("progress"), stage}})
+                                              .toJson(QJsonDocument::Compact)));
     };
 
     if (parseError.error != QJsonParseError::NoError || id <= 0) {
@@ -2002,7 +2028,16 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
     qInfo() << "[Browser]" << action << "request for"
             << (request.url.isEmpty() ? QStringLiteral("(uploaded data)") : request.url);
 
-    m_webCache->fetch(request, [this, reply, action, playlistId](const QString& path, const QString& error) {
+    // Lightweight per-request timing (milliseconds since the request reached
+    // Motiva) - logged at each stage so slow steps can be told apart.
+    QElapsedTimer clock;
+    clock.start();
+    qInfo().nospace() << "[Browser][timing] id=" << id << " received t=0ms";
+    progress(QStringLiteral("received"));
+
+    m_webCache->fetch(request, [this, reply, progress, action, playlistId, id, clock](const QString& path, const QString& error) {
+        qInfo().nospace() << "[Browser][timing] id=" << id << " media ready t=" << clock.elapsed() << "ms"
+                          << (error.isEmpty() ? "" : " (failed)");
         if (!error.isEmpty()) {
             qWarning() << "[Browser] Could not cache the web file:" << error;
             reply(false, error);
@@ -2010,19 +2045,72 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
         }
         const QString fileName = QFileInfo(path).fileName();
         if (action == QLatin1String("wallpaper")) {
-            runAfterStartup([this, path] { handleExplorerRequestedFile(path); });
-            reply(true, tr("Motiva: \"%1\" set as wallpaper").arg(fileName));
+            progress(QStringLiteral("applying"));
+            runAfterStartup([this, path, fileName, reply, id, clock] {
+                qInfo().nospace() << "[Browser][timing] id=" << id << " apply start t=" << clock.elapsed() << "ms";
+                // The final reply is sent only when the wallpaper is verified
+                // (or fails / times out) - never on request acceptance.
+                beginBrowserApply([reply, fileName, id, clock](bool ok, const QString& detail) {
+                    qInfo().nospace() << "[Browser][timing] id=" << id << " apply " << (ok ? "confirmed" : "failed")
+                                      << " t=" << clock.elapsed() << "ms";
+                    if (ok) {
+                        reply(true, detail.isEmpty() ? tr("Motiva: \"%1\" set as wallpaper").arg(fileName)
+                                                     : tr("Motiva: \"%1\" %2").arg(fileName, detail));
+                    } else {
+                        reply(false, detail);
+                    }
+                });
+                handleExplorerRequestedFile(path);
+            });
         } else if (action == QLatin1String("playlist")) {
-            runAfterStartup([this, playlistId, path] { onAddToPlaylistReceived(playlistId, path); });
-            reply(true, tr("Motiva: \"%1\" sent to your playlist").arg(fileName));
+            progress(QStringLiteral("applying"));
+            runAfterStartup([this, playlistId, path, fileName, reply, id, clock] {
+                const PlaylistAddOutcome outcome = onAddToPlaylistReceived(playlistId, path);
+                qInfo().nospace() << "[Browser][timing] id=" << id << " playlist add " << (outcome.ok ? "done" : "failed")
+                                  << " t=" << clock.elapsed() << "ms";
+                if (outcome.ok) {
+                    reply(true, tr("Motiva: \"%1\" added to your playlist").arg(fileName));
+                } else {
+                    reply(false, outcome.message);
+                }
+            });
         } else {
             reply(true, tr("Motiva: \"%1\" saved to the cache").arg(fileName));
         }
     });
 }
 
-void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video, const QString& suggestedName,
-                                            bool mixed) {
+void MainWindow::beginBrowserApply(std::function<void(bool, const QString&)> reply) {
+    // Only one browser apply is tracked at a time; a newer request replaces
+    // the older one, which is told so instead of being left hanging.
+    if (m_browserApplyReply) {
+        finishBrowserApply(false, tr("Replaced by a newer request."));
+    }
+    m_browserApplyReply = std::move(reply);
+    if (!m_browserApplyTimer) {
+        m_browserApplyTimer = new QTimer(this);
+        m_browserApplyTimer->setSingleShot(true);
+        connect(m_browserApplyTimer, &QTimer::timeout, this, [this] {
+            finishBrowserApply(false, tr("Motiva did not confirm the wallpaper in time. It may still appear."));
+        });
+    }
+    m_browserApplyTimer->start(45000);
+}
+
+void MainWindow::finishBrowserApply(bool ok, const QString& detail) {
+    if (!m_browserApplyReply) {
+        return; // nothing pending, or already answered (no duplicate final replies)
+    }
+    if (m_browserApplyTimer) {
+        m_browserApplyTimer->stop();
+    }
+    auto reply = std::move(m_browserApplyReply);
+    m_browserApplyReply = nullptr;
+    reply(ok, detail);
+}
+
+MainWindow::PlaylistAddOutcome MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video,
+                                                                       const QString& suggestedName, bool mixed) {
     const QString path = files.value(0);
     showNormal();
     raise();
@@ -2039,7 +2127,7 @@ void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video
                        .trimmed();
     if (!accepted) {
         qInfo() << "[Explorer] New playlist cancelled - nothing added:" << path;
-        return;
+        return {false, tr("New playlist cancelled - nothing was added.")};
     }
     if (name.isEmpty()) {
         name = fallback;
@@ -2048,13 +2136,18 @@ void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video
     const qint64 id = m_library->createPlaylist(
         name, mixed ? PlaylistType::Mixed : (video ? PlaylistType::Video : PlaylistType::Image));
     if (id <= 0) {
-        showExplorerPlaylistError(tr("The playlist could not be created:\n%1").arg(m_library->lastError()));
-        return;
+        const QString why = tr("The playlist could not be created:\n%1").arg(m_library->lastError());
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
-    m_playlistDialog->addFilesTo(id, files);
+    const int added = m_playlistDialog->addFilesTo(id, files);
     m_settings.setExplorerLastPlaylistId(id);
     syncExplorerPlaylistMenu(true);
     openPlaylist();
+    if (added > 0) {
+        return {true, QString()};
+    }
+    return {false, tr("The playlist was created but the file could not be added to it.")};
 }
 
 void MainWindow::showExplorerPlaylistError(const QString& message) {
