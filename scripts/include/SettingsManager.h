@@ -113,6 +113,10 @@ public:
     // suspend/resume logic). Videos default true (migrated from the old
     // shared app/showVideoOnBattery key when present); images default false,
     // matching the former "images are never shown on battery" behavior.
+    // Opt-in anonymous performance statistics + automatic optimization profiles.
+    // OFF by default; see PerfProbe / ProfileSync.
+    bool performanceIntelligenceOptIn() const;
+    void setPerformanceIntelligenceOptIn(bool enabled);
     bool playVideosOnBattery() const;
     void setPlayVideosOnBattery(bool enabled);
     bool playImagesOnBattery() const;

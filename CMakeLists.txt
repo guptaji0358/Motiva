@@ -43,6 +43,17 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/MotivaToolTip.cpp
     scripts/include/MotivaToolTip.h
     scripts/src/MainWindow.cpp
+    scripts/src/PerfProfile.cpp
+    scripts/src/ProfileStore.cpp
+    scripts/src/PerfProbe.cpp
+    scripts/src/VideoApplyTelemetry.cpp
+    scripts/src/ProfileSync.cpp
+    scripts/src/BrowserApplyTracker.cpp
+    scripts/include/ProfileStore.h
+    scripts/include/PerfProbe.h
+    scripts/include/VideoApplyTelemetry.h
+    scripts/include/ProfileSync.h
+    scripts/include/BrowserApplyTracker.h
     scripts/include/MainWindow.h
     scripts/src/SettingsDialog.cpp
     scripts/include/SettingsDialog.h
@@ -154,6 +165,7 @@ target_link_libraries(Motiva PRIVATE
     Advapi32
     d3d11
     dxgi
+    bcrypt
     dcomp
     d3dcompiler
     ole32

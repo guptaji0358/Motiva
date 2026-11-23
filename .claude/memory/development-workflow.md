@@ -47,8 +47,8 @@ Record in memory what was verified and what was not (see [[known-issues]]).
 
 `scripts/tests/` is a standalone CMake project (Qt Core/Gui/Test only): `cmake -S tests -B <dir> -G Ninja
 -DCMAKE_PREFIX_PATH=<Qt kit>`, build, run `BinaryRainTests.exe` (on Windows pass `-o <winpath>,txt`
-to see output; stdout is empty under msys). Exes (`DesktopScalingTests`: 9 passed, Core/Test only; `VdDesktopTests`: 14; `VdWindowTests`: 5, GUI, needs a real desktop + OpenGL, links the app sources): `BinaryRainTests` (26 passed 2026-11-18: config, persistence via QSettings INI, engine, frame pool)
-and `VideoPlayerRainTests` (9 passed: play/pause/unload/suspend/config/target size; needs Multimedia, run with
+to see output; stdout is empty under msys). Exes (`DesktopScalingTests`: 11 passed, Core/Test only; `VdDesktopTests`: 14; `VdWindowTests`: 5, GUI, needs a real desktop + OpenGL, links the app sources): `BinaryRainTests` (26 passed 2026-11-18: config, persistence via QSettings INI, engine, frame pool)
+and `VideoPlayerRainTests` (16 passed: play/pause/unload/suspend/config/target size; needs Multimedia, run with
 `QT_QPA_PLATFORM=offscreen`). Not covered: Settings UI, preview, desktop attach, real CPU/GPU cost.
 Qt kit moved to `C:\Qt\6.12.0\mingw_64` (was `D:\Apps\Qt6`); `out/build/` still points at the old path.
 

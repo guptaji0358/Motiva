@@ -10,6 +10,8 @@
 #include <QFutureWatcher>
 #include <QMovie>
 #include <QElapsedTimer>
+#include <QDateTime>
+#include <QMediaMetaData>
 #include <QTimer>
 #include "BinaryRainConfig.h"
 #include "BinaryRainEngine.h"
@@ -76,7 +78,18 @@ public:
     static bool hasVideoExtension(const QString& fileNameOrPath);
     static bool hasStaticImageExtension(const QString& fileNameOrPath);
 
-    bool loadFile(const QString& path);
+    // Why a load happened (telemetry only; allowlisted tokens via originToken()).
+    enum class LoadOrigin { StartupPreview, UserSelection, WallpaperApply, Playlist };
+    static QString originToken(LoadOrigin o);
+    // True when loadFile() would route this source to the video pipeline
+    // (not procedural, GIF or a still image). Pure, no I/O.
+    static bool isVideoSource(const QString& pathOrUrl);
+
+    bool loadFile(const QString& path, LoadOrigin origin = LoadOrigin::UserSelection);
+    // Monotonic, in-memory only: incremented by every loadFile() call.
+    quint64 loadSeq() const { return m_loadSeq; }
+    // In-memory only, for deriving coarse buckets (extension, size) at emit time; never serialized.
+    const QString& lastLoadSource() const { return m_loadSource; }
     void play();
     void pause();
     void stop();
@@ -124,6 +137,15 @@ public:
     // video (QMediaPlayer keeps a previous video's duration after stop()).
     qint64 durationMs() const { return m_mediaKind == MediaKind::Video ? m_player.duration() : 0; }
 
+    struct VideoMetadata {
+        int width = 0;
+        int height = 0;
+        double fps = 0.0;
+        QString codec = QStringLiteral("unknown"); // allowlisted token
+    };
+    // Pure: turns player metadata into safe values (invalid/missing -> 0 / "unknown").
+    static VideoMetadata describeMetadata(const QMediaMetaData& meta);
+
     // Latest decoded frame, already converted to Format_RGB32 exactly once
     // (not per-monitor), shared by all render windows.
     std::shared_ptr<const QImage> currentFrame() const { return m_currentFrame; }
@@ -137,14 +159,30 @@ signals:
     // written here with no synchronization.
     void frameReady(std::shared_ptr<const QImage> frame);
     void errorOccurred(const QString& message);
+    // Same error, stamped with the load it belongs to (telemetry correlation; stale ones are rejected by the receiver).
+    void loadError(quint64 loadSeq, const QString& message);
     // A new source was successfully loaded (or the current one unloaded) -
     // mediaKind() may have changed. Lets WallpaperManager re-evaluate
     // anything that depends on the media type (the battery policy).
     void mediaChanged();
     // A video played to its end (only when it isn't looping infinitely).
     void endOfMedia();
+    // Passive, once per loaded video: coarse stream facts for opt-in performance
+    // measurement. Values are normalised (0 / "unknown" when the container does
+    // not report them); no path, URL or file name is ever part of it.
+    // loadSeq identifies the load the values belong to; origin is an allowlisted token.
+    void videoMetadataAvailable(quint64 loadSeq, int width, int height, double fps, const QString& codec,
+                                const QString& origin);
     void playbackStateChanged(QMediaPlayer::PlaybackState state);
 
+private:
+    // Error raised by loadFile() itself (synchronous): always belongs to the current load.
+    void emitError(const QString& message) { emit loadError(m_loadSeq, message); emit errorOccurred(message); }
+    // Error delivered by a QMediaPlayer signal. An error queued before the latest loadFile() (it is
+    // delivered before that load's fence event) belongs to an EARLIER load: it is stamped with the last
+    // delivered fence (never equal to the current load) and is not reported through errorOccurred, so
+    // it can neither fail the current load's telemetry nor the UI/browser request waiting on it.
+    void emitPlayerError(const QString& message);
 private slots:
     void onVideoFrameChanged(const QVideoFrame& frame);
     void onConversionFinished();
@@ -173,6 +211,16 @@ private:
     // actually started for a given loaded source (and neither for a
     // StaticImage, which has no playback clock at all).
     MediaKind m_mediaKind = MediaKind::None;
+    bool m_metadataReported = false; // one videoMetadataAvailable per loaded video
+    quint64 m_loadSeq = 0;
+    quint64 m_fenceSeq = 0;    // highest load whose queued fence event has been delivered
+    // > 0 while loadFile() or one of our own calls into QMediaPlayer (play/pause/setLoops/setPosition) is on the
+    // stack. A QMediaPlayer signal emitted synchronously inside such a call was raised BY that call on the current
+    // media: stale (queued) events are only ever delivered from the event loop, never inside our own call.
+    // This is the only identity available here; Qt attaches none to errorOccurred (see emitPlayerError).
+    int m_syncCallDepth = 0;
+    QString m_loadSource;
+    LoadOrigin m_loadOrigin = LoadOrigin::UserSelection;
 
     bool m_looping = true;
     bool m_sequenced = false;
@@ -182,6 +230,10 @@ private:
 
     QSize m_lastFrameSize;
     std::shared_ptr<const QImage> m_currentFrame;
+    // Identity of the decoded still image in m_currentFrame (reuse check in loadFile).
+    QString m_stillPath;
+    qint64 m_stillSize = 0;
+    QDateTime m_stillModified;
 
     // frame.toImage() + format conversion is real CPU work (color-space
     // conversion of a full HD+ image); doing it inline in the

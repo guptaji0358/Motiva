@@ -219,7 +219,65 @@ void VideoPlayer::renderProceduralFrame(bool advanceTime) {
     emit frameReady(m_currentFrame);
 }
 
-bool VideoPlayer::loadFile(const QString& pathOrUrl) {
+QString VideoPlayer::originToken(LoadOrigin o) {
+    switch (o) {
+    case LoadOrigin::StartupPreview: return QStringLiteral("startup_preview");
+    case LoadOrigin::UserSelection: return QStringLiteral("user_selection");
+    case LoadOrigin::WallpaperApply: return QStringLiteral("wallpaper_apply");
+    case LoadOrigin::Playlist: return QStringLiteral("playlist");
+    }
+    return QStringLiteral("user_selection");
+}
+
+bool VideoPlayer::isVideoSource(const QString& pathOrUrl) {
+    if (isProceduralSource(pathOrUrl)) {
+        return false;
+    }
+    const QUrl u(pathOrUrl);
+    if (u.isValid() && (u.scheme().compare(QLatin1String("http"), Qt::CaseInsensitive) == 0 ||
+                        u.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) == 0)) {
+        return true;
+    }
+    return !isGifPath(pathOrUrl) && !hasStaticImageExtension(pathOrUrl);
+}
+
+namespace {
+struct SyncCallScope {
+    int& depth;
+    explicit SyncCallScope(int& d) : depth(d) { ++depth; }
+    ~SyncCallScope() { --depth; }
+    SyncCallScope(const SyncCallScope&) = delete;
+    SyncCallScope& operator=(const SyncCallScope&) = delete;
+};
+} // namespace
+
+// LIMITATION (verified against the Qt 6.12 headers, not the backend sources): QMediaPlayer::errorOccurred carries
+// only (Error, QString) - no source, serial or load identity - and QMediaPlayer::source() at delivery time is the
+// CURRENT source, so an error cannot be matched to the load that raised it. The FFmpeg backend loads media
+// asynchronously (setMediaAsync + CancelToken), so an old load can complete after loadFile() has queued its fence.
+// What this function can and cannot decide:
+//  - inside our own synchronous call (m_syncCallDepth > 0): reliably the current load;
+//  - delivered from the event loop at/after the fence (m_fenceSeq >= m_loadSeq): attributed to the current load by
+//    ORDER ONLY. Best effort: an old load's completion posted after the fence is indistinguishable;
+//  - delivered from the event loop before the fence: provably queued before the latest load began, so stale.
+void VideoPlayer::emitPlayerError(const QString& message) {
+    if (m_syncCallDepth > 0 || m_fenceSeq >= m_loadSeq) {
+        emitError(message);
+        return;
+    }
+    qInfo() << "[Media] Ignoring a player error queued before load" << m_loadSeq << "(it belongs to an earlier load)";
+    emit loadError(m_fenceSeq, message); // stale stamp: telemetry rejects it; the UI never sees it
+}
+
+bool VideoPlayer::loadFile(const QString& pathOrUrl, LoadOrigin origin) {
+    ++m_loadSeq;
+    // Fence: anything already queued for this object was raised by an earlier load and is delivered
+    // before this event (same thread, FIFO); anything raised from now on is delivered after it.
+    QMetaObject::invokeMethod(this, [this, seq = m_loadSeq] { m_fenceSeq = qMax(m_fenceSeq, seq); },
+                              Qt::QueuedConnection);
+    SyncCallScope loadScope(m_syncCallDepth);
+    m_loadOrigin = origin;
+    m_loadSource = pathOrUrl;
     // QMediaPlayer already natively supports a network QUrl as its
     // source (same FFmpeg-backed decode pipeline, no separate networking
     // code needed) - the only thing this function needs to do
@@ -231,6 +289,20 @@ bool VideoPlayer::loadFile(const QString& pathOrUrl) {
     const bool isRemote = asUrl.isValid() &&
         (asUrl.scheme().compare(QLatin1String("http"), Qt::CaseInsensitive) == 0 ||
          asUrl.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) == 0);
+
+    // Same still image, unchanged on disk, already decoded: reuse the frame.
+    // Choosing an image decodes it for the preview and WallpaperManager then
+    // loads the same path again - for a 4K PNG that second decode was ~400 ms
+    // of GUI-thread time with an identical result.
+    if (!isRemote && m_mediaKind == MediaKind::StaticImage && m_currentFrame && !m_stillPath.isEmpty() &&
+        pathOrUrl == m_stillPath) {
+        const QFileInfo cur(pathOrUrl);
+        if (cur.exists() && cur.size() == m_stillSize && cur.lastModified() == m_stillModified) {
+            qInfo() << "[Media] Reusing decoded still image" << pathOrUrl;
+            emit mediaChanged();
+            return true;
+        }
+    }
 
     // Always stop both pipelines before (re)loading, regardless of which
     // one the new source will use - only one is ever meant to be running
@@ -279,12 +351,13 @@ bool VideoPlayer::loadFile(const QString& pathOrUrl) {
         QFileInfo fi(pathOrUrl);
         if (!fi.exists() || !fi.isFile()) {
             m_mediaKind = MediaKind::None;
-            emit errorOccurred(tr("Wallpaper video could not be found."));
+            emitError(tr("Wallpaper video could not be found."));
             return false;
         }
         source = QUrl::fromLocalFile(pathOrUrl);
     }
 
+    m_metadataReported = false;
     m_player.setSource(source);
     StartupDiagnostics::instance().mark("videoFileOpened");
     emit mediaChanged();
@@ -299,7 +372,7 @@ bool VideoPlayer::startMovie(const QString& path) {
     m_movie.setFileName(path);
     if (!m_movie.isValid()) {
         m_mediaKind = MediaKind::None;
-        emit errorOccurred(tr("This media format isn't supported by the current playback backend."));
+        emitError(tr("This media format isn't supported by the current playback backend."));
         return false;
     }
     // QMovie::loopCount() is read-only in this Qt version (reflects
@@ -324,7 +397,7 @@ bool VideoPlayer::loadStaticImage(const QString& path) {
 
     const QFileInfo fi(path);
     if (!fi.exists() || !fi.isFile()) {
-        emit errorOccurred(tr("Wallpaper image could not be found."));
+        emitError(tr("Wallpaper image could not be found."));
         return false;
     }
 
@@ -361,7 +434,7 @@ bool VideoPlayer::loadStaticImage(const QString& path) {
 
     if (img.isNull()) {
         qWarning() << "[Media] Failed to decode image" << path << "-" << reader.errorString();
-        emit errorOccurred(tr("Unable to open this image. The file may be corrupted or unsupported."));
+        emitError(tr("Unable to open this image. The file may be corrupted or unsupported."));
         return false;
     }
 
@@ -387,6 +460,9 @@ bool VideoPlayer::loadStaticImage(const QString& path) {
     // (see D3DWallpaperRenderer::tagAsStill) - video/GIF frames stay untagged.
     D3DWallpaperRenderer::tagAsStill(img);
     m_currentFrame = std::make_shared<const QImage>(std::move(img));
+    m_stillPath = path;
+    m_stillSize = fi.size();
+    m_stillModified = fi.lastModified();
     qInfo() << "[Media] Loaded still image" << path << "size=" << m_lastFrameSize
             << "decode took" << timer.elapsed() << "ms";
     StartupDiagnostics::instance().mark("videoFileOpened");
@@ -426,6 +502,7 @@ void VideoPlayer::play() {
         m_movie.setPaused(false);
         return;
     }
+    SyncCallScope scope(m_syncCallDepth); // errors raised synchronously by play() belong to the current load
     m_player.play();
 }
 
@@ -442,6 +519,7 @@ void VideoPlayer::pause() {
         m_movie.setPaused(true);
         return;
     }
+    SyncCallScope scope(m_syncCallDepth);
     m_player.pause();
 }
 
@@ -495,6 +573,7 @@ void VideoPlayer::applyLoopMode() {
     // so EndOfMedia fires and the playlist can move on; the user's "Loop
     // video" preference (m_looping) is kept and decides whether the
     // playlist itself wraps around (see MainWindow::onPlayerEndOfMedia).
+    SyncCallScope scope(m_syncCallDepth);
     m_player.setLoops((m_looping && !m_sequenced) ? QMediaPlayer::Infinite : 1);
 }
 
@@ -502,6 +581,7 @@ void VideoPlayer::restartFromBeginning() {
     if (m_mediaKind != MediaKind::Video) {
         return;
     }
+    SyncCallScope scope(m_syncCallDepth);
     m_player.setPosition(0);
     m_player.play();
 }
@@ -630,12 +710,63 @@ void VideoPlayer::onGifFinished() {
     }
 }
 
+VideoPlayer::VideoMetadata VideoPlayer::describeMetadata(const QMediaMetaData& meta) {
+    VideoMetadata out;
+    const QVariant res = meta.value(QMediaMetaData::Resolution);
+    if (res.canConvert<QSize>()) {
+        const QSize s = res.toSize();
+        if (s.width() > 0 && s.height() > 0 && s.width() <= 16384 && s.height() <= 16384) {
+            out.width = s.width();
+            out.height = s.height();
+        }
+    }
+    const QVariant fpsV = meta.value(QMediaMetaData::VideoFrameRate);
+    bool ok = false;
+    const double fps = fpsV.isValid() ? fpsV.toDouble(&ok) : 0.0;
+    if (ok && std::isfinite(fps) && fps > 0.0 && fps <= 1000.0) {
+        out.fps = fps;
+    }
+    const QVariant codecV = meta.value(QMediaMetaData::VideoCodec);
+    bool codecOk = false;
+    int codecInt = 0;
+    if (codecV.metaType() == QMetaType::fromType<QMediaFormat::VideoCodec>()) {
+        codecInt = static_cast<int>(codecV.value<QMediaFormat::VideoCodec>());
+        codecOk = true;
+    } else if (codecV.isValid()) {
+        codecInt = codecV.toInt(&codecOk);
+    }
+    if (codecOk) {
+        switch (static_cast<QMediaFormat::VideoCodec>(codecInt)) {
+        case QMediaFormat::VideoCodec::MPEG1: out.codec = QStringLiteral("mpeg1"); break;
+        case QMediaFormat::VideoCodec::MPEG2: out.codec = QStringLiteral("mpeg2"); break;
+        case QMediaFormat::VideoCodec::MPEG4: out.codec = QStringLiteral("mpeg4"); break;
+        case QMediaFormat::VideoCodec::H264: out.codec = QStringLiteral("h264"); break;
+        case QMediaFormat::VideoCodec::H265: out.codec = QStringLiteral("h265"); break;
+        case QMediaFormat::VideoCodec::VP8: out.codec = QStringLiteral("vp8"); break;
+        case QMediaFormat::VideoCodec::VP9: out.codec = QStringLiteral("vp9"); break;
+        case QMediaFormat::VideoCodec::AV1: out.codec = QStringLiteral("av1"); break;
+        case QMediaFormat::VideoCodec::Theora: out.codec = QStringLiteral("theora"); break;
+        case QMediaFormat::VideoCodec::WMV: out.codec = QStringLiteral("wmv"); break;
+        case QMediaFormat::VideoCodec::MotionJPEG: out.codec = QStringLiteral("mjpeg"); break;
+        default: break; // Unspecified / unknown value -> "unknown"
+        }
+    }
+    return out;
+}
+
 void VideoPlayer::onMediaStatusChanged(QMediaPlayer::MediaStatus status) {
     if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia) {
         StartupDiagnostics::instance().mark("decoderReady");
+        // Passive read of metadata the player already holds; nothing here touches
+        // decoding, rendering or buffering, and it runs once per loaded video.
+        if (m_mediaKind == MediaKind::Video && !m_metadataReported) {
+            m_metadataReported = true;
+            const VideoMetadata md = describeMetadata(m_player.metaData());
+            emit videoMetadataAvailable(m_loadSeq, md.width, md.height, md.fps, md.codec, originToken(m_loadOrigin));
+        }
     }
     if (status == QMediaPlayer::InvalidMedia) {
-        emit errorOccurred(tr("Unable to play this video. The file may be corrupted or unsupported."));
+        emitPlayerError(tr("Unable to play this video. The file may be corrupted or unsupported."));
     } else if (status == QMediaPlayer::EndOfMedia && m_mediaKind == MediaKind::Video) {
         // Only reachable when the player is not looping infinitely (Loop
         // video off, or sequenced playlist playback) - QMediaPlayer's own
@@ -648,7 +779,7 @@ void VideoPlayer::onErrorOccurred(QMediaPlayer::Error error, const QString& erro
     if (error == QMediaPlayer::NoError) {
         return;
     }
-    emit errorOccurred(errorString.isEmpty()
+    emitPlayerError(errorString.isEmpty()
         ? tr("Unable to play this video. The file may be corrupted or unsupported.")
         : errorString);
 }

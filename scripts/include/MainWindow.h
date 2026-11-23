@@ -13,6 +13,7 @@
 #include <QStackedLayout>
 #include <QStringList>
 #include <memory>
+#include "BrowserApplyTracker.h"
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
 #include "RecoveryState.h"
@@ -274,9 +275,18 @@ private:
     // only by finishBrowserApply(): wallpaperVerified (frames presenting),
     // wallpaperSuspendedForBattery (applied but hidden), a definitive
     // errorOccurred, a newer request replacing it, or the timeout.
-    void beginBrowserApply(std::function<void(bool, const QString&)> reply);
-    void finishBrowserApply(bool ok, const QString& detail);
-    std::function<void(bool, const QString&)> m_browserApplyReply;
+    // `path` is the file this request applies: a verification/battery signal
+    // confirms it only while that same file is the active wallpaper source, so a
+    // stale signal (older request, manual change) cannot confirm a newer one.
+    void beginBrowserApply(const QString& path, std::function<void(bool, const QString&)> reply);
+    // Rules (exactly-once reply, "only while that file is active") live in BrowserApplyTracker (unit-tested).
+    void finishBrowserApply(bool ok, const QString& detail);           // unconditional (timeout, rejection)
+    void confirmBrowserApplyIfActive(const QString& detail);           // verified / battery-hidden
+    void failBrowserApplyIfActive(const QString& detail);              // playback error of the request's own file
+    void rejectRequestedFile(const QString& path);                     // unsupported/missing file requested
+    void supersedeBrowserApplyUnlessActive(const QString& newPath);    // a different source was loaded
+    void cancelBrowserApply(const QString& detail);                    // wallpaper removed / selection cleared
+    BrowserApplyTracker m_browserApply;
     QTimer* m_browserApplyTimer = nullptr;
     void showExplorerPlaylistError(const QString& message);
 

@@ -86,10 +86,10 @@ a fix.
 
 - **Verified** (scratch harness `SessionSmoke`, real classes, 2026-11-18): independent video + Binary Rain
   sources, Esc close, idempotent end, active source leaves the shared player's state unchanged, OS wallpaper
-  path unchanged, no window left after abrupt session deletion; `DesktopScalingTests` 9 passed; full `Motiva`
+  path unchanged, no window left after abrupt session deletion; `DesktopScalingTests` 11 passed; full `Motiva`
   target builds. The "Virtual Desktop" button was NOT clicked in the real app (UI not driven).
 - **Phases 3-4 (windowed, sim icons/taskbar/Start/windows, battery pause, multi-monitor, hot-plug): built, NOT run
-  in the real app** (Motiva builds; `VdDesktopTests` 13 pass). Multi-monitor + hot-plug untested: dev laptop has
+  in the real app** (Motiva builds; `VdDesktopTests` 14 pass). Multi-monitor + hot-plug untested: dev laptop has
   one monitor. Battery check is a 5 s poll; untested on a real unplug. Canvas may route keys (Esc/F11/I) to the
   focused chrome item after a click: unverified. Controller window is rebuilt (icons state lost) if its monitor
   is unplugged.
@@ -128,7 +128,7 @@ Related: [[overview]] · [[decisions]] · [[index]]
 - **Startup root cause:** (1) `MainWindow::hide()` ran before the ~1.1-1.5 s synchronous GL init, so the bare desktop showed; now the
   window hides on `VirtualDesktopSession::firstFramePresented` (controller's first `frameSwapped`) with a 3 s fallback timer;
   (2) the display-change burst above ~0.4 s after show + swap gaps 250-376 ms. Both gone in the harness (10 starts: 0 WM_DISPLAYCHANGE).
-- **Tests:** `VdDesktopTests` 14 pass (`coverRect`); new opt-in GUI `VdWindowTests` (5 pass, needs real desktop+GL, skips otherwise): F11 keeps HWND,
+- **Tests:** `VdDesktopTests` 14 pass (`coverRect`); `VideoPlayerRainTests` 16 pass (Qt Totals = 14 slots + implicit init/cleanup); new opt-in GUI `VdWindowTests` (5 pass, needs real desktop+GL, skips otherwise): F11 keeps HWND,
   GL context, 0 hide/show, exact geometry; first-frame signal once. It FAILS (6 hides) if the old `setWindowFlags` path is restored.
 - **NOT verified:** the real Motiva.exe was not driven (user's instance was running; not touched); real video file wallpaper (no sample file; a
   timer source + real Binary Rain `VideoPlayer` source were used); multi-monitor / hot-plug (1 monitor); other GPUs/drivers (NVIDIA/AMD may
@@ -137,3 +137,13 @@ Related: [[overview]] · [[decisions]] · [[index]]
 - **Diagnostics kept:** `VdDiag` (env `MOTIVA_VD_DIAG=1`, logs `[VdDiag]` lines to Motiva.log: handle/show/hide/resize, GL context,
   swap gaps >150 ms, DISPLAYCHANGE/DWM msgs). Idle when env unset.
 - **FIXED 2026-11-19 (built, 3 live runs): deadlock on re-applying a wallpaper while a desktop attach is in flight.** Cause: `AttachToDesktop` (worker thread) held `g_desktopStateMutex` while calling SetWindowPos/SetParent on a GUI-owned HWND; the GUI thread blocked on the same mutex in `DetachFromDesktop`. `DetachFromDesktop` now try_locks and answers only cross-thread sent messages (PeekMessage PM_QS_SENDMESSAGE) while waiting. Two requests 0.2 s apart now finish; not tested with video or Explorer restart.
+
+## Audit 2026-11-21 (code review only; fixes built/tested in the final pass, see perf-intelligence.md)
+- `MotivaBrowserHost.exe` reported stale by `deploy-local` skip_build: its source/deps are older than the exe; only the regenerated
+  `out/build/build.ninja` (CMake edit adding perf sources, 2026-11-20) is newer. Shared-config rule is intentionally conservative
+  (no per-target config signature); a code rebuild is not required, `allow_stale_artifacts` or a real build clears the refusal.
+- Open, unfixed: `VideoPlayer::emitError` stamps `loadError` with the seq at emit time (a queued backend error from load A can be
+  attributed to load B); `WallpaperManager::onPlayerError` forwards unrelated-load errors to a pending browser reply;
+  `VideoApplyTelemetry::verified` records `cancelled/superseded_by_load` if a later load lands before verification; a trial killed
+  without `aboutToQuit` is rolled back and marked bad. Needs live repro before changing.
+- Open limitation (2026-11-23): QMediaPlayer errors carry no load identity (Qt 6.12); event-loop-delivered errors are attributed to a load by delivery order only (fence) - see perf-intelligence.md "2026-11-23". Live test still required.

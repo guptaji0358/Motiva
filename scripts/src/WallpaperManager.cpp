@@ -1,19 +1,31 @@
 #include "WallpaperManager.h"
 #include "StartupDiagnostics.h"
+#include "ProfileStore.h"
+#include "PerfProbe.h"
+#include "VideoApplyTelemetry.h"
 #include <QDebug>
 #include <QCoreApplication>
 #include <QTimer>
 #include <QWinEventNotifier>
 #include <QtConcurrent/QtConcurrentRun>
 
+namespace { constexpr int kPendingLimitMs = 120000; }
+
 WallpaperManager::WallpaperManager(QObject* parent)
     : QObject(parent), m_player(std::make_unique<VideoPlayer>()) {
     connect(m_player.get(), &VideoPlayer::errorOccurred, this, &WallpaperManager::onPlayerError);
+    connect(m_player.get(), &VideoPlayer::loadError, this, &WallpaperManager::onLoadError);
     // The battery policy only governs video-like media (see
     // reevaluateBatteryPolicy), so switching the current media between a
     // video and a still image while a wallpaper is active can flip its
     // verdict.
     connect(m_player.get(), &VideoPlayer::mediaChanged, this, &WallpaperManager::reevaluateBatteryPolicy);
+    // Opt-in performance measurement: coarse video stream facts, recorded passively
+    // (a no-op without consent; the probe does its own work on its own thread).
+    connect(m_player.get(), &VideoPlayer::videoMetadataAvailable, this,
+            [this](quint64 seq, int w, int h, double fps, const QString& codec, const QString& origin) {
+                m_videoTelemetry.onVideoLoaded(seq, w, h, fps, codec, origin, m_player->lastLoadSource());
+            });
 
     // See the class comment: "TaskbarCreated" is the standard, purely
     // event-driven signal for "Explorer just finished restarting".
@@ -240,6 +252,7 @@ void WallpaperManager::suspendForBattery() {
     qInfo() << "[Battery] Hiding wallpaper -"
             << (m_player->isStaticImage() ? "on battery and \"Play Images on Battery\" is off."
                                           : "on battery and \"Play Videos on Battery\" is off.");
+    m_videoTelemetry.cancelPending(QStringLiteral("battery_hidden")); // in-flight verification is abandoned
     for (auto& w : m_windows) {
         WindowsDesktopWallpaper::DetachFromDesktop(w->handle());
         w->hideNative();
@@ -298,9 +311,26 @@ void WallpaperManager::onPossibleExternalWallpaperChange() {
     removeWallpaper();
 }
 
-bool WallpaperManager::setWallpaper(const QString& videoPath) {
+bool WallpaperManager::setWallpaper(const QString& videoPath, VideoPlayer::LoadOrigin origin) {
     qInfo() << "[Lifecycle] setWallpaper begin, path=" << videoPath;
-    if (!m_player->loadFile(videoPath)) {
+    // Telemetry: a video application gets a token before loading (a synchronous
+    // load error can then resolve it); anything else supersedes a pending one.
+    quint64 applyToken = 0;
+    if (VideoPlayer::isVideoSource(videoPath)) {
+        applyToken = m_videoTelemetry.begin(videoPath);
+    } else {
+        m_videoTelemetry.cancelPending(QStringLiteral("superseded"));
+    }
+    // loadFile() bumps the sequence first, so a synchronous load error is already stamped
+    // with loadSeq()+1; bind before loading so it can be matched strictly.
+    m_videoTelemetry.bindLoad(applyToken, m_player->loadSeq() + 1);
+    if (applyToken != 0) { // bounded pending: a never-verifying attach is cancelled, not reported as a failure
+        QTimer::singleShot(kPendingLimitMs, this, [this, applyToken] {
+            m_videoTelemetry.expire(applyToken, QStringLiteral("attach_timeout"));
+        });
+    }
+    if (!m_player->loadFile(videoPath, origin)) {
+        m_videoTelemetry.failed(applyToken, QStringLiteral("load_failed"), m_player->loadSeq());
         return false;
     }
     m_currentPath = videoPath;
@@ -330,6 +360,8 @@ bool WallpaperManager::setWallpaper(const QString& videoPath) {
     // once AC power actually returns.
     const bool shouldStartHidden = batteryPolicyHidesCurrentMedia();
     if (shouldStartHidden) {
+        // Verification cannot proceed while hidden: temporary platform unavailability, not a failure.
+        m_videoTelemetry.cancelPending(QStringLiteral("battery_hidden"));
         m_batterySuspended = true;
         m_player->setProceduralSuspended(true);
         qInfo() << "[Battery] Wallpaper set while on battery and the battery policy hides it - "
@@ -361,6 +393,7 @@ void WallpaperManager::removeWallpaper() {
         return;
     }
     m_attachRetryTimer.stop();
+    m_videoTelemetry.cancelPending(m_shuttingDown ? QStringLiteral("shutdown") : QStringLiteral("removed"));
     m_player->stop();
     teardownWindows();
     // m_active MUST be false before calling RefreshDesktopBackground()
@@ -445,6 +478,11 @@ void WallpaperManager::onPlayerError(const QString& message) {
     emit errorOccurred(message);
 }
 
+void WallpaperManager::onLoadError(quint64 loadSeq, const QString&) {
+    // Only an error stamped with the pending application's own load can fail it.
+    m_videoTelemetry.failedForLoad(m_videoTelemetry.pendingToken(), loadSeq, QStringLiteral("player_error"));
+}
+
 void WallpaperManager::onExplorerRestarted() {
     if (!m_active || m_windows.empty()) {
         return;
@@ -510,7 +548,7 @@ void WallpaperManager::onExplorerRestarted() {
     // in case the reattach driven by readyForReattach above is too early.
     if (!m_attachRetryTimer.isActive()) {
         m_attachRetryElapsed.start();
-        m_attachRetryTimer.start();
+        { m_attachRetryTimer.setInterval(ProfileStore::value(perf::Param::AttachRetryMs)); m_attachRetryTimer.start(); } // default 300
     }
 }
 
@@ -710,7 +748,13 @@ void WallpaperManager::onAttachAttemptFinished() {
         }
 
         const quint64 generationAtCheck = m_attachGeneration;
-        QTimer::singleShot(700, this, [this, framesBefore, generationAtCheck]() {
+        // Profile generation when this verification begins (not when it ends): a profile installed while the
+        // check below is waiting must not be confirmed by it.
+        const quint64 profileGenAtCheck = ProfileStore::instance().generation();
+        // Token this verification belongs to; a newer application replaces the pending
+        // token, so a stale callback can never resolve it (VideoApplyTelemetry::verified).
+        const quint64 tokenAtCheck = m_videoTelemetry.pendingToken();
+        QTimer::singleShot(ProfileStore::value(perf::Param::VerifyWaitMs), this, [this, framesBefore, generationAtCheck, tokenAtCheck, profileGenAtCheck]() { // default 700
             if (m_shuttingDown || !m_active || generationAtCheck != m_attachGeneration ||
                 framesBefore.size() != m_windows.size()) {
                 // Another restart/reconfigure happened in the meantime -
@@ -756,6 +800,8 @@ void WallpaperManager::onAttachAttemptFinished() {
                 // after every successful Explorer-restart recovery, since
                 // that re-enters this same verification path) rather than
                 // at attach-request time in setWallpaper().
+                m_videoTelemetry.verified(tokenAtCheck, m_player->loadSeq());
+                m_verifiedProfileGeneration = profileGenAtCheck;
                 emit wallpaperVerified();
             } else {
                 if (m_recoveryState) {
@@ -767,7 +813,7 @@ void WallpaperManager::onAttachAttemptFinished() {
                 // instead of declaring victory on a black/frozen wallpaper.
                 if (!m_attachRetryTimer.isActive()) {
                     m_attachRetryElapsed.start();
-                    m_attachRetryTimer.start();
+                    { m_attachRetryTimer.setInterval(ProfileStore::value(perf::Param::AttachRetryMs)); m_attachRetryTimer.start(); } // default 300
                 }
             }
         });
@@ -790,7 +836,7 @@ void WallpaperManager::onAttachAttemptFinished() {
         }
         emit errorOccurred(tr("Could not attach the wallpaper window to the desktop."));
         m_attachRetryElapsed.start();
-        m_attachRetryTimer.start();
+        { m_attachRetryTimer.setInterval(ProfileStore::value(perf::Param::AttachRetryMs)); m_attachRetryTimer.start(); } // default 300
     } else if (m_attachRetryElapsed.elapsed() % 5000 < 1000) {
         // Not a fixed timeout and not fatal - just make the ongoing wait
         // visible in the log instead of silently polling forever.
