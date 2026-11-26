@@ -7,9 +7,9 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
 
 - **Language**: C++17 (`CMAKE_CXX_STANDARD 17`, required).
 - **Build**: CMake + Ninja, **MinGW-w64 toolchain shipped with Qt** (e.g.
-  `D:\Apps\Qt6\Tools\mingw1310_64`). Mixing with a system MinGW/MSYS2 causes
+  `C:\Qt\Tools\mingw1310_64`). Mixing with a system MinGW/MSYS2 causes
   `undefined reference to '__imp___argc'`.
-- **Qt**: Qt 6.12.0 (verified 2026-11-12: installed kit is `D:\Apps\Qt6\6.12.0\mingw_64`, and `out/build/CMakeCache.txt` points there). `build-and-deploy.bat` line 4 was corrected from the missing 6.11.1 to 6.12.0 on 2026-11-13.
+- **Qt**: Qt 6.12.0 (verified 2026-11-26: installed kit is `C:\Qt\6.12.0\mingw_64`; `D:\Apps\Qt6` is gone).
   Components: Widgets, OpenGL, OpenGLWidgets, Multimedia, MultimediaWidgets,
   Concurrent, Svg, Sql, Network. Qt6OpenGL.dll and Qt6OpenGLWidgets.dll must be
   deployed.
