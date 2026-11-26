@@ -1,0 +1,16 @@
+{
+  "id": "claude-subagent-manager",
+  "name": "Claude sub-agent manager",
+  "description": "Validate and generate native Claude Code sub-agent definitions (.claude/agents/*.md) from a JSON spec or team file. Never overwrites, supports dry_run, never launches agents.",
+  "entry": "claude_subagent_manager.py",
+  "version": "1.0.0",
+  "risk": 1,
+  "timeout": 30,
+  "status": "active",
+  "args": {
+    "action": {"type": "string", "required": true, "description": "validate | create | team | list"},
+    "spec_file": {"type": "string", "default": "", "description": "project-relative JSON spec (one agent)"},
+    "team_file": {"type": "string", "default": "", "description": "project-relative JSON team config"},
+    "dry_run": {"type": "boolean", "default": false}
+  }
+}
