@@ -80,7 +80,7 @@ if(TARGET Qt6::Network)
     qt_add_executable(PerfIntelligenceTests
         PerfIntelligenceTests.cpp
         ../src/PerfProfile.cpp ../src/ProfileStore.cpp ../src/PerfProbe.cpp ../src/ProfileSync.cpp ../src/VideoApplyTelemetry.cpp ../src/BrowserApplyTracker.cpp
-        ../include/ProfileStore.h ../include/PerfProbe.h ../include/ProfileSync.h ../include/VideoApplyTelemetry.h ../include/BrowserApplyTracker.h)
+        ../include/ProfileStore.h ../include/PerfProbe.h ../include/ProfileSync.h ../include/VideoApplyTelemetry.h ../include/BrowserApplyTracker.h ../include/AttachProfileEvidence.h)
     target_include_directories(PerfIntelligenceTests PRIVATE ../include)
     target_compile_definitions(PerfIntelligenceTests PRIVATE MOCK_PERF_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tools/mock-perf")
     target_link_libraries(PerfIntelligenceTests PRIVATE Qt6::Core Qt6::Network Qt6::Test bcrypt dxgi)
