@@ -1,0 +1,52 @@
+{
+ "description": "Motiva: inspect, scratch build, six regression suites, before/after Git and registry comparison. No deploy, commit or process termination.",
+ "vars": {
+  "qt_root": "C:/Qt/6.12.0/mingw_64",
+  "mingw_bin": "C:/Qt/Tools/mingw1310_64/bin",
+  "cmake": "C:/Qt/Tools/CMake_64/bin/cmake.exe",
+  "ninja": "C:/Qt/Tools/Ninja/ninja.exe",
+  "app": "${scratch}/build/app",
+  "tests": "${scratch}/build/tests",
+  "path": ["${vars.qt_root}/bin", "${vars.mingw_bin}"],
+  "cmake_args": ["-DCMAKE_PREFIX_PATH=${vars.qt_root}", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_COMPILER=${vars.mingw_bin}/g++.exe", "-DCMAKE_MAKE_PROGRAM=${vars.ninja}"],
+  "test_inputs": ["scripts/tests/**/*", "scripts/include/**/*", "scripts/src/**/*", "${vars.qt_root}/bin/Qt6*.dll"]
+ },
+ "steps": [
+  {"id": "git-before", "action": "git_snapshot"},
+  {"id": "registry-before", "action": "registry_snapshot", "params": {"key": "Software\\Motiva"}},
+  {"id": "processes", "action": "process_check", "params": {"names": ["Motiva.exe", "MotivaBrowserHost.exe", "MotivaLauncher.exe"]}},
+  {"id": "toolchain", "action": "tool_check", "params": {"tools": {"cmake": "${vars.cmake}", "ninja": "${vars.ninja}", "gpp": "${vars.mingw_bin}/g++.exe"}, "dirs": ["${vars.qt_root}/lib/cmake/Qt6"]}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "build-config", "action": "cmake_cache_inspect", "params": {"cache": "out/build/CMakeCache.txt", "expected_prefix": "${vars.qt_root}"}, "optional": true},
+  {"id": "sources", "action": "source_snapshot", "params": {"patterns": ["CMakeLists.txt", "scripts/include/**/*", "scripts/src/**/*", "scripts/tests/**/*"]}},
+
+  {"id": "configure-app", "action": "cmake_configure", "depends_on": ["toolchain", "sources", "git-before"], "timeout": 600, "retries": 2,
+   "params": {"cmake": "${vars.cmake}", "source_dir": "${root}", "build_dir": "${vars.app}", "args": "${vars.cmake_args}", "recovery_path": "${vars.path}"}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "build-app", "action": "cmake_build", "depends_on": ["configure-app"], "timeout": 1800, "retries": 2,
+   "params": {"cmake": "${vars.cmake}", "build_dir": "${vars.app}", "targets": ["all", "MotivaLauncher"], "recovery_path": "${vars.path}"}, "env": {"prepend_path": "${vars.path}"},
+   "expect": {"files": ["${vars.app}/Motiva.exe", "${vars.app}/MotivaBrowserHost.exe", "${vars.app}/MotivaLauncher.exe"]}},
+  {"id": "configure-tests", "action": "cmake_configure", "depends_on": ["toolchain", "sources", "git-before", "registry-before"],"timeout": 600, "retries": 2,
+   "params": {"cmake": "${vars.cmake}", "source_dir": "${root}/scripts/tests", "build_dir": "${vars.tests}", "args": "${vars.cmake_args}", "recovery_path": "${vars.path}"}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "build-tests", "action": "cmake_build", "depends_on": ["configure-tests"], "run_after": ["build-app"], "timeout": 1800, "retries": 2,
+   "params": {"cmake": "${vars.cmake}", "build_dir": "${vars.tests}", "recovery_path": "${vars.path}"}, "env": {"prepend_path": "${vars.path}"},
+   "expect": {"files": ["${vars.tests}/BinaryRainTests.exe", "${vars.tests}/DesktopScalingTests.exe", "${vars.tests}/VdDesktopTests.exe", "${vars.tests}/VideoPlayerRainTests.exe", "${vars.tests}/VdWindowTests.exe", "${vars.tests}/PerfIntelligenceTests.exe"]}},
+
+  {"id": "test-binary-rain", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 180, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}",
+   "params": {"exe": "${vars.tests}/BinaryRainTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "test-desktop-scaling", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 180, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}",
+   "params": {"exe": "${vars.tests}/DesktopScalingTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "test-vd-desktop", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 180, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}",
+   "params": {"exe": "${vars.tests}/VdDesktopTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "test-video-player", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 300, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}", "resources": ["timing"],
+   "params": {"exe": "${vars.tests}/VideoPlayerRainTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}", "set": {"QT_QPA_PLATFORM": "offscreen"}}},
+  {"id": "test-perf-intelligence", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 600, "retries": 1, "cacheable": true, "resources": ["timing"],
+   "inputs": ["scripts/tests/**/*", "scripts/include/**/*", "scripts/src/**/*", "scripts/tools/mock-perf/*", "${vars.qt_root}/bin/Qt6*.dll"],
+   "params": {"exe": "${vars.tests}/PerfIntelligenceTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "test-vd-window", "title": "VdWindowTests (opens windows on the real desktop)", "action": "qt_test", "depends_on": ["build-tests"], "run_after": ["test-video-player", "test-perf-intelligence"], "timeout": 180, "resources": ["timing"],
+   "params": {"exe": "${vars.tests}/VdWindowTests.exe", "visible_desktop": true, "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
+
+  {"id": "git-after", "action": "git_compare", "params": {"baseline": "git-before"}, "expect": {"unchanged": true}, "depends_on": ["git-before"],
+   "run_after": ["build-app", "build-tests", "test-binary-rain", "test-desktop-scaling", "test-vd-desktop", "test-video-player", "test-perf-intelligence", "test-vd-window"]},
+  {"id": "registry-after", "action": "registry_snapshot", "params": {"key": "Software\\Motiva", "baseline": "registry-before"}, "expect": {"unchanged": true}, "depends_on": ["registry-before"], "optional": true,
+   "run_after": ["test-binary-rain", "test-desktop-scaling", "test-vd-desktop", "test-video-player", "test-perf-intelligence", "test-vd-window"]}
+ ]
+}

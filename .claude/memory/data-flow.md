@@ -76,7 +76,7 @@ real Explorer right-click and the Windows 11 top-level menu are NOT verified.
 
 ## 6. Browser extension
 
-1. Content script / background (`extension/`) gathers the media. Chrome launches
+1. Content script / background (`scripts/extension/`) gathers the media. Chrome launches
    `MotivaBrowserHost.exe` through Native Messaging.
 2. Host forwards each compact JSON request as WM_COPYDATA command 5 to the
    running app (starting it with `--autostart` if needed, except `playlists`/`abort`).
@@ -86,6 +86,28 @@ real Explorer right-click and the Windows 11 top-level menu are NOT verified.
    chunks; if that fails, Motiva downloads the URL itself with the page as Referer.
    blob:/data: URLs come from the content script.
 4. Replies return as command 6 to the host window passed in WPARAM.
+5. Reply lifecycle (implemented 2026-11-19, built, NOT run live): a reply with
+   `progress` (`received`, `applying`) is non-final; the extension keeps the
+   pending toast and restarts its 2-min idle timeout. For `wallpaper`, the final
+   reply is sent by `MainWindow::finishBrowserApply` only on `wallpaperVerified`,
+   `wallpaperSuspendedForBattery` (applied but hidden), a definitive
+   `errorOccurred` (the retryable "Could not attach" is not final), a newer
+   request replacing it, or a 45 s timeout. `playlist` replies after
+   `onAddToPlaylistReceived` reports something really added. Stage timings are
+   logged as `[Browser][timing]` (Motiva.log) and `[Motiva timing]` (worker console).
+   One wallpaper request is tracked at a time. Tests: `node --test scripts/extension/tests`.
+   Stale-signal guard (2026-11-21, built NOT yet run live): `beginBrowserApply(path, reply)` stores the request's file;
+   `wallpaperVerified`/battery-suspend confirm it only if `m_selectedVideoPath` is that same file, so a stale verify or a manual
+   wallpaper change cannot confirm a newer request. Errors still finish it (failure direction is safe). Limits: a playlist request
+   with a naming dialog open >120 s hits the extension idle timeout (add still happens); host `SendMessageTimeoutW` 15 s reports
+   "not responding" though the request may be delivered later; an unrelated player error can still fail a pending apply.
+
+7a. Still-image apply cost (measured from Motiva.log 2026-11-19, 4K PNG ~1.9 s, 1672x940 ~1.1 s
+   apply start -> confirmed; the Motiva side is not 30 s): decode 384 ms (4K) / ~65 ms, D3D init
+   ~85 ms, attach ~117 ms, fixed 700 ms frame-verify wait. The image used to be decoded twice
+   (preview `loadVideoSource`, then `WallpaperManager::setWallpaper`); `VideoPlayer::loadFile` now
+   reuses the frame when path+size+mtime match (`[Media] Reusing decoded still image`; built, NOT
+   run live). Browser download/upload time is outside these logs (extension console only).
 
 ## 7. Cloud (read-only)
 

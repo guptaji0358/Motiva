@@ -5,7 +5,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import run, tool  # noqa: E402
+from _common import qt_env, run, tool  # noqa: E402
 
 a = json.loads(sys.stdin.read() or "{}")
 root = os.environ["LIAS_PROJECT_ROOT"]
@@ -34,9 +34,7 @@ for rel in changed:
                         hits.append("%s:%d: %s" % (rel, i, ln.strip()[:120]))
 res["debug_markers"] = hits[:50]
 if a.get("build", True):
-    env = dict(os.environ)
-    env["PATH"] = r"D:\Apps\Qt6\Tools\mingw1310_64\bin;D:\Apps\Qt6\6.12.0\mingw_64\bin;" + env.get("PATH", "")
-    code, text = run(["cmake", "--build", "build"], root, 540, env)
+    code, text = run(["cmake", "--build", "out/build"], root, 540, qt_env())
     res["build_exit"] = code
     if code:
         res["build_errors"] = [x.strip()[:300] for x in text.splitlines() if "error" in x.lower()][:40]

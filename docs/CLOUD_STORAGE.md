@@ -65,7 +65,7 @@ rclone ships with its own shared API registrations. **Do not rely on them in a c
   `http://localhost:53682/`; Dropbox “Scoped access” app, same redirect) for a release.
 * Where the IDs go (first match wins): *Cloud → Accounts → API credentials…* (per user, saved in
   Motiva) → `motiva-cloud.ini` placed in `resources/bin/rclone/` (shipped by you, copied there by
-  `deploy/Deploy.ps1` from `third_party/rclone/`):
+  `scripts/deploy/Deploy.ps1` from `third_party/rclone/`):
 
 ```ini
 [gdrive]
@@ -85,7 +85,7 @@ All redirect URIs must be `http://localhost:53682/` (rclone's loopback listener)
   (SHA-256 `8a9db2ba…aff818`, equal to the published `SHA256SUMS`; the PGP signature of that file
   was not verified). Source of truth: `third_party/rclone/README.txt`.
 * Licence: **MIT** (“Copyright (C) 2012 by Nick Craig-Wood”). `LICENSE.txt` is copied beside
-  `rclone.exe` in every build/deployment (`resources/bin/rclone/`) — it must stay with the binary.
+  `rclone.exe` in every build and deployment (`resources/bin/rclone/`) — it must stay with the binary.
   rclone's binary also contains many Go modules under their own licences (mostly BSD/MIT/Apache,
   some MPL); their notices are not collected yet — do that audit before a commercial release
   (see https://rclone.org/licence/ and the module list in the rclone source tag).

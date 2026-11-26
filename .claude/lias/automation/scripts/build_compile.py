@@ -5,14 +5,13 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import run  # noqa: E402
+from _common import qt_env, run  # noqa: E402
 
 json.loads(sys.stdin.read() or "{}")
 root = os.environ["LIAS_PROJECT_ROOT"]
-env = dict(os.environ)
-env["PATH"] = r"D:\Apps\Qt6\Tools\mingw1310_64\bin;D:\Apps\Qt6\6.12.0\mingw_64\bin;" + env.get("PATH", "")
+env = qt_env()
 run(["taskkill", "/F", "/IM", "Motiva.exe"], root, 20)  # a running exe locks the link step
-code, text = run(["cmake", "--build", "build"], root, 540, env)
+code, text = run(["cmake", "--build", "out/build"], root, 540, env)
 lines = text.splitlines()
 pat = re.compile(r"\berror\b|undefined reference|ld returned|FAILED:|fatal", re.I)
 errors = []
@@ -25,6 +24,6 @@ if code:
     res["errors"] = errors[:80]
     res["tail"] = lines[-15:]
 else:
-    exe = os.path.join(root, "build", "Motiva.exe")
+    exe = os.path.join(root, "out", "build", "Motiva.exe")
     res["exe"] = exe if os.path.isfile(exe) else ""
 print(json.dumps(res))

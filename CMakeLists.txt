@@ -43,6 +43,17 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/MotivaToolTip.cpp
     scripts/include/MotivaToolTip.h
     scripts/src/MainWindow.cpp
+    scripts/src/PerfProfile.cpp
+    scripts/src/ProfileStore.cpp
+    scripts/src/PerfProbe.cpp
+    scripts/src/VideoApplyTelemetry.cpp
+    scripts/src/ProfileSync.cpp
+    scripts/src/BrowserApplyTracker.cpp
+    scripts/include/ProfileStore.h
+    scripts/include/PerfProbe.h
+    scripts/include/VideoApplyTelemetry.h
+    scripts/include/ProfileSync.h
+    scripts/include/BrowserApplyTracker.h
     scripts/include/MainWindow.h
     scripts/src/SettingsDialog.cpp
     scripts/include/SettingsDialog.h
@@ -133,7 +144,7 @@ set(ENTRY_POINT_SOURCES
     scripts/main/main.cpp
 )
 
-qt_add_executable(Motiva WIN32 ${ENTRY_POINT_SOURCES} ${IMPLEMENTATION_SOURCES} resources/app.rc resources/app.qrc)
+qt_add_executable(Motiva WIN32 ${ENTRY_POINT_SOURCES} ${IMPLEMENTATION_SOURCES} scripts/resources/app.rc scripts/resources/app.qrc)
 
 target_link_libraries(Motiva PRIVATE
     Qt6::Widgets
@@ -154,6 +165,7 @@ target_link_libraries(Motiva PRIVATE
     Advapi32
     d3d11
     dxgi
+    bcrypt
     dcomp
     d3dcompiler
     ole32
@@ -193,7 +205,7 @@ endif()
 add_dependencies(Motiva MotivaBrowserHost)
 
 # --- rclone (MIT) powers cloud storage. Dev runs find it in <build>/rclone/;
-# deploy/Deploy.ps1 ships it (with its licence) in resources/bin/rclone/.
+# scripts/deploy/Deploy.ps1 ships it (with its licence) in resources/bin/rclone/.
 # The 85 MB rclone.exe is not kept in git - see third_party/rclone/README.txt.
 if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/rclone/rclone.exe")
     add_custom_command(TARGET Motiva POST_BUILD
@@ -204,15 +216,15 @@ else()
 endif()
 
 # --- Deployment-root launcher (see the "Organize Final Deployment
-# Output" task / deploy/Deploy.ps1) ---
+# Output" task / scripts/deploy/Deploy.ps1) ---
 # A tiny, Qt-free native executable - EXCLUDE_FROM_ALL so a plain
 # `cmake --build build` (the normal dev inner loop) never builds it and
 # the dev workflow is completely unaffected; it's only built as part of
 # the opt-in `deploy` target below, or by name
-# (`cmake --build build --target MotivaLauncher`). Deliberately kept as
+# (`cmake --build out/build --target MotivaLauncher`). Deliberately kept as
 # "MotivaLauncher.exe" inside the build tree itself (never named
 # "Motiva.exe" there) so it can never collide with the real Motiva.exe
-# output in the same directory - deploy/Deploy.ps1 renames it to
+# output in the same directory - scripts/deploy/Deploy.ps1 renames it to
 # "Motiva.exe" only once it copies it out to the deployment root.
 add_executable(MotivaLauncher WIN32 EXCLUDE_FROM_ALL scripts/main/launcher.cpp)
 target_link_libraries(MotivaLauncher PRIVATE Shell32 User32)
@@ -224,22 +236,22 @@ if(MINGW)
     target_link_options(MotivaLauncher PRIVATE -municode)
 endif()
 
-# `cmake --build build --target deploy` assembles the clean deployment
+# `cmake --build out/build --target deploy` assembles the clean deployment
 # directory described in that task: builds both executables, then hands
-# off to deploy/Deploy.ps1 to stage windeployqt's output and reorganize
-# it into <repo>/deployment/{Motiva.exe, resources/{bin,Qt,plugins}} -
+# off to scripts/deploy/Deploy.ps1 to stage windeployqt's output and reorganize
+# it into <repo>/out/deployment/{Motiva.exe, resources/{bin,Qt,plugins}} -
 # see that script for the full reasoning (also runnable directly without
 # CMake at all, e.g. from a scripted CI/release pipeline).
 get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
 add_custom_target(deploy
     COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
-            "${CMAKE_SOURCE_DIR}/deploy/Deploy.ps1"
+            "${CMAKE_SOURCE_DIR}/scripts/deploy/Deploy.ps1"
             -BuildDir "${CMAKE_BINARY_DIR}"
             -QtBinDir "${_qt_bin_dir}"
-            -OutDir "${CMAKE_SOURCE_DIR}/deployment"
+            -OutDir "${CMAKE_SOURCE_DIR}/out/deployment"
     DEPENDS Motiva MotivaLauncher
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Assembling clean deployment directory in deployment/ (see deploy/Deploy.ps1)"
+    COMMENT "Assembling clean deployment directory in out/deployment/ (see scripts/deploy/Deploy.ps1)"
     VERBATIM
 )

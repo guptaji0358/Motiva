@@ -3,11 +3,15 @@
 ## Build (dev)
 
 ```bash
-cmake -S . -B out/build -G Ninja -DCMAKE_PREFIX_PATH="D:/Apps/Qt6/6.12.0/mingw_64" -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B out/build -G Ninja -DCMAKE_PREFIX_PATH="C:/Qt/6.12.0/mingw_64" -DCMAKE_BUILD_TYPE=Release
 cmake --build out/build
 ```
 
-- Use the Qt-bundled MinGW (`D:\Apps\Qt6\Tools\mingw1310_64\bin`), put it first on PATH.
+- Use the Qt-bundled MinGW (`C:\Qt\Tools\mingw1310_64\bin`), put it first on PATH.
+- LIAS automations find Qt through `_common.py` (`qt_root`/`qt_env`): env `MOTIVA_QT_ROOT` or `QT_ROOT`, else
+  `C:\Qt`, else `D:\Apps\Qt6`; they add MinGW, the kit, CMake and Ninja to PATH. Do not hardcode Qt paths.
+- After moving the project folder, `out/build` must be reconfigured (`cmake --fresh ...`). Done 2026-11-26
+  (Release, clean rebuild plus `--target MotivaLauncher`, both succeeded; not deployed or launched).
 - `build-and-deploy.bat` does: `taskkill /F /IM Motiva.exe`, `cmake --build out/build`,
   copies `build\Motiva.exe` to `deployment\resources\bin\`.
 - Kill a running `Motiva.exe` before rebuilding; the running exe locks the
@@ -47,10 +51,10 @@ Record in memory what was verified and what was not (see [[known-issues]]).
 
 `scripts/tests/` is a standalone CMake project (Qt Core/Gui/Test only): `cmake -S tests -B <dir> -G Ninja
 -DCMAKE_PREFIX_PATH=<Qt kit>`, build, run `BinaryRainTests.exe` (on Windows pass `-o <winpath>,txt`
-to see output; stdout is empty under msys). Exes (`DesktopScalingTests`: 9 passed, Core/Test only; `VdDesktopTests`: 14; `VdWindowTests`: 5, GUI, needs a real desktop + OpenGL, links the app sources): `BinaryRainTests` (26 passed 2026-11-18: config, persistence via QSettings INI, engine, frame pool)
-and `VideoPlayerRainTests` (9 passed: play/pause/unload/suspend/config/target size; needs Multimedia, run with
+to see output; stdout is empty under msys). Exes (`DesktopScalingTests`: 11 passed, Core/Test only; `VdDesktopTests`: 14; `VdWindowTests`: 5, GUI, needs a real desktop + OpenGL, links the app sources): `BinaryRainTests` (26 passed 2026-11-18: config, persistence via QSettings INI, engine, frame pool)
+and `VideoPlayerRainTests` (16 passed: play/pause/unload/suspend/config/target size; needs Multimedia, run with
 `QT_QPA_PLATFORM=offscreen`). Not covered: Settings UI, preview, desktop attach, real CPU/GPU cost.
-Qt kit moved to `C:\Qt\6.12.0\mingw_64` (was `D:\Apps\Qt6`); `out/build/` still points at the old path.
+Qt kit moved to `C:\Qt\6.12.0\mingw_64` (was `D:\Apps\Qt6`, no longer present).
 
 ## Do not
 

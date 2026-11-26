@@ -167,6 +167,12 @@ bool SettingsManager::playVideosOnBattery() const {
     }
     return m_settings.value("app/showVideoOnBattery", true).toBool();
 }
+bool SettingsManager::performanceIntelligenceOptIn() const {
+    return m_settings.value("intelligence/optIn", false).toBool();
+}
+void SettingsManager::setPerformanceIntelligenceOptIn(bool enabled) {
+    m_settings.setValue("intelligence/optIn", enabled);
+}
 void SettingsManager::setPlayVideosOnBattery(bool enabled) {
     m_settings.setValue("app/playVideosOnBattery", enabled);
     m_settings.remove("app/showVideoOnBattery");

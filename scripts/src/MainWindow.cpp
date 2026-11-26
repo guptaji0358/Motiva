@@ -42,6 +42,7 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QShortcut>
 #include <QClipboard>
 #include <QGuiApplication>
@@ -55,6 +56,10 @@
 #include <QInputDialog>
 #include <QtConcurrent/QtConcurrentRun>
 #include "WebMediaCache.h"
+#include "PerfProbe.h"
+#include "ProfileStore.h"
+#include "ProfileSync.h"
+#include <QImageReader>
 #include "BrowserIntegration.h"
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -356,6 +361,32 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // Browser extension requests (web pictures/videos -> cache -> wallpaper/playlist).
     m_webCache = new WebMediaCache(this);
     WebMediaCache::sweepIncomplete();
+
+    // Opt-in performance intelligence: observer + signed tuning profiles. Entirely
+    // independent of the wallpaper path - every failure here is silent.
+    {
+        const QString perfDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/perf-intel");
+        PerfProbe::instance().init(perfDir, QCoreApplication::applicationVersion());
+        PerfProbe::instance().setConsent(m_settings.performanceIntelligenceOptIn());
+        ProfileStore::instance().init(perfDir, perf::placeholderPublicKey(), perf::HardwareClass());
+        (void)QtConcurrent::run([] {
+            const perf::HardwareClass hw = PerfProbe::detectHardware();
+            QMetaObject::invokeMethod(qApp, [hw] { ProfileStore::instance().setHardware(hw); }, Qt::QueuedConnection);
+        });
+        connect(m_manager.get(), &WallpaperManager::wallpaperVerified, this, [this] {
+            // Only a verification that began under the profile now in force may confirm its trial.
+            ProfileStore::instance().confirmHealthy(m_manager->verifiedProfileGeneration());
+        });
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [] { ProfileStore::instance().noteCleanExit(); }); // exiting never confirms a trial
+        auto* sync = new ProfileSync(&ProfileStore::instance(), &PerfProbe::instance(), this);
+        // Dev/mock only: no endpoint configured (the shipped default) means no sync at all.
+        sync->configure(QUrl(qEnvironmentVariable("MOTIVA_PERF_ENDPOINT")), perfDir);
+        QTimer::singleShot(ProfileSync::kFirstSyncDelayMs, sync, [sync] { sync->syncNow(); }); // never during startup
+        auto* syncTimer = new QTimer(sync);
+        syncTimer->setInterval(ProfileSync::kUploadPeriodSecs * 1000);
+        connect(syncTimer, &QTimer::timeout, sync, [sync] { sync->syncNow(); });
+        syncTimer->start();
+    }
     connect(&m_ipc, &InstanceIpc::browserRequestReceived, this, [this](quintptr host, const QString& json) {
         // Not held until startup finishes: chunk/abort/playlist/fetch only touch
         // files and the library; only the final wallpaper/playlist action waits.
@@ -444,6 +475,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     // (post-attach presentedFrameCount verification - see WallpaperManager).
     connect(m_manager.get(), &WallpaperManager::wallpaperVerified, this, &MainWindow::onWallpaperVerified);
     connect(m_manager.get(), &WallpaperManager::wallpaperRemoved, this, [this] {
+        cancelBrowserApply(tr("Cancelled: the wallpaper was removed before it was confirmed."));
         setUiState(m_selectedVideoPath.isEmpty() ? WallpaperUiState::NoVideo : WallpaperUiState::Ready);
         // Single source of truth for clearing this persisted flag,
         // covering every path that can end our wallpaper - the explicit
@@ -462,6 +494,7 @@ MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
         m_settings.setWasWallpaperActive(false);
     });
     connect(m_manager.get(), &WallpaperManager::wallpaperSuspendedForBattery, this, [this] {
+        confirmBrowserApplyIfActive(tr("is set; it stays hidden while on battery"));
         m_batterySuspended = true;
         // Reaches the Active UI state even when the wallpaper was NEVER
         // actually attached (e.g. Set as Wallpaper clicked while already
@@ -538,7 +571,7 @@ void MainWindow::completeStartup() {
     // Load (but don't attach to the desktop) whatever video was previously
     // selected, purely so the in-app preview has something to show.
     if (isUsableVideoSource(m_selectedVideoPath)) {
-        m_manager->player()->loadFile(m_selectedVideoPath);
+        m_manager->player()->loadFile(m_selectedVideoPath, VideoPlayer::LoadOrigin::StartupPreview);
         m_manager->player()->play();
         setUiState(WallpaperUiState::Ready);
     } else {
@@ -1219,6 +1252,10 @@ void MainWindow::loadVideoSource(const QString& source, bool fromPlaylist) {
         m_library->setActive(0);
     }
     m_selectedVideoPath = source;
+    // Covers manual choice, drag & drop, playlist advance and any newer selection: a pending browser request
+    // for another file is answered now (truthfully "cancelled") rather than after its 45 s timeout. The
+    // request's own load passes the same path and is left untouched.
+    supersedeBrowserApplyUnlessActive(source);
     updatePlayerSequencing();
     m_settings.setVideoPath(source);
     // Open Video, drag & drop, and Paste Video URL all converge on this
@@ -1235,7 +1272,8 @@ void MainWindow::loadVideoSource(const QString& source, bool fromPlaylist) {
     // identically for a local path or a web URL - VideoPlayer::loadFile
     // already handles both via the same QMediaPlayer pipeline.
     m_preview->setLoadingText(QString());
-    if (m_manager->player()->loadFile(source)) {
+    if (m_manager->player()->loadFile(source, fromPlaylist ? VideoPlayer::LoadOrigin::Playlist
+                                                          : VideoPlayer::LoadOrigin::UserSelection)) {
         m_manager->player()->play();
     }
     updatePlayPauseAvailability();
@@ -1463,7 +1501,8 @@ void MainWindow::onSetWallpaper() {
         return;
     }
 
-    if (m_manager->setWallpaper(m_selectedVideoPath)) {
+    if (m_manager->setWallpaper(m_selectedVideoPath, isPlaylistDrivingMedia() ? VideoPlayer::LoadOrigin::Playlist
+                                                                              : VideoPlayer::LoadOrigin::WallpaperApply)) {
         m_settings.setVideoPath(m_selectedVideoPath);
         m_settings.setWasWallpaperActive(true);
     }
@@ -1495,6 +1534,7 @@ void MainWindow::onRemoveVideo() {
     }
     m_selectedVideoPath.clear();
     m_hasCurrentVideo = false;
+    cancelBrowserApply(tr("Cancelled: the media was removed before it was applied."));
 
     // If this same media also happens to be the active desktop wallpaper,
     // reuse the EXISTING wallpaper lifecycle hook (WallpaperManager::
@@ -1576,6 +1616,14 @@ void MainWindow::updatePlayPauseLabel() {
 }
 
 void MainWindow::onWallpaperError(const QString& message) {
+    // "Could not attach..." is not final: WallpaperManager keeps retrying and
+    // may still verify, so a pending browser request keeps waiting for that
+    // (or its timeout). Every other error is a definitive failure.
+    // It also fails the request only when it belongs to that request's own file
+    // (an error of any other load - stale, playlist, manual change - must not).
+    if (!message.startsWith(QLatin1String("Could not attach the wallpaper window"))) {
+        failBrowserApplyIfActive(message);
+    }
     m_lastErrorMessage = message;
     setUiState(WallpaperUiState::Error);
 
@@ -1594,6 +1642,7 @@ void MainWindow::onWallpaperError(const QString& message) {
 }
 
 void MainWindow::onWallpaperVerified() {
+    confirmBrowserApplyIfActive(QString());
     setUiState(WallpaperUiState::Active);
     Notification n;
     n.kind = Notification::Kind::Success;
@@ -1805,6 +1854,16 @@ void MainWindow::recoverOrActivate() {
     activateWindow();
 }
 
+void MainWindow::rejectRequestedFile(const QString& path) {
+    const QString message = tr("Unsupported media.\n\nMotiva could not load \"%1\".").arg(path);
+    onWallpaperError(message);
+    // Nothing was loaded, so m_selectedVideoPath never became `path`: fail the browser request for this
+    // very file explicitly (a request for any other file is untouched).
+    if (m_browserApply.matchesActive(path)) {
+        finishBrowserApply(false, message);
+    }
+}
+
 void MainWindow::handleExplorerRequestedFile(const QString& path) {
     qInfo() << "[Explorer] Handling file supplied via \"Set as background\":" << path;
     // Untrusted input from Explorer/the command line - validated with the
@@ -1819,11 +1878,11 @@ void MainWindow::handleExplorerRequestedFile(const QString& path) {
     // picker/drag payload that can't produce a directory.
     const QUrl asUrl(path);
     if (!isWebVideoUrl(asUrl) && !QFileInfo(path).isFile()) {
-        onWallpaperError(tr("Unsupported media.\n\nMotiva could not load \"%1\".").arg(path));
+        rejectRequestedFile(path);
         return;
     }
     if (!isUsableVideoSource(path)) {
-        onWallpaperError(tr("Unsupported media.\n\nMotiva could not load \"%1\".").arg(path));
+        rejectRequestedFile(path);
         return;
     }
     loadVideoSource(path);
@@ -1834,7 +1893,7 @@ void MainWindow::onExplorerFileReceived(const QString& path) {
     handleExplorerRequestedFile(path);
 }
 
-void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& pathList) {
+MainWindow::PlaylistAddOutcome MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& pathList) {
     // One or more paths joined by '\n' (a multi-selection from Explorer; a
     // newline cannot occur in a Windows path).
     const QStringList requested = pathList.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
@@ -1892,41 +1951,88 @@ void MainWindow::onAddToPlaylistReceived(qint64 playlistId, const QString& pathL
         }
     }
     if (files.isEmpty()) {
-        showExplorerPlaylistError(requested.size() == 1 && !problem.isEmpty()
-                                      ? problem
-                                      : tr("None of the %1 selected items can be added to a playlist.").arg(requested.size()));
-        return;
+        const QString why = requested.size() == 1 && !problem.isEmpty()
+                                ? problem
+                                : tr("None of the %1 selected items can be added to a playlist.").arg(requested.size());
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
     const QString summaryName = files.size() == 1 ? QFileInfo(files.first()).fileName() : tr("%1 files").arg(files.size());
 
     if (playlistId <= 0) {
         const QFileInfo only(requested.value(0));
-        createPlaylistFromExplorer(files, hasVideo && !hasImage, requested.size() == 1 && only.isDir() ? only.fileName() : QString(),
-                                   hasVideo && hasImage);
-        return;
+        return createPlaylistFromExplorer(files, hasVideo && !hasImage,
+                                          requested.size() == 1 && only.isDir() ? only.fileName() : QString(),
+                                          hasVideo && hasImage);
     }
     PlaylistModel* target = m_library->playlist(playlistId);
     if (!target) {
         // The menu was out of date (e.g. written while this playlist still
         // existed) - refresh it rather than guessing another playlist.
         syncExplorerPlaylistMenu(true);
-        showExplorerPlaylistError(tr("That playlist no longer exists. \"%1\" was not added.").arg(summaryName));
-        return;
+        const QString why = tr("That playlist no longer exists. \"%1\" was not added.").arg(summaryName);
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
     if (!target->isMixed() && ((hasVideo && hasImage) || target->isVideo() != hasVideo)) {
-        showExplorerPlaylistError(tr("\"%1\" is a %2 playlist, so \"%3\" can't be added to it.")
-                                      .arg(target->name(), target->isVideo() ? tr("video") : tr("image"), summaryName));
-        return;
+        const QString why = tr("\"%1\" is a %2 playlist, so \"%3\" can't be added to it.")
+                                .arg(target->name(), target->isVideo() ? tr("video") : tr("image"), summaryName);
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
     if (skipped > 0) {
         qInfo() << "[Explorer]" << skipped << "selected item(s) were skipped (unsupported or missing).";
     }
     // The normal add path: one shared media record per file, a file already
     // in this playlist is reported as such and not added twice.
-    m_playlistDialog->addFilesTo(playlistId, files);
+    const int added = m_playlistDialog->addFilesTo(playlistId, files);
     m_settings.setExplorerLastPlaylistId(playlistId);
     syncExplorerPlaylistMenu(true); // refreshes the "Add to <last playlist>" shortcut
     openPlaylist();
+    if (added > 0) {
+        return {true, QString()};
+    }
+    return {false, added < 0 ? tr("\"%1\" could not be added to the playlist.").arg(summaryName)
+                             : tr("Nothing was added: \"%1\" is already in the playlist or is not supported.").arg(summaryName)};
+}
+
+// Anonymous measurement hook (see PerfProbe): coarse values only, no path/URL/name
+// leaves this function. Returns at once unless the user opted in.
+static void recordPerf(const QString& path, const QString& stage, int ms, bool ok) {
+    if (!PerfProbe::instance().consent()) {
+        return;
+    }
+    if (path.isEmpty()) {
+        // A failed download has no file. Record the failure itself (no URL/name/path: nothing is known
+        // locally) so download failures and timeouts are visible to the downloadTimeoutMs tuning.
+        if (ok) {
+            return;
+        }
+        PerfProbe::instance().record(PerfProbe::failedStageEvent(stage, ms));
+        return;
+    }
+    const QFileInfo fi(path);
+    PerfProbe::Event e;
+    e.format = fi.suffix();
+    e.mediaKind = VideoPlayer::hasVideoExtension(path) ? QStringLiteral("video")
+                  : fi.suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) == 0 ? QStringLiteral("gif")
+                  : VideoPlayer::hasStaticImageExtension(path) ? QStringLiteral("image") : QStringLiteral("other");
+    e.bytes = fi.size();
+    // Video applications are reported by VideoApplyTelemetry (applied/failed/cancelled);
+    // the legacy browser "apply" record stays for non-video media only (no duplicates).
+    if (stage == QLatin1String("apply") && e.mediaKind == QLatin1String("video")) {
+        return;
+    }
+    if (e.mediaKind == QLatin1String("image")) {
+        const QSize sz = QImageReader(path).size(); // header only, no pixel decode
+        e.width = sz.width();
+        e.height = sz.height();
+    }
+    e.stage = stage;
+    e.ms = ms;
+    e.ok = ok;
+    e.errorClass = ok ? QString() : QStringLiteral("%1_failed").arg(stage);
+    PerfProbe::instance().record(e);
 }
 
 void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
@@ -1942,6 +2048,15 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
             extra[ok ? QStringLiteral("message") : QStringLiteral("error")] = message;
         }
         InstanceIpc::sendBrowserReply(hostWindow, QString::fromUtf8(QJsonDocument(extra).toJson(QJsonDocument::Compact)));
+    };
+
+    // Non-final status update: the extension keeps waiting for the real reply.
+    const auto progress = [hostWindow, id](const QString& stage) {
+        InstanceIpc::sendBrowserReply(
+            hostWindow, QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("id"), static_cast<double>(id)},
+                                                                    {QStringLiteral("ok"), true},
+                                                                    {QStringLiteral("progress"), stage}})
+                                              .toJson(QJsonDocument::Compact)));
     };
 
     if (parseError.error != QJsonParseError::NoError || id <= 0) {
@@ -2002,7 +2117,17 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
     qInfo() << "[Browser]" << action << "request for"
             << (request.url.isEmpty() ? QStringLiteral("(uploaded data)") : request.url);
 
-    m_webCache->fetch(request, [this, reply, action, playlistId](const QString& path, const QString& error) {
+    // Lightweight per-request timing (milliseconds since the request reached
+    // Motiva) - logged at each stage so slow steps can be told apart.
+    QElapsedTimer clock;
+    clock.start();
+    qInfo().nospace() << "[Browser][timing] id=" << id << " received t=0ms";
+    progress(QStringLiteral("received"));
+
+    m_webCache->fetch(request, [this, reply, progress, action, playlistId, id, clock](const QString& path, const QString& error) {
+        qInfo().nospace() << "[Browser][timing] id=" << id << " media ready t=" << clock.elapsed() << "ms"
+                          << (error.isEmpty() ? "" : " (failed)");
+        recordPerf(path, QStringLiteral("download"), int(clock.elapsed()), error.isEmpty());
         if (!error.isEmpty()) {
             qWarning() << "[Browser] Could not cache the web file:" << error;
             reply(false, error);
@@ -2010,19 +2135,91 @@ void MainWindow::onBrowserRequest(quintptr hostWindow, const QString& json) {
         }
         const QString fileName = QFileInfo(path).fileName();
         if (action == QLatin1String("wallpaper")) {
-            runAfterStartup([this, path] { handleExplorerRequestedFile(path); });
-            reply(true, tr("Motiva: \"%1\" set as wallpaper").arg(fileName));
+            progress(QStringLiteral("applying"));
+            runAfterStartup([this, path, fileName, reply, id, clock] {
+                const qint64 applyStartMs = clock.elapsed();
+                qInfo().nospace() << "[Browser][timing] id=" << id << " apply start t=" << clock.elapsed() << "ms";
+                // The final reply is sent only when the wallpaper is verified
+                // (or fails / times out) - never on request acceptance.
+                beginBrowserApply(path, [reply, fileName, id, clock, path, applyStartMs](bool ok, const QString& detail) {
+                    qInfo().nospace() << "[Browser][timing] id=" << id << " apply " << (ok ? "confirmed" : "failed")
+                                      << " t=" << clock.elapsed() << "ms";
+                    recordPerf(path, QStringLiteral("apply"), int(clock.elapsed() - applyStartMs), ok);
+                    if (ok) {
+                        reply(true, detail.isEmpty() ? tr("Motiva: \"%1\" set as wallpaper").arg(fileName)
+                                                     : tr("Motiva: \"%1\" %2").arg(fileName, detail));
+                    } else {
+                        reply(false, detail);
+                    }
+                });
+                handleExplorerRequestedFile(path);
+            });
         } else if (action == QLatin1String("playlist")) {
-            runAfterStartup([this, playlistId, path] { onAddToPlaylistReceived(playlistId, path); });
-            reply(true, tr("Motiva: \"%1\" sent to your playlist").arg(fileName));
+            progress(QStringLiteral("applying"));
+            runAfterStartup([this, playlistId, path, fileName, reply, id, clock] {
+                const PlaylistAddOutcome outcome = onAddToPlaylistReceived(playlistId, path);
+                qInfo().nospace() << "[Browser][timing] id=" << id << " playlist add " << (outcome.ok ? "done" : "failed")
+                                  << " t=" << clock.elapsed() << "ms";
+                if (outcome.ok) {
+                    reply(true, tr("Motiva: \"%1\" added to your playlist").arg(fileName));
+                } else {
+                    reply(false, outcome.message);
+                }
+            });
         } else {
             reply(true, tr("Motiva: \"%1\" saved to the cache").arg(fileName));
         }
     });
 }
 
-void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video, const QString& suggestedName,
-                                            bool mixed) {
+void MainWindow::beginBrowserApply(const QString& path, std::function<void(bool, const QString&)> reply) {
+    // Only one browser apply is tracked at a time; a newer request replaces
+    // the older one, which is told so instead of being left hanging.
+    m_browserApply.begin(path, std::move(reply), tr("Replaced by a newer request."));
+    if (!m_browserApplyTimer) {
+        m_browserApplyTimer = new QTimer(this);
+        m_browserApplyTimer->setSingleShot(true);
+        connect(m_browserApplyTimer, &QTimer::timeout, this, [this] {
+            finishBrowserApply(false, tr("Motiva did not confirm the wallpaper in time. It may still appear."));
+        });
+    }
+    m_browserApplyTimer->start(45000);
+}
+
+void MainWindow::finishBrowserApply(bool ok, const QString& detail) {
+    if (m_browserApply.settle(ok, detail) && m_browserApplyTimer) {
+        m_browserApplyTimer->stop();
+    }
+}
+
+void MainWindow::confirmBrowserApplyIfActive(const QString& detail) {
+    if (m_browserApply.confirmIfActive(m_selectedVideoPath, detail) && m_browserApplyTimer) {
+        m_browserApplyTimer->stop();
+    }
+}
+
+void MainWindow::supersedeBrowserApplyUnlessActive(const QString& newPath) {
+    if (m_browserApply.supersedeUnlessActive(
+            newPath, tr("Cancelled: a different wallpaper was chosen before this one was applied.")) &&
+        m_browserApplyTimer) {
+        m_browserApplyTimer->stop();
+    }
+}
+
+void MainWindow::cancelBrowserApply(const QString& detail) {
+    if (m_browserApply.cancel(detail) && m_browserApplyTimer) {
+        m_browserApplyTimer->stop();
+    }
+}
+
+void MainWindow::failBrowserApplyIfActive(const QString& detail) {
+    if (m_browserApply.failIfActive(m_selectedVideoPath, detail) && m_browserApplyTimer) {
+        m_browserApplyTimer->stop();
+    }
+}
+
+MainWindow::PlaylistAddOutcome MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video,
+                                                                       const QString& suggestedName, bool mixed) {
     const QString path = files.value(0);
     showNormal();
     raise();
@@ -2039,7 +2236,7 @@ void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video
                        .trimmed();
     if (!accepted) {
         qInfo() << "[Explorer] New playlist cancelled - nothing added:" << path;
-        return;
+        return {false, tr("New playlist cancelled - nothing was added.")};
     }
     if (name.isEmpty()) {
         name = fallback;
@@ -2048,13 +2245,18 @@ void MainWindow::createPlaylistFromExplorer(const QStringList& files, bool video
     const qint64 id = m_library->createPlaylist(
         name, mixed ? PlaylistType::Mixed : (video ? PlaylistType::Video : PlaylistType::Image));
     if (id <= 0) {
-        showExplorerPlaylistError(tr("The playlist could not be created:\n%1").arg(m_library->lastError()));
-        return;
+        const QString why = tr("The playlist could not be created:\n%1").arg(m_library->lastError());
+        showExplorerPlaylistError(why);
+        return {false, why};
     }
-    m_playlistDialog->addFilesTo(id, files);
+    const int added = m_playlistDialog->addFilesTo(id, files);
     m_settings.setExplorerLastPlaylistId(id);
     syncExplorerPlaylistMenu(true);
     openPlaylist();
+    if (added > 0) {
+        return {true, QString()};
+    }
+    return {false, tr("The playlist was created but the file could not be added to it.")};
 }
 
 void MainWindow::showExplorerPlaylistError(const QString& message) {

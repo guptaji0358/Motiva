@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-SKIP = {".git", "build", "deployment", "deploy", "release", "third_party", "node_modules", "__pycache__", ".claude"}
+SKIP = {".git", "out", "build", "deployment", "deploy", "release", "third_party", "node_modules", "__pycache__", ".claude"}
 DEFAULT_EXT = [".cpp", ".h", ".hpp", ".c", ".qml", ".py", ".js", ".ps1", ".bat", ".cmake", ".txt", ".html", ".css"]
 
 args = json.loads(sys.stdin.read() or "{}")

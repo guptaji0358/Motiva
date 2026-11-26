@@ -1,3 +1,4 @@
+#include "PerfProbe.h"
 #include "SettingsDialog.h"
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
@@ -158,6 +159,12 @@ void SettingsDialog::buildUi() {
         tr("Keep video wallpapers playing while running on battery power. When off, they are paused and hidden "
            "on battery and come back when AC power returns."));
     connect(m_playVideosOnBatteryCheck, &GlToggle::toggled, this, &SettingsDialog::onPlayVideosOnBatteryToggled);
+    m_perfIntelligenceCheck = addToggle(
+        PgGeneral, tr("Help improve performance (anonymous)"),
+        tr("Off by default. When on, Motiva shares anonymous timing and hardware-class statistics (never your "
+           "wallpapers, file names, web addresses or paths) and downloads signed performance tuning updates in the "
+           "background. Wallpapers work the same with this off or when offline."));
+    connect(m_perfIntelligenceCheck, &GlToggle::toggled, this, &SettingsDialog::onPerformanceIntelligenceToggled);
 
     // Appearance
     addSection(PgAppearance, tr("Theme"));
@@ -520,6 +527,7 @@ void SettingsDialog::restoreFromSettings() {
     m_playImagesOnBatteryCheck->setChecked(m_settings->playImagesOnBattery());
     m_manager->setPlayImagesOnBattery(m_settings->playImagesOnBattery());
     m_playVideosOnBatteryCheck->setChecked(m_settings->playVideosOnBattery());
+    m_perfIntelligenceCheck->setChecked(m_settings->performanceIntelligenceOptIn());
     m_manager->setPlayVideosOnBattery(m_settings->playVideosOnBattery());
     m_showInWindowsSearchCheck->setChecked(m_settings->showInWindowsSearch());
     m_explorerIntegrationCheck->setChecked(m_settings->explorerIntegrationEnabled());
@@ -670,6 +678,11 @@ void SettingsDialog::onLoopToggled(bool checked) {
 
 void SettingsDialog::onStartWithWindowsToggled(bool checked) {
     m_settings->setStartWithWindows(checked);
+}
+
+void SettingsDialog::onPerformanceIntelligenceToggled(bool checked) {
+    m_settings->setPerformanceIntelligenceOptIn(checked);
+    PerfProbe::instance().setConsent(checked); // takes effect immediately; off also discards unsent records
 }
 
 void SettingsDialog::onPlayVideosOnBatteryToggled(bool checked) {

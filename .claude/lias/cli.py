@@ -75,6 +75,10 @@ def build_parser():
 
 
 def main(argv=None, paths=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["agent"]:  # autonomous engineering worker has its own parser (docs/agent.md)
+        from lias.agent import cli as agent_cli
+        return agent_cli.main(argv[1:], paths)
     ns = build_parser().parse_args(argv)
     paths = paths or db.default_paths()
     if ns.cmd == "backup" and ns.bcmd == "restore":  # must run with no open connection

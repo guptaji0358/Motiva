@@ -16,6 +16,7 @@ is the final authority; these notes say where to look. Last full pass: 2026-11-1
 | [development-workflow.md](development-workflow.md) | You build, deploy, run, log, or test |
 | [decisions.md](decisions.md) | You are about to change a design choice and need its reason |
 | [known-issues.md](known-issues.md) | You need what is unverified, limited, or broken |
+| [perf-intelligence.md](perf-intelligence.md) | You touch opt-in telemetry, signed tuning profiles, trial recovery, stale video errors, or browser-apply (`BrowserApplyTracker`) |
 | [lias.md](lias.md) | You use or change the local knowledge/automation system in `.claude/lias/` |
 
 ## Task to file map
@@ -23,7 +24,7 @@ is the final authority; these notes say where to look. Last full pass: 2026-11-1
 - Wallpaper does not show / Explorer restart / attach: [data-flow](data-flow.md) §2-3, [modules](modules.md) (WallpaperManager, WindowsDesktopWallpaper), [decisions](decisions.md) Desktop attach.
 - Playlist order, rotation, categories, mixed: [modules](modules.md) Playlists, [data-flow](data-flow.md) §4.
 - Explorer menu: [data-flow](data-flow.md) §5, [modules](modules.md) Shell & browser.
-- Browser extension: [data-flow](data-flow.md) §6, `extension/`, [technology-stack](technology-stack.md).
+- Browser extension: [data-flow](data-flow.md) §6, `scripts/extension/`, [technology-stack](technology-stack.md).
 - Cloud: [data-flow](data-flow.md) §7, [modules](modules.md) Backup/cleanup/cloud.
 - UI or theme work: [architecture](architecture.md) layer 2, [modules](modules.md) UI toolkit, [development-workflow](development-workflow.md) editing rules.
 - Virtual Desktop Preview: [modules](modules.md) Virtual Desktop Preview, [known-issues](known-issues.md) §Virtual Desktop.

@@ -13,6 +13,7 @@
 #include <QStackedLayout>
 #include <QStringList>
 #include <memory>
+#include "BrowserApplyTracker.h"
 #include "WallpaperManager.h"
 #include "SettingsManager.h"
 #include "RecoveryState.h"
@@ -44,6 +45,12 @@ class QTimer;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
+    // Result of an add-to-playlist request: ok only when something was really
+    // added; message is the reason otherwise (also what the browser is told).
+    struct PlaylistAddOutcome {
+        bool ok = false;
+        QString message;
+    };
     // initialExplorerFile: a file path handed off from Explorer's "Set as
     // background" verb via the command line (see main.cpp) when THIS
     // process is the one that wins the single-instance lock. Loaded and
@@ -156,7 +163,7 @@ private slots:
     // Explorer "Motiva > Add to playlist" (command line or InstanceIpc):
     // adds `path` to the playlist with exactly this id, or - for 0 - asks
     // for a name and creates a new playlist of the file's type first.
-    void onAddToPlaylistReceived(qint64 playlistId, const QString& pathList); // paths joined by '\n'
+    PlaylistAddOutcome onAddToPlaylistReceived(qint64 playlistId, const QString& pathList); // paths joined by '\n'
     // A request relayed from the browser extension (InstanceIpc /
     // MotivaBrowserHost.exe): playlist list, upload chunks, or a media action
     // (wallpaper / add to playlist / cache) on a web picture or video. Web
@@ -262,8 +269,25 @@ private:
     // Runs `fn` now, or - if deferred startup hasn't finished - right after
     // it does (IPC hand-offs from a second launch must not race the restore).
     void runAfterStartup(std::function<void()> fn);
-    void createPlaylistFromExplorer(const QStringList& files, bool video, const QString& suggestedName = QString(),
-                                    bool mixed = false);
+    PlaylistAddOutcome createPlaylistFromExplorer(const QStringList& files, bool video,
+                                                  const QString& suggestedName = QString(), bool mixed = false);
+    // Browser "wallpaper" request awaiting the REAL result. The reply is sent
+    // only by finishBrowserApply(): wallpaperVerified (frames presenting),
+    // wallpaperSuspendedForBattery (applied but hidden), a definitive
+    // errorOccurred, a newer request replacing it, or the timeout.
+    // `path` is the file this request applies: a verification/battery signal
+    // confirms it only while that same file is the active wallpaper source, so a
+    // stale signal (older request, manual change) cannot confirm a newer one.
+    void beginBrowserApply(const QString& path, std::function<void(bool, const QString&)> reply);
+    // Rules (exactly-once reply, "only while that file is active") live in BrowserApplyTracker (unit-tested).
+    void finishBrowserApply(bool ok, const QString& detail);           // unconditional (timeout, rejection)
+    void confirmBrowserApplyIfActive(const QString& detail);           // verified / battery-hidden
+    void failBrowserApplyIfActive(const QString& detail);              // playback error of the request's own file
+    void rejectRequestedFile(const QString& path);                     // unsupported/missing file requested
+    void supersedeBrowserApplyUnlessActive(const QString& newPath);    // a different source was loaded
+    void cancelBrowserApply(const QString& detail);                    // wallpaper removed / selection cleared
+    BrowserApplyTracker m_browserApply;
+    QTimer* m_browserApplyTimer = nullptr;
     void showExplorerPlaylistError(const QString& message);
 
     std::unique_ptr<WallpaperManager> m_manager;

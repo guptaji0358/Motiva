@@ -2114,10 +2114,10 @@ void PlaylistDialog::onExport() {
     }
 }
 
-void PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int insertRow) {
+int PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int insertRow) {
     PlaylistModel* m = m_library->playlist(playlistId);
     if (!m) {
-        return;
+        return -1;
     }
     if (m != current()) {
         selectPlaylist(playlistId);
@@ -2131,7 +2131,7 @@ void PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int
                                    : tr("Unable to add wallpapers to the playlist"),
                  tr("Nothing was added to \"%1\".").arg(m->name()), QStringLiteral("library-error"), QString(),
                  /*desktop=*/true);
-        return;
+        return -1;
     }
     const bool video = m->isVideo();
     const bool mixed = m->isMixed();
@@ -2171,6 +2171,7 @@ void PlaylistDialog::addFilesTo(qint64 playlistId, const QStringList& paths, int
                  QStringLiteral("playlist-add-none:%1").arg(playlistId), summary);
     }
     updateUi();
+    return result.added;
 }
 
 void PlaylistDialog::onAddMedia() {

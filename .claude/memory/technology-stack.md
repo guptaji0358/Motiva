@@ -1,15 +1,15 @@
 # Technology stack
 
-Sources: `CMakeLists.txt`, `build-and-deploy.bat`, `extension/manifest.json`,
+Sources: `CMakeLists.txt`, `build-and-deploy.bat`, `scripts/extension/manifest.json`,
 README and the history logs. Versions are as recorded in the repo's own scripts.
 
 ## Application (Motiva.exe)
 
 - **Language**: C++17 (`CMAKE_CXX_STANDARD 17`, required).
 - **Build**: CMake + Ninja, **MinGW-w64 toolchain shipped with Qt** (e.g.
-  `D:\Apps\Qt6\Tools\mingw1310_64`). Mixing with a system MinGW/MSYS2 causes
+  `C:\Qt\Tools\mingw1310_64`). Mixing with a system MinGW/MSYS2 causes
   `undefined reference to '__imp___argc'`.
-- **Qt**: Qt 6.12.0 (verified 2026-11-12: installed kit is `D:\Apps\Qt6\6.12.0\mingw_64`, and `build/CMakeCache.txt` points there). `build-and-deploy.bat` line 4 was corrected from the missing 6.11.1 to 6.12.0 on 2026-11-13.
+- **Qt**: Qt 6.12.0 (verified 2026-11-26: installed kit is `C:\Qt\6.12.0\mingw_64`; `D:\Apps\Qt6` is gone).
   Components: Widgets, OpenGL, OpenGLWidgets, Multimedia, MultimediaWidgets,
   Concurrent, Svg, Sql, Network. Qt6OpenGL.dll and Qt6OpenGLWidgets.dll must be
   deployed.
@@ -79,7 +79,7 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
   media size -> hidden until `load`/`loadedmetadata`. Debug: set
   `chrome.storage.local.debugCompat = true` to log state/media/display/dpr in
   the page console, plus a `[Motiva stage]` line (placed / hidden-by-compat /
-  no-eligible-media + top-5 `elementsFromPoint` with reject reasons). Tests: `node --test extension/tests` (`compat.test.js`
+  no-eligible-media + top-5 `elementsFromPoint` with reject reasons). Tests: `node --test scripts/extension/tests` (`compat.test.js`
   evaluator; `content.test.js` runs `content.js` in a fake-DOM vm harness).
 - Visibility state (2026-11-13, verified by `content.test.js`, not in a live
   browser): `syncButton()` owns visibility; every branch ends shown-on-`current`
@@ -95,10 +95,10 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
 
 ## Packaging
 
-- `deploy/Deploy.ps1` → `deployment/` (launcher as `Motiva.exe`, real app in
+- `scripts/deploy/Deploy.ps1` → `out/deployment/` (launcher as `Motiva.exe`, real app in
   `resources/bin/`, `windeployqt` output moved into `resources/Qt` and `plugins`).
-- `installer/MotivaSetup.iss` (Inno Setup) → `release/MotivaSetup.exe`
-  (`installer/build-installer.ps1`). Installer and any MSIX file list must include
+- `scripts/installer/MotivaSetup.iss` (Inno Setup) → `out/release/MotivaSetup.exe`
+  (`scripts/installer/build-installer.ps1`). Installer and any MSIX file list must include
   the Qt OpenGL DLLs.
 - Explorer verbs/COM DLL are registered at runtime (`WindowsShellIntegration`),
   not by the installer alone.

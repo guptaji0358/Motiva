@@ -28,7 +28,7 @@ Repo location: `D:\Apps\MyApps\Pendiing\Motiva` (under OneDrive; see
   nested category tree, and a "Wallpaper Flow" node editor. See [[modules]].
 - **Media recovery**: "Find File" / "Find All at Once" relocate missing media
   in one directory walk; optional **Local Media Backup** (off by default).
-- **Browser extension** (`extension/`, MV3, Chrome/Edge/Brave): right-click
+- **Browser extension** (`scripts/extension/`, MV3, Chrome/Edge/Brave): right-click
   web images/videos -> set wallpaper, add to playlist, or save to cache, via
   Native Messaging through `MotivaBrowserHost.exe`.
 - **Explorer integration**: a single `IExplorerCommand` COM handler

@@ -94,6 +94,7 @@ private:
     void onLoopToggled(bool checked);
     void onStartWithWindowsToggled(bool checked);
     void onPlayVideosOnBatteryToggled(bool checked);
+    void onPerformanceIntelligenceToggled(bool checked);
     void onPlayImagesOnBatteryToggled(bool checked);
     void onThemeChanged(int index);
     void onShowInWindowsSearchToggled(bool checked);
@@ -183,6 +184,7 @@ private:
     GlToggle* m_startWithWindowsCheck = nullptr;
     GlToggle* m_playImagesOnBatteryCheck = nullptr;
     GlToggle* m_playVideosOnBatteryCheck = nullptr;
+    GlToggle* m_perfIntelligenceCheck = nullptr;
     GlToggle* m_showInWindowsSearchCheck = nullptr;
     GlToggle* m_explorerIntegrationCheck = nullptr;
     GlToggle* m_browserExtensionCheck = nullptr;

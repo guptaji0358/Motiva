@@ -6,7 +6,12 @@ VdWallpaperSurface::VdWallpaperSurface(GlCanvas* canvas) : GlItem(canvas) {}
 
 void VdWallpaperSurface::setFrame(std::shared_ptr<const QImage> frame) {
     m_frame = std::move(frame);
-    update();
+    // Repaint once per arriving frame. GlItem::update() would go through
+    // GlCanvas::requestAnimation(), whose hot-frame timer repaints at ~60 Hz
+    // for as long as frames keep arriving (about 2x a 30 fps source).
+    if (canvas()) {
+        canvas()->QWidget::update();
+    }
 }
 
 void VdWallpaperSurface::setScalingMode(DesktopScaling::Mode mode) {

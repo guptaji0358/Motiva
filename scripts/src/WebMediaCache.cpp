@@ -1,6 +1,7 @@
 #include "WebMediaCache.h"
 
 #include "PlaylistModel.h"
+#include "ProfileStore.h"
 #include "VideoPlayer.h"
 
 #include <QCryptographicHash>
@@ -230,7 +231,7 @@ void WebMediaCache::download(const Request& request, Callback done) {
 
     QNetworkRequest req(url);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    req.setTransferTimeout(60000);
+    req.setTransferTimeout(ProfileStore::value(perf::Param::DownloadTimeoutMs)); // default 60000
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                                  "Chrome/124.0 Safari/537.36"));

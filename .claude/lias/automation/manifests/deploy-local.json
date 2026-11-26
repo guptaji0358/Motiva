@@ -1,11 +1,24 @@
 {
   "id": "deploy-local",
   "name": "Build and deploy exe",
-  "description": "Build, then copy build/Motiva.exe and extension/ (without tests) to deployment/resources/bin.",
+  "description": "Build, then copy out/build Motiva.exe + MotivaBrowserHost.exe and scripts/extension/ (without tests) to out/deployment/resources/bin using staged, backed-up, best-effort-rollback replacement (not atomic). Qt kit/toolchain must match out/build/CMakeCache.txt (never reconfigured). Never kills processes; stops if Motiva runs from out/. Input (strict JSON types): dry_run, qt_root (default C:\\Qt or MOTIVA_QT_ROOT), skip_build (refused unless artifacts are newer than all build inputs), allow_stale_artifacts (explicit override for skip_build).",
   "entry": "deploy_local.py",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "risk": 1,
   "timeout": 600,
   "status": "active",
-  "args": {}
+  "args": {
+    "dry_run": {
+      "type": "boolean"
+    },
+    "qt_root": {
+      "type": "string"
+    },
+    "skip_build": {
+      "type": "boolean"
+    },
+    "allow_stale_artifacts": {
+      "type": "boolean"
+    }
+  }
 }
