@@ -1,7 +1,7 @@
 r"""Build, then deploy Motiva.exe, MotivaBrowserHost.exe and scripts/extension/ (no tests) to out/deployment/resources/bin.
 
 Input JSON (all optional, real JSON types only): {"dry_run": bool, "qt_root": "C:\Qt", "skip_build": bool,
-"allow_stale_artifacts": bool}. Qt root: input qt_root > env MOTIVA_QT_ROOT > C:\Qt. The Qt kit and MinGW toolchain are
+"allow_stale_artifacts": bool}. Qt root: input qt_root > env MOTIVA_QT_ROOT / QT_ROOT > installed C:\Qt. The Qt kit and MinGW toolchain are
 taken from the existing out/build/CMakeCache.txt (never reconfigured) and must lie under the Qt root.
 skip_build deploys existing artifacts only if EACH exe is newer than its own build inputs (per-target, from build.ninja, see
 _deploy_fresh.py); otherwise it refuses unless
@@ -17,6 +17,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _common import qt_root as default_qt_root  # noqa: E402
 from _deploy_qt import DeployError, freshness, run_capture, select_qt  # noqa: E402
 from _deploy_txn import Deployment  # noqa: E402
 
@@ -104,7 +105,7 @@ def main():
     root = os.environ.get("LIAS_PROJECT_ROOT")
     if not root or not os.path.isdir(root):
         fail("LIAS_PROJECT_ROOT is not set to an existing directory")
-    qt_root = opts.get("qt_root") or os.environ.get("MOTIVA_QT_ROOT") or r"C:\Qt"
+    qt_root = opts.get("qt_root") or default_qt_root()
     build = os.path.join(root, "out", "build")
     bindir = os.path.join(root, "out", "deployment", "resources", "bin")
     ext_src = os.path.join(root, "scripts", "extension")
