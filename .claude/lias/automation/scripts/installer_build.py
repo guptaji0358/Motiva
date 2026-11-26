@@ -5,12 +5,11 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import run  # noqa: E402
+from _common import qt_env, run  # noqa: E402
 
 json.loads(sys.stdin.read() or "{}")
 root = os.environ["LIAS_PROJECT_ROOT"]
-env = dict(os.environ)
-env["PATH"] = r"D:\Apps\Qt6\Tools\mingw1310_64\bin;D:\Apps\Qt6\6.12.0\mingw_64\bin;" + env.get("PATH", "")
+env = qt_env()
 start = time.time()
 code, text = run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                   os.path.join(root, "scripts", "installer", "build-installer.ps1")], root, 580, env)
