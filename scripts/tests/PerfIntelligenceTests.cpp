@@ -1,6 +1,7 @@
 // Tests for the opt-in performance-intelligence layer: profile verification,
 // activation/rollback, telemetry consent + sanitisation, offline/mock-server sync.
 // Needs Python + "cryptography" (scripts/tools/mock-perf) for signed test profiles.
+#include "AttachProfileEvidence.h"
 #include "BrowserApplyTracker.h"
 #include "PerfProbe.h"
 #include "ProfileStore.h"
@@ -1070,11 +1071,16 @@ private slots:
         {
             ProfileStore n; n.setWriterForTest(failing({"state.json"}));
             n.init(dir, key, {});
-            QCOMPARE(n.activeVersion(), 0);  // did not continue an unproven trial it cannot protect
+            QCOMPARE(n.activeVersion(), 0);  // did not continue an unproven trial it cannot protect: defaults in force
+            QVERIFY(n.trialPending());       // but no durable decision could be made (the marker cannot be written)
         }
+        // Nothing durable changed (the failed-version marker is persisted BEFORE active.json is touched), so the next
+        // start with a working disk sees the same unproven clean-exit trial: it continues it. Not healthy, not lost.
         ProfileStore m; m.init(dir, key, {});
-        QCOMPARE(m.activeVersion(), 0);
-        QVERIFY(!m.trialPending());
+        QCOMPARE(m.activeVersion(), 1);
+        QVERIFY(m.trialPending());
+        QVERIFY(!m.confirmHealthy(m.generation() + 1)); // still unproven
+        QVERIFY(m.trialPending());
     }
     void f4_rollbackRestoreFailureKeepsTrialRecordAndRetries() {
         const QString dir = fresh("f4i"); const QByteArray key = perf::placeholderPublicKey();
@@ -1234,6 +1240,187 @@ private slots:
         QVERIFY(s.rollback());
         QVERIFY(s.generation() != g2);             // rollback is a new identity
         QVERIFY(!s.confirmHealthy(g2));
+    }
+
+    // ---- F6 (operation-scoped): the generation is captured when the attach OPERATION begins and carried unchanged ----
+    // Mirrors WallpaperManager: beginOperation() at apply / Explorer restart / IPC recovery / battery resume,
+    // launchJob() for every attach job (first attempt, retry, relaunch), confirmHealthy(job.profileGeneration) at verify.
+    void f6op_attachStartedUnderNProfileN1InstalledBeforeVerifyIsRejected() {
+        const QString dir = fresh("f6e"); const QByteArray key = perf::placeholderPublicKey();
+        seedKnownGood(dir);
+        ProfileStore s; s.init(dir, key, {});
+        AttachProfileEvidence ev;
+        ev.beginOperation(s.generation());                  // attach starts under generation N
+        const auto job = ev.launchJob();
+        QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated); // N+1 installs mid-attach
+        QVERIFY(s.generation() != job.profileGeneration);
+        // Verification time: the evidence is the job's captured value, NOT a fresh read of the store.
+        QVERIFY(!s.confirmHealthy(job.profileGeneration));
+        QVERIFY(s.trialPending());
+        QVERIFY(s.confirmHealthy(s.generation()));          // (only a verification that truly began under N+1 can)
+    }
+    void f6op_attachStartedAfterInstallVerifiesN1() {
+        const QString dir = fresh("f6f"); const QByteArray key = perf::placeholderPublicKey();
+        seedKnownGood(dir);
+        ProfileStore s; s.init(dir, key, {});
+        QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated);
+        AttachProfileEvidence ev;
+        ev.beginOperation(s.generation());
+        const auto job = ev.launchJob();
+        QVERIFY(ev.jobIsCurrent(job));
+        QVERIFY(s.confirmHealthy(job.profileGeneration));
+        QVERIFY(!s.trialPending());
+    }
+    void f6op_staleAttachCallbackAfterNewerApply() {
+        const QString dir = fresh("f6g"); const QByteArray key = perf::placeholderPublicKey();
+        seedKnownGood(dir);
+        ProfileStore s; s.init(dir, key, {});
+        AttachProfileEvidence ev;
+        ev.beginOperation(s.generation());                  // apply #1 under v1
+        const auto job1 = ev.launchJob();
+        QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated);
+        ev.beginOperation(s.generation());                  // apply #2 under v2 while job1 is still in flight
+        const auto job2 = ev.launchJob();
+        QVERIFY(!ev.jobIsCurrent(job1));                    // owner discards job1's result and relaunches
+        QVERIFY(ev.jobIsCurrent(job2));
+        QVERIFY(!s.confirmHealthy(job1.profileGeneration)); // even if its callback ran, it cannot confirm v2
+        QVERIFY(s.trialPending());
+        QVERIFY(s.confirmHealthy(job2.profileGeneration));
+        QVERIFY(!s.trialPending());
+    }
+    void f6op_applyWithUnchangedProfileDoesNotInvalidateInFlightJob() {
+        const QString dir = fresh("f6h"); const QByteArray key = perf::placeholderPublicKey();
+        ProfileStore s; s.init(dir, key, {});
+        QCOMPARE(s.install(prof("valid_v1.json")), ProfileStore::InstallResult::Activated);
+        AttachProfileEvidence ev;
+        ev.beginOperation(s.generation());
+        const auto job = ev.launchJob();
+        ev.beginOperation(s.generation());                  // e.g. IPC recovery with the same profile in force
+        QVERIFY(ev.jobIsCurrent(job));
+        QVERIFY(s.confirmHealthy(job.profileGeneration));
+    }
+    void f6op_retryReusesOperationEvidenceRebuildRecaptures() {
+        const QString dir = fresh("f6i"); const QByteArray key = perf::placeholderPublicKey();
+        seedKnownGood(dir);
+        ProfileStore s; s.init(dir, key, {});
+        AttachProfileEvidence ev;
+        ev.beginOperation(s.generation());                  // operation under v1
+        const auto first = ev.launchJob();
+        QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated);
+        const auto retry = ev.launchJob();                  // desktop was not ready: a retry job launches under v2
+        QCOMPARE(retry.profileGeneration, first.profileGeneration); // retries never refresh the evidence
+        QVERIFY(!s.confirmHealthy(retry.profileGeneration)); // so a late successful retry cannot confirm v2
+        QVERIFY(s.trialPending());
+        ev.beginOperation(s.generation());                  // Explorer restart / re-apply = new operation, recaptures
+        const auto rebuilt = ev.launchJob();
+        QVERIFY(rebuilt.profileGeneration != first.profileGeneration);
+        QVERIFY(!ev.jobIsCurrent(retry));
+        QVERIFY(s.confirmHealthy(rebuilt.profileGeneration));
+    }
+    void f6op_rollbackBetweenStartAndVerifyIsRejected() {
+        const QString dir = fresh("f6j"); const QByteArray key = perf::placeholderPublicKey();
+        seedKnownGood(dir);
+        ProfileStore s; s.init(dir, key, {});
+        QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated);
+        AttachProfileEvidence ev;
+        ev.beginOperation(s.generation());
+        const auto job = ev.launchJob();
+        QVERIFY(s.rollback());                              // v2 rolled back while the attach was in flight
+        QVERIFY(!s.confirmHealthy(job.profileGeneration));
+    }
+    void f6op_hardwareChangeWithoutProfileChangeKeepsEvidenceValid() {
+        const QString dir = fresh("f6k"); const QByteArray key = perf::placeholderPublicKey();
+        ProfileStore s; s.init(dir, key, {});
+        QCOMPARE(s.install(prof("valid_v1.json")), ProfileStore::InstallResult::Activated);
+        AttachProfileEvidence ev;
+        ev.beginOperation(s.generation());
+        const auto job = ev.launchJob();
+        perf::HardwareClass hw; hw.gpuVendor = "nvidia"; hw.ramGb = 32;
+        s.setHardware(hw);                                  // async hardware detection finishing mid-attach
+        QCOMPARE(s.generation(), job.profileGeneration);
+        QVERIFY(ev.jobIsCurrent(job));
+        QVERIFY(s.confirmHealthy(job.profileGeneration));
+    }
+
+    // ---- F4 (ordering): a crash after ANY rollback step never leaves the failed profile healthy or re-trialable ----
+    // Writer that allows `n` writes and then fails every write (the process "died" there).
+    static ProfileStore::Writer crashAfterWrites(int n) {
+        auto seen = std::make_shared<int>(0);
+        return [n, seen](const QString& path, const QByteArray& data) {
+            return (*seen)++ < n && okWrite(path, data);
+        };
+    }
+    void f4o_crashAtEveryRollbackStepWithKnownGood() {
+        // rollback() writes: [1] state.json (bad marker, trial kept) [2] active.json [3] state.json (trial cleared)
+        for (int allowed = 0; allowed <= 3; ++allowed) {
+            const QString dir = fresh(QByteArray("f4o").append(char('a' + allowed)).constData());
+            const QByteArray key = perf::placeholderPublicKey();
+            seedKnownGood(dir);
+            {
+                ProfileStore s; s.init(dir, key, {});
+                QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated);
+                s.setWriterForTest(crashAfterWrites(allowed));
+                QCOMPARE(s.rollback(), allowed == 3);
+                QCOMPARE(s.activeVersion(), 1); // in-memory known-good regardless
+            }
+            ProfileStore n; n.init(dir, key, {});
+            QVERIFY2(n.activeVersion() == 1, qPrintable(QString("allowed=%1 active=%2").arg(allowed).arg(n.activeVersion())));
+            QVERIFY2(!n.trialPending(), qPrintable(QString("allowed=%1").arg(allowed)));
+            QVERIFY2(n.install(prof("valid_v2.json")) == ProfileStore::InstallResult::KnownBad,
+                     qPrintable(QString("failed profile eligible again after crash, allowed=%1").arg(allowed)));
+        }
+    }
+    void f4o_crashAtEveryRollbackStepWithoutKnownGood() {
+        // No previous.json: rollback() writes [1] state.json (marker), removes active.json, writes [2] state.json (clear).
+        for (int allowed = 0; allowed <= 2; ++allowed) {
+            const QString dir = fresh(QByteArray("f4p").append(char('a' + allowed)).constData());
+            const QByteArray key = perf::placeholderPublicKey();
+            {
+                ProfileStore s; s.init(dir, key, {});
+                QCOMPARE(s.install(prof("valid_v1.json")), ProfileStore::InstallResult::Activated);
+                s.setWriterForTest(crashAfterWrites(allowed));
+                QCOMPARE(s.rollback(), false); // never "true": there was no known-good profile to restore
+                QCOMPARE(s.activeVersion(), 0);
+            }
+            ProfileStore n; n.init(dir, key, {});
+            QCOMPARE(n.activeVersion(), 0);
+            QVERIFY2(!n.trialPending(), qPrintable(QString("allowed=%1").arg(allowed)));
+            QVERIFY2(n.install(prof("valid_v1.json")) == ProfileStore::InstallResult::KnownBad,
+                     qPrintable(QString("failed profile eligible again after crash, allowed=%1").arg(allowed)));
+        }
+    }
+    void f4o_crashBeforeAnyRollbackWriteIsStillRecoveredAsCrashedTrial() {
+        const QString dir = fresh("f4q"); const QByteArray key = perf::placeholderPublicKey();
+        seedKnownGood(dir);
+        {
+            ProfileStore s; s.init(dir, key, {});
+            QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated);
+            s.setWriterForTest(crashAfterWrites(0));
+            QVERIFY(!s.rollback());
+            QVERIFY(s.trialPending());
+            QVERIFY(!s.confirmHealthy(s.generation())); // pending restore: the failed trial can never be confirmed
+            QVERIFY(!s.noteCleanExit());                // and a clean exit cannot make it "continue"
+        }
+        ProfileStore n; n.init(dir, key, {});
+        QCOMPARE(n.activeVersion(), 1);
+        QCOMPARE(n.install(prof("valid_v2.json")), ProfileStore::InstallResult::KnownBad);
+    }
+    void f4o_staleLeftoverPreviousIsOverwrittenByNextInstall() {
+        const QString dir = fresh("f4r"); const QByteArray key = perf::placeholderPublicKey();
+        seedKnownGood(dir);
+        {
+            ProfileStore s; s.init(dir, key, {});
+            QCOMPARE(s.install(prof("valid_v2.json")), ProfileStore::InstallResult::Activated);
+            QVERIFY(s.rollback());
+        }
+        // Crash after step 3 but before the cleanup removal: a previous.json that holds the FAILED profile.
+        QFile pv(dir + "/previous.json");
+        QVERIFY(pv.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        pv.write(prof("valid_v2.json")); pv.close();
+        ProfileStore n; n.init(dir, key, {});
+        QCOMPARE(n.activeVersion(), 1);
+        QVERIFY(!n.trialPending());
+        QCOMPARE(n.install(prof("valid_v2.json")), ProfileStore::InstallResult::KnownBad);
     }
 };
 
