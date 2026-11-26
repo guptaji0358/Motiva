@@ -261,45 +261,71 @@ ProfileStore::InstallResult ProfileStore::install(const QByteArray& envelope, QS
     return InstallResult::Activated;
 }
 
+// Restores the known-good profile on disk in an order where a crash after ANY step leaves a recoverable state in
+// which the failed version is never healthy and never eligible for another trial:
+//   1. failed version -> bad list, persisted while the trial record is still in place (trial=true, cleanExit=false)
+//   2. active.json := previous.json (atomic replace) or removed
+//   3. trial cleared (state.json: trial=false; the bad list is already durable, never rewritten without it)
+//   4. previous.json removed (cleanup only; a leftover copy equals active.json and is overwritten by the next install)
+// Crash after 1: init() sees an unproven trial whose active.json still holds that version -> repeats the rollback.
+// Crash after 2: init() sees a trial record naming a version active.json no longer holds -> "interrupted", and the
+// version is already in the bad list. Crash after 3 or 4: nothing pending. A failed write at any step returns false and
+// leaves the earlier durable state in place; the caller keeps m_rollbackPending so nothing ends the trial.
+bool ProfileStore::restoreKnownGood(const QByteArray* prevRaw) {
+    const QString active = m_dir + QStringLiteral("/active.json");
+    const QString previous = m_dir + QStringLiteral("/previous.json");
+    const int trialVersion = m_trialVersion;
+    m_cleanExit = false;
+    if (!saveState()) { // step 1: the failed-version marker must be durable before anything else changes
+        return false;
+    }
+    const bool restored = prevRaw ? write(active, *prevRaw) : (!QFile::exists(active) || QFile::remove(active)); // step 2
+    if (!restored) {
+        m_lastError = QStringLiteral("could not restore active.json during rollback");
+        return false;
+    }
+    m_trial = false; // step 3
+    m_trialVersion = 0;
+    if (!saveState()) {
+        m_trial = true; // still recorded as an unresolved trial on disk: keep memory identical
+        m_trialVersion = trialVersion;
+        return false;
+    }
+    QFile::remove(previous); // step 4
+    return true;
+}
+
 bool ProfileStore::rollback() {
     const int failed = m_activeVersion;
     if (failed > 0) {
         m_badVersions.insert(failed);
+        if (m_trial && m_trialVersion == 0) {
+            m_trialVersion = failed; // legacy state: name the version in the record so an interrupted rollback is recognised
+        }
     } else if (m_trial) {
-        // Trial profile not loaded yet (startup path): mark whatever is stored.
+        // Trial profile not loaded yet (startup path): mark the version the trial record names, else whatever is stored.
         perf::Profile cur;
-        if (loadFile(QStringLiteral("active.json"), &cur)) {
+        if (m_trialVersion > 0) {
+            m_badVersions.insert(m_trialVersion);
+        } else if (loadFile(QStringLiteral("active.json"), &cur)) {
             m_badVersions.insert(cur.version);
         }
     }
-    const QString active = m_dir + QStringLiteral("/active.json");
-    const QString previous = m_dir + QStringLiteral("/previous.json");
     perf::Profile prev;
     QByteArray prevRaw;
     const bool havePrev = loadFile(QStringLiteral("previous.json"), &prev, &prevRaw);
-    // The known-good values are applied in memory regardless. On disk, the restore is an atomic replace of
-    // active.json (or its removal); only when that succeeded is the trial ended. Otherwise the trial record
-    // stays (cleanExit=false) so the next start retries this rollback instead of trusting the trial profile.
-    bool restored;
-    if (havePrev) {
-        restored = write(active, prevRaw);
-    } else {
-        restored = !QFile::exists(active) || QFile::remove(active);
-    }
+    // The known-good values are applied in memory regardless; the disk restore follows the ordering above.
     applyProfile(havePrev ? &prev : nullptr);
-    if (restored) {
-        QFile::remove(previous);
-        m_trial = false;
-        m_trialVersion = 0;
-    } else {
-        m_rollbackPending = true; // confirmHealthy()/noteCleanExit() must not end this trial: disk still holds the bad profile
-        m_lastError = QStringLiteral("could not restore active.json during rollback");
-        qWarning() << "[Perf]" << m_lastError << "- the trial record is kept so the next start retries";
+    const bool done = restoreKnownGood(havePrev ? &prevRaw : nullptr);
+    if (!done) {
+        m_rollbackPending = true; // confirmHealthy()/noteCleanExit() must not end this trial: disk is not yet resolved
+        if (m_lastError.isEmpty()) {
+            m_lastError = QStringLiteral("rollback not durable");
+        }
+        qWarning() << "[Perf] rollback not durable:" << m_lastError << "- the trial record is kept so the next start retries";
     }
-    m_cleanExit = false;
-    const bool saved = saveState();
     qInfo() << "[Perf] rolled back to" << (havePrev ? QStringLiteral("version %1").arg(prev.version) : QStringLiteral("built-in defaults"));
-    return havePrev && restored && saved;
+    return havePrev && done;
 }
 
 bool ProfileStore::endTrial() {
@@ -318,21 +344,13 @@ bool ProfileStore::endTrial() {
 }
 
 bool ProfileStore::finishPendingRestore() {
-    const QString active = m_dir + QStringLiteral("/active.json");
-    const QString previous = m_dir + QStringLiteral("/previous.json");
     perf::Profile prev;
     QByteArray raw;
     const bool havePrev = loadFile(QStringLiteral("previous.json"), &prev, &raw);
-    const bool restored = havePrev ? write(active, raw) : (!QFile::exists(active) || QFile::remove(active));
-    if (!restored) {
+    if (!restoreKnownGood(havePrev ? &raw : nullptr)) { // same ordering as rollback(): marker, restore, clear, cleanup
         return false;
     }
-    QFile::remove(previous);
     m_rollbackPending = false;
-    m_trial = false;
-    m_cleanExit = false;
-    m_trialVersion = 0;
-    saveState();
     return true;
 }
 
