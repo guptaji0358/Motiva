@@ -10,6 +10,7 @@
 #include <vector>
 #include "VideoPlayer.h"
 #include "VideoApplyTelemetry.h"
+#include "AttachProfileEvidence.h"
 #include "WallpaperWindow.h"
 #include "WindowsDesktopWallpaper.h"
 #include "RecoveryState.h"
@@ -42,9 +43,10 @@ public:
     bool setWallpaper(const QString& videoPath, VideoPlayer::LoadOrigin origin = VideoPlayer::LoadOrigin::WallpaperApply);
     void removeWallpaper();
     bool isActive() const { return m_active; }
-    // ProfileStore::generation() captured when the verification behind the most recent wallpaperVerified()
-    // BEGAN. Valid inside a wallpaperVerified handler; lets the performance-profile trial reject a verification
-    // that started under an older profile (it proves nothing about the current one).
+    // ProfileStore::generation() captured when the attach OPERATION behind the most recent wallpaperVerified()
+    // began (apply / Explorer-restart recovery / IPC recovery / battery resume) and carried unchanged through its
+    // jobs and retries (see AttachProfileEvidence.h). Valid inside a wallpaperVerified handler; lets the
+    // performance-profile trial reject a verification that began under an older profile.
     quint64 verifiedProfileGeneration() const { return m_verifiedProfileGeneration; }
 
     void setLooping(bool loop);
@@ -220,6 +222,8 @@ private:
     // discarded rather than applied - see onAttachAttemptFinished.
     quint64 m_attachGeneration = 0;
     quint64 m_verifiedProfileGeneration = 0; // see verifiedProfileGeneration()
+    AttachProfileEvidence m_profileEvidence;   // captured per operation, see AttachProfileEvidence.h
+    AttachProfileEvidence::Job m_attachJobEvidence; // evidence carried by the job currently/last in flight
     // The generation m_attachGeneration held when the currently/most-
     // recently in-flight job was launched - compared against the live
     // m_attachGeneration in onAttachAttemptFinished to detect staleness.
