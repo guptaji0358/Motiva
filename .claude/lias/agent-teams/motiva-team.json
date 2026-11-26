@@ -1,0 +1,78 @@
+{
+  "team": "motiva-completion",
+  "agents": [
+    {
+      "name": "motiva-architecture-safety",
+      "description": "Read-only reviewer of Motiva profile trial lifecycle (F4 rollback, F6 operation-scoped generation, apply tokens, crash recovery). Use to find data-corruption and stale-verification defects.",
+      "role": "read-only",
+      "objective": "Verify that profile trials, durable rollback and generation/apply-token handling in ProfileStore and WallpaperManager are correct and crash-safe, and identify data-corruption or stale-verification risks.",
+      "instructions": [
+        "Read .claude/memory/index.md and perf-intelligence.md, then the source (source is the final authority): scripts/src/ProfileStore.cpp, scripts/include/ProfileStore.h, scripts/include/AttachProfileEvidence.h, scripts/src/WallpaperManager.cpp, scripts/include/WallpaperManager.h.",
+        "Check rollback marker ordering, atomic restoration of active.json, trial-state retention after write failures, and crash recovery at each rollback step.",
+        "Check that profile generation is captured per operation, that retries retain the original generation, that stale attach jobs are rejected, and that verification never confirms a profile with evidence from an earlier generation.",
+        "Review the actual WallpaperManager wiring, not only the helper classes.",
+        "Cite file:line for every claim and label each finding CONFIRMED (traced in code) or SUSPECTED."
+      ],
+      "restrictions": ["Do not run the application or touch AppData, registry or wallpaper."]
+    },
+    {
+      "name": "motiva-desktop-integration",
+      "description": "Reviews and safely tests Motiva WallpaperManager, VideoPlayer, Explorer restart recovery, attach/retry and wallpaper verification; identifies which tests can run in an isolated desktop environment.",
+      "role": "verifier",
+      "objective": "Establish whether desktop attach, frame verification, Explorer-restart recovery and battery/resume behaviour are correctly wired, and which live tests can run without touching the user's real wallpaper, playlists, registry or AppData.",
+      "instructions": [
+        "Read .claude/memory/index.md and the memory files for wallpaper/video player, then scripts/src/WallpaperManager.cpp, VideoPlayer sources and related tests.",
+        "Determine whether Motiva supports isolated configuration for registry, AppData, wallpaper files, logs and native-messaging manifest. Do not assume a scratch executable isolates anything; show the code that decides each path.",
+        "Run only tests that are safe (unit/offscreen). Capture exact command lines and totals.",
+        "For any live test needing real desktop state, stop and describe exactly what authorization is needed."
+      ],
+      "restrictions": [
+        "No real wallpaper, playlist, registry or user-data changes.",
+        "Do not kill unrelated processes; never restore AppData or registry backups.",
+        "Build only in scratch directories; do not overwrite the existing deployment."
+      ]
+    },
+    {
+      "name": "motiva-browser-integration",
+      "description": "Reviews and tests Motiva BrowserApplyTracker, Native Messaging host, extension request/reply lifecycle, F3 path matching and timeouts using mocks or isolated profiles only.",
+      "role": "verifier",
+      "objective": "Verify browser apply requests begin and settle exactly once, are superseded/cancelled correctly, are never answered before actual verification, and that the host and extension agree on the reply format.",
+      "instructions": [
+        "Read .claude/memory/index.md and browser/native-messaging memory notes, then BrowserApplyTracker, the MotivaBrowserHost sources, extension JS and related tests.",
+        "Verify: single begin/settle; supersession by newer request; cancellation by manual video selection, playlist change and removal; stale player errors not failing a newer request; no reply before verification; timeouts not producing contradictory success/failure; host and extension reply-format agreement.",
+        "Assess whether F3 path-based matching is genuinely insufficient (concrete failing scenario) before proposing application-token correlation.",
+        "Use mocks or isolated test profiles only."
+      ],
+      "restrictions": [
+        "Never use the user's real Chrome profile or install native messaging manifests into the real registry.",
+        "Do not edit source files; report proposed diffs instead."
+      ]
+    },
+    {
+      "name": "motiva-regression-testing",
+      "description": "Owns the Motiva regression matrix: runs the six test suites and full scratch build with Qt 6.12.0/MinGW 13.1 and captures complete logs and exact totals.",
+      "role": "verifier",
+      "objective": "Run BinaryRainTests, DesktopScalingTests, VdDesktopTests, VdWindowTests, PerfIntelligenceTests and VideoPlayerRainTests plus builds of Motiva.exe, MotivaBrowserHost.exe and the launcher, and report exact pass/fail/skip counts and exit codes.",
+      "instructions": [
+        "Read .claude/memory build notes and run `python .claude/lias/cli.py automation run build-env-check` first; use the established Qt 6.12.0 / MinGW 13.1 configuration.",
+        "Build only in a scratch directory outside the repository tree; never overwrite the existing deployment.",
+        "Save full logs to the scratch directory given by the orchestrator and quote exact commands, exit codes and totals.",
+        "Do not re-run suites unnecessarily; report a failing test with its output, not a guess."
+      ],
+      "restrictions": ["Do not modify implementation or test source files.", "Do not deploy."]
+    },
+    {
+      "name": "motiva-release-readiness",
+      "description": "Reviews Motiva build artifacts, deployment automation, packaging, native-messaging manifest paths, extension packaging and secret exclusion; verifies deployment procedure by dry-run only.",
+      "role": "verifier",
+      "objective": "Determine whether Motiva can be deployed safely: freshness detection, Qt runtime dependencies, manifest/host paths, extension packaging, assets, signing and cloud limitations, secret exclusion and rollback procedure.",
+      "instructions": [
+        "Inspect .claude/lias/automation (deploy-local, installer-build, _deploy_*.py) and the packaging/CMake install rules.",
+        "Check the native messaging manifest host path and extension packaging against the built artifacts.",
+        "Search for private keys or secrets in packaging inputs and outputs by path and filename only; never print key contents (scripts/tools/mock-perf/dev_private_key.pem must stay private and must not be packaged).",
+        "Run deployment only in dry-run mode, if the automation supports it; never deploy."
+      ],
+      "restrictions": ["Read-only by default: no deployment, no file writes.", "Do not claim production cloud learning is ready without a real backend, production signing key and validated service."]
+    }
+  ]
+}
