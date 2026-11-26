@@ -153,9 +153,9 @@ wiring compiled syntax-only (g++ -fsyntax-only), not linked or run. Not covered:
   is an atomic replace (no remove-then-copy). `rollback()` keeps the trial record if active.json could not be restored (next start
   retries). `confirmHealthy()`/`noteCleanExit()` return bool; a failed confirm keeps the trial pending. `init()` does not continue a
   clean-exit trial whose marker it cannot clear (rolls back instead).
-- F6 `ProfileStore::generation()` changes on init/install/rollback/reset (not setHardware). `WallpaperManager` captures it when a
-  verification BEGINS and exposes `verifiedProfileGeneration()`; `MainWindow` calls `confirmHealthy(gen)` so a verification that
-  started under an older profile never confirms a newer trial. The no-arg `confirmHealthy()` remains for tests only.
+- F6 `ProfileStore::generation()` changes on init/install/rollback/reset (not setHardware). `MainWindow` calls
+  `confirmHealthy(m_manager->verifiedProfileGeneration())`. The no-arg `confirmHealthy()` remains for tests only.
+  SUPERSEDED 2026-11-23 (see "Operation-scoped F6" below): the generation is no longer captured when verification begins.
 - F3 `BrowserApplyTracker::supersedeUnlessActive/cancel`: `MainWindow::loadVideoSource` (manual, drag&drop, playlist advance, any
   newer selection), `wallpaperRemoved` and `onRemoveVideo` answer a pending request once with a "Cancelled: ..." (ok=false)
   message and stop its timer; the request's own load (same path) is untouched; the 45 s timeout still covers genuinely pending ones.
@@ -169,3 +169,27 @@ wiring compiled syntax-only (g++ -fsyntax-only), not linked or run. Not covered:
 - Review fix: after a failed rollback `m_rollbackPending` blocks `confirmHealthy`/`noteCleanExit` from ending the trial; they retry the
   restore of active.json instead (`finishPendingRestore`). A stale previous.json that cannot be removed fails install (`StoreFailed`).
 - Tests: PerfIntelligenceTests 77/77 (f3_*, f4_*, f6_*), VideoPlayerRainTests 22/22. Full app builds (scratch dir, 70 targets).
+
+## 2026-11-23 round 2: operation-scoped F6, F4 ordering, F3 decision (verified: scratch builds + tests; no live run)
+- Operation-scoped F6 (`AttachProfileEvidence.h`, Core header-only): `WallpaperManager` calls `beginOperation(ProfileStore::generation())`
+  at the START of an apply (`setWallpaper`, after `loadFile` succeeds), Explorer-restart recovery, IPC `recoverOrActivate`, and
+  `resumeFromBattery`. `attachAllWindows` stores `m_attachJobEvidence = launchJob()` (the operation's captured value); the verify
+  lambda uses that, never a fresh `ProfileStore::generation()`. Retries (`onAttachRetryTick`, stale-discard relaunch) reuse the
+  operation's capture; a new operation re-captures. `onAttachAttemptFinished` also discards+relaunches a job whose evidence no longer
+  equals the operation's (a newer operation captured a different generation while it ran). Apply-token and `m_attachGeneration`
+  checks unchanged. Consequence (by design): a profile installed mid-operation is confirmed only by a LATER operation's verification
+  (next apply, Explorer restart, recovery, next start); a trial can wait for that.
+- F4 ordering (`ProfileStore::restoreKnownGood`, used by `rollback()` and `finishPendingRestore()`): (1) failed version in the bad
+  list persisted while trial stays recorded, (2) `active.json` atomic restore/removal, (3) trial cleared, (4) `previous.json` removed.
+  Before: the marker was written last, so a crash after the restore made init() read "interrupted install" and the failed version
+  was NOT marked bad (eligible again). Any write failure keeps the earlier durable state and `m_rollbackPending`. If `state.json`
+  itself is unwritable, rollback changes nothing on disk (defaults only in memory); the next start continues the same unproven
+  trial (never healthy). Legacy state (`trialVersion` 0) gets the failed version written into the record first.
+- F3 decision: NOT changed. Path matching in `BrowserApplyTracker` is truthful because verification already cannot arrive from an
+  older application (`m_attachGeneration` bumps in `teardownWindows`, `setWallpaper` rebuilds windows); a re-verification of the same
+  file after Explorer restart is genuine evidence. A request token would need a new apply sequence on `WallpaperManager`, the
+  `wallpaperVerified`/battery signals and every `MainWindow` call site, for no demonstrated wrong confirmation. Limitation: two
+  applies of the same file are indistinguishable to the tracker (the newer `begin` replaces the older, which is answered once).
+- F1/F2 unchanged: Qt `errorOccurred` has no load identity; order-only attribution and the documented event-fence limitation stay.
+- Tests (scratch `%TEMP%`-style dir in the session scratchpad): PerfIntelligenceTests 88/88 (new `f6op_*` x7, `f4o_*` x4; one
+  `f4_initCleanExit...` expectation changed for the new ordering), VideoPlayerRainTests 22/22.
