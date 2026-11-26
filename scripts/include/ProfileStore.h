@@ -80,6 +80,7 @@ private:
     bool loadFile(const QString& name, perf::Profile* out, QByteArray* raw = nullptr) const;
     bool write(const QString& path, const QByteArray& data);
     bool endTrial();
+    bool restoreKnownGood(const QByteArray* prevRaw); // ordered, durable disk part of a rollback (see ProfileStore.cpp)
     bool finishPendingRestore(); // retry restoring active.json after a failed rollback; true once it is durable
     InstallResult fail(const QString& why, QString* error);
     bool saveState(); // false when state.json could not be written (lastError() set)
