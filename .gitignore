@@ -10,3 +10,7 @@ third_party/rclone/motiva-cloud.ini
 __pycache__/
 .claude/lias/automation/generated/*/report.json
 .claude/lias/benchmarks/
+
+# dev signing key (never commit)
+scripts/tools/mock-perf/*.pem
+.claude/lias/agent-data/
