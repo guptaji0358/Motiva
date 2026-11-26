@@ -280,6 +280,7 @@ void WallpaperManager::resumeFromBattery() {
     // pipeline - the same one Explorer-restart and IPC recovery already
     // drive. The render windows were only detached, never destroyed, so
     // this just reparents them back, no rebuild needed.
+    m_profileEvidence.beginOperation(ProfileStore::instance().generation());
     attachAllWindows();
     emit wallpaperResumedFromBattery();
 }
@@ -347,6 +348,9 @@ bool WallpaperManager::setWallpaper(const QString& videoPath, VideoPlayer::LoadO
     // baseline can only mean the user changed it via Explorer/Settings.
     m_wallpaperBaselineAtAttach = WindowsDesktopWallpaper::GetCurrentWallpaperPath();
 
+    // A new apply operation: capture the profile generation now and carry it through every attach job, retry and
+    // verification of this operation (never re-read at verification time).
+    m_profileEvidence.beginOperation(ProfileStore::instance().generation());
     rebuildWindows();
 
     // If the battery policy hides this media (video with "Show video on
@@ -525,6 +529,7 @@ void WallpaperManager::onExplorerRestarted() {
     // checks this and discards stale results instead of e.g. hiding a
     // brand-new window because an old, unrelated attach attempt failed.
     ++m_attachGeneration;
+    m_profileEvidence.beginOperation(ProfileStore::instance().generation()); // a re-attach is a new operation
     if (m_recoveryState) {
         m_recoveryState->setAttachGeneration(m_attachGeneration);
     }
@@ -648,6 +653,7 @@ void WallpaperManager::attachAllWindows() {
     }
     m_attachInFlight = true;
     m_attachJobGeneration = m_attachGeneration;
+    m_attachJobEvidence = m_profileEvidence.launchJob(); // retries relaunch with the operation's original capture
     const quint64 jobGeneration = m_attachJobGeneration;
     m_attachAttemptElapsed.start();
 
@@ -688,7 +694,7 @@ void WallpaperManager::onAttachAttemptFinished() {
         return;
     }
 
-    if (m_attachJobGeneration != m_attachGeneration) {
+    if (m_attachJobGeneration != m_attachGeneration || !m_profileEvidence.jobIsCurrent(m_attachJobEvidence)) {
         // The job that just finished was launched against an OLDER
         // generation - Explorer restarted (or the wallpaper was
         // reconfigured/removed) while it was still running, recreating
@@ -698,7 +704,8 @@ void WallpaperManager::onAttachAttemptFinished() {
         // corrupt the new attach cycle. Discard it and, if we're still
         // active, kick off a fresh attempt against the current windows.
         qInfo() << "[Shell] Discarding stale attach result from generation" << m_attachJobGeneration
-                << "(current generation" << m_attachGeneration << ").";
+                << "(current generation" << m_attachGeneration << ", profile evidence"
+                << m_attachJobEvidence.profileGeneration << "vs" << m_profileEvidence.operationGeneration() << ").";
         if (m_active && !m_windows.empty()) {
             attachAllWindows();
         }
@@ -748,9 +755,9 @@ void WallpaperManager::onAttachAttemptFinished() {
         }
 
         const quint64 generationAtCheck = m_attachGeneration;
-        // Profile generation when this verification begins (not when it ends): a profile installed while the
-        // check below is waiting must not be confirmed by it.
-        const quint64 profileGenAtCheck = ProfileStore::instance().generation();
+        // Profile generation captured when this attach OPERATION began (carried by the job), not read now: a
+        // profile installed since then must not be confirmed by this verification.
+        const quint64 profileGenAtCheck = m_attachJobEvidence.profileGeneration;
         // Token this verification belongs to; a newer application replaces the pending
         // token, so a stale callback can never resolve it (VideoApplyTelemetry::verified).
         const quint64 tokenAtCheck = m_videoTelemetry.pendingToken();
@@ -874,6 +881,7 @@ void WallpaperManager::recoverOrActivate() {
     }
     m_player->play();
     qInfo() << "[IPC] Recovery started - re-driving attach/verify pipeline.";
+    m_profileEvidence.beginOperation(ProfileStore::instance().generation()); // a re-drive is a new operation
     attachAllWindows();
 }
 
