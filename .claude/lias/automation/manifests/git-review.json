@@ -1,0 +1,23 @@
+{
+  "id": "git-review",
+  "name": "Final git review (read-only)",
+  "description": "Before a commit/PR: working tree and base..HEAD files grouped by purpose, secret hits (file:line only), unwanted files, conflict markers, missing qrc targets, references to deleted files, stale agent notes, commit candidates. Changes nothing in the repo. Inputs: base, report (Markdown in temp dir), remote (network).",
+  "entry": "git_review.py",
+  "version": "1.0.0",
+  "risk": 0,
+  "timeout": 180,
+  "status": "active",
+  "args": {
+    "base": {
+      "type": "string"
+    },
+    "report": {
+      "type": "boolean",
+      "default": false
+    },
+    "remote": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
