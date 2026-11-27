@@ -251,6 +251,9 @@ endif()
 get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
 add_custom_target(deploy
+    # Must stay first: a non-zero exit stops the target before anything is changed.
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_SOURCE_DIR}/scripts/deploy/AssertNotRunning.ps1"
     COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
             "${CMAKE_SOURCE_DIR}/scripts/deploy/Deploy.ps1"
             -BuildDir "${CMAKE_BINARY_DIR}"

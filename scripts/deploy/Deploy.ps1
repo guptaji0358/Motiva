@@ -73,6 +73,15 @@ if (-not $QtBinDir) {
 }
 $windeployqt = Resolve-RequiredPath (Join-Path $QtBinDir "windeployqt.exe") "windeployqt.exe"
 
+# Checked here, before $OutDir is removed, so a failed run keeps the previous deployment.
+$rcloneSrc = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\third_party\rclone"))
+$rcloneExe = Join-Path $rcloneSrc "rclone.exe"
+if (-not (Test-Path -LiteralPath $rcloneExe -PathType Leaf)) {
+    throw ("DEPLOY ABORTED: required rclone.exe not found. Expected file: $rcloneExe. " +
+        "It is not kept in git: follow $(Join-Path $rcloneSrc 'README.txt') to download, verify and place it " +
+        "at that path, then run the deployment again.")
+}
+
 Write-Host "Building deployment tree at: $OutDir"
 
 if (Test-Path $OutDir) {
@@ -109,18 +118,13 @@ if (Test-Path (Join-Path $extSrc "manifest.json")) {
 }
 
 # --- rclone (MIT): the cloud-storage engine. Its licence must travel with it. ---
-$rcloneSrc = Join-Path $PSScriptRoot "..\..\third_party\rclone"
 $rcloneDst = Join-Path $binDir "rclone"
-if (Test-Path (Join-Path $rcloneSrc "rclone.exe")) {
-    New-Item -ItemType Directory -Force -Path $rcloneDst | Out-Null
-    Copy-Item (Join-Path $rcloneSrc "rclone.exe") $rcloneDst -Force
-    Copy-Item (Join-Path $rcloneSrc "LICENSE.txt") $rcloneDst -Force
-    Copy-Item (Join-Path $rcloneSrc "README.txt") $rcloneDst -Force
-    $ini = Join-Path $rcloneSrc "motiva-cloud.ini"
-    if (Test-Path $ini) { Copy-Item $ini $rcloneDst -Force }
-} else {
-    Write-Warning "third_party/rclone/rclone.exe not found - cloud storage will not work in this deployment."
-}
+New-Item -ItemType Directory -Force -Path $rcloneDst | Out-Null
+Copy-Item $rcloneExe $rcloneDst -Force
+Copy-Item (Join-Path $rcloneSrc "LICENSE.txt") $rcloneDst -Force
+Copy-Item (Join-Path $rcloneSrc "README.txt") $rcloneDst -Force
+$ini = Join-Path $rcloneSrc "motiva-cloud.ini"
+if (Test-Path $ini) { Copy-Item $ini $rcloneDst -Force }
 
 # Tells Qt's OWN plugin loader (independent of the OS DLL search PATH
 # the launcher sets up) where to find platforms/styles/imageformats/...
@@ -161,7 +165,7 @@ Remove-Item -Recurse -Force $stageDir
 # --- Fail if the tree is incomplete: a missing DLL or plugin otherwise only
 # shows up on the user's machine (0xC0000135 "DLL not found", no video, ...).
 # Keep in step with the Qt modules in CMakeLists.txt. FFmpeg and style file
-# names carry versions, hence the wildcards. rclone stays optional (see above).
+# names carry versions, hence the wildcards.
 $required = @(
     "Motiva.exe",
     "resources\bin\Motiva.exe",
@@ -169,6 +173,7 @@ $required = @(
     "resources\bin\MotivaShell.dll",
     "resources\bin\MotivaBrowserHost.exe",
     "resources\bin\extension\manifest.json",
+    "resources\bin\rclone\rclone.exe",
     "resources\Qt\Qt6Core.dll",
     "resources\Qt\Qt6Gui.dll",
     "resources\Qt\Qt6Widgets.dll",

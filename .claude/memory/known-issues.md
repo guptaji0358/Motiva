@@ -128,7 +128,7 @@ a fix.
 - `deploy-local` `skip_build` treats every exe as stale after a shared-config change (conservative by design; a real
   build or `allow_stale_artifacts` clears it).
 - Open (2026-11-27): `motiva-cloud.ini` exists under `out/` but not `third_party/rclone/`, so a default deploy removes
-  it and ships none; the installer force-closes Motiva and has no `[InstallDelete]`; a missing `rclone.exe` only warns.
+  it and ships none; the installer force-closes Motiva and has no `[InstallDelete]`.
 - Error attribution (later fixes in perf-intelligence.md, committed, not live-verified): an error queued before the
   current load is fenced off (`emitPlayerError`), and a browser apply reacts to playback errors only while its own
   file is selected (`BrowserApplyTracker`). QMediaPlayer errors carry no load identity (Qt 6.12), so attribution of

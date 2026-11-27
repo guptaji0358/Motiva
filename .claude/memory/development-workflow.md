@@ -19,8 +19,13 @@ cmake --build out/build
 - Clean deployment: `scripts/deploy/Deploy.ps1` (needs Release build with
   `MotivaLauncher`); installer: `scripts/installer/build-installer.ps1` -> `out/release/MotivaSetup.exe`.
 - `build-installer.ps1 [-BuildDir d] [-OutputDir d]` never kills processes (refuses, exit 2); non-default dirs deploy to
-  `<OutputDir>\deployment`. The CMake `deploy` target itself has no process check and recreates `out/deployment`.
+  `<OutputDir>\deployment`. The CMake `deploy` target recreates `out/deployment`; it first runs
+  `scripts/deploy/AssertNotRunning.ps1`, which aborts if any `Motiva.exe` runs (name only, never kills; the default
+  installer path inherits this; direct `Deploy.ps1` runs are unguarded). Added 2026-11-27, not yet run.
 - `Deploy.ps1` fails on an incomplete tree (its list must follow Qt module changes) and skips `extension/tests`.
+- `Deploy.ps1` requires `third_party/rclone/rclone.exe` (see that folder's `README.txt`): if missing it throws before
+  removing the old output, so the `deploy` target and installer build fail. The plain build only warns. Added
+  2026-11-27, not yet run.
 - `MotivaLauncher` must stay fully static; whatever starts the deployed app (browser host included) uses the root
   launcher, not `resources/bin/Motiva.exe`.
 
