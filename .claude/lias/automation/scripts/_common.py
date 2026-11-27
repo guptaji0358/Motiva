@@ -21,18 +21,12 @@ def tool(name, extra=()):
     return None
 
 
-QT_ROOTS = (r"C:\Qt", r"D:\Apps\Qt6")
+DEFAULT_QT_ROOT = r"C:\Qt"
 
 
 def qt_root():
-    """Folder holding Tools\\ and <version>\\. env MOTIVA_QT_ROOT / QT_ROOT wins, else the first known install."""
-    override = os.environ.get("MOTIVA_QT_ROOT") or os.environ.get("QT_ROOT")
-    if override:
-        return override
-    for r in QT_ROOTS:
-        if os.path.isdir(os.path.join(r, "Tools")):
-            return r
-    return QT_ROOTS[0]
+    """Folder holding Tools\\ and <version>\\. env MOTIVA_QT_ROOT / QT_ROOT wins, else C:\\Qt."""
+    return os.environ.get("MOTIVA_QT_ROOT") or os.environ.get("QT_ROOT") or DEFAULT_QT_ROOT
 
 
 def qt_dirs(root=None):

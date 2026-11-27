@@ -1,9 +1,9 @@
 {
   "id": "precommit-check",
   "name": "Pre-commit gate",
-  "description": "Memory 200-line limit, debug markers (qDebug/TODO/FIXME/conflict) in changed files, then a build.",
+  "description": "Memory 200-line limit, debug markers (qDebug/TODO/FIXME/conflict) in changed files, then a build (input build_dir, default out/build; never kills processes, refuses if one runs from it).",
   "entry": "precommit_check.py",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "risk": 1,
   "timeout": 600,
   "status": "active",
@@ -11,6 +11,9 @@
     "build": {
       "type": "boolean",
       "default": true
+    },
+    "build_dir": {
+      "type": "string"
     }
   }
 }

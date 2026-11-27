@@ -64,7 +64,7 @@ def run_step(step, ctx, permission, may_recover):
             checked = {"status": "failed", "evidence": {"exit_code": None, "log": None},
                        "checks": [{"check": "action ran", "expected": "no internal error",
                                    "actual": out["error"], "ok": False}]}
-        attempts.append({"n": number, "status": checked["status"], "exit_code": out["exit_code"],
+        attempts.append({"n": number, "run": ctx.get("run_no"), "status": checked["status"], "exit_code": out["exit_code"],
                          "error": out["error"], "commands": out["commands"],
                          "duration_s": round(time.time() - started, 2)})
         if diagnoses and diagnoses[-1]["fix"]:

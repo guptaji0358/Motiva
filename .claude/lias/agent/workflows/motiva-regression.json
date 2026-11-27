@@ -1,5 +1,5 @@
 {
- "description": "Motiva: inspect, scratch build, six regression suites, before/after Git and registry comparison. No deploy, commit or process termination.",
+ "description": "Motiva: inspect, scratch build, seven regression suites, before/after Git and registry comparison. No deploy, commit or process termination.",
  "vars": {
   "qt_root": "C:/Qt/6.12.0/mingw_64",
   "mingw_bin": "C:/Qt/Tools/mingw1310_64/bin",
@@ -28,10 +28,12 @@
    "params": {"cmake": "${vars.cmake}", "source_dir": "${root}/scripts/tests", "build_dir": "${vars.tests}", "args": "${vars.cmake_args}", "recovery_path": "${vars.path}"}, "env": {"prepend_path": "${vars.path}"}},
   {"id": "build-tests", "action": "cmake_build", "depends_on": ["configure-tests"], "run_after": ["build-app"], "timeout": 1800, "retries": 2,
    "params": {"cmake": "${vars.cmake}", "build_dir": "${vars.tests}", "recovery_path": "${vars.path}"}, "env": {"prepend_path": "${vars.path}"},
-   "expect": {"files": ["${vars.tests}/BinaryRainTests.exe", "${vars.tests}/DesktopScalingTests.exe", "${vars.tests}/VdDesktopTests.exe", "${vars.tests}/VideoPlayerRainTests.exe", "${vars.tests}/VdWindowTests.exe", "${vars.tests}/PerfIntelligenceTests.exe"]}},
+   "expect": {"files": ["${vars.tests}/BinaryRainTests.exe", "${vars.tests}/WebMediaNameTests.exe", "${vars.tests}/DesktopScalingTests.exe", "${vars.tests}/VdDesktopTests.exe", "${vars.tests}/VideoPlayerRainTests.exe", "${vars.tests}/VdWindowTests.exe", "${vars.tests}/PerfIntelligenceTests.exe"]}},
 
   {"id": "test-binary-rain", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 180, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}",
    "params": {"exe": "${vars.tests}/BinaryRainTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
+  {"id": "test-web-media-name", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 180, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}",
+   "params": {"exe": "${vars.tests}/WebMediaNameTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
   {"id": "test-desktop-scaling", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 180, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}",
    "params": {"exe": "${vars.tests}/DesktopScalingTests.exe", "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
   {"id": "test-vd-desktop", "action": "qt_test", "depends_on": ["build-tests"], "timeout": 180, "retries": 1, "cacheable": true, "inputs": "${vars.test_inputs}",
@@ -45,8 +47,8 @@
    "params": {"exe": "${vars.tests}/VdWindowTests.exe", "visible_desktop": true, "recovery_path": "${vars.path}", "qt_plugins": "${vars.qt_root}/plugins"}, "env": {"prepend_path": "${vars.path}"}},
 
   {"id": "git-after", "action": "git_compare", "params": {"baseline": "git-before"}, "expect": {"unchanged": true}, "depends_on": ["git-before"],
-   "run_after": ["build-app", "build-tests", "test-binary-rain", "test-desktop-scaling", "test-vd-desktop", "test-video-player", "test-perf-intelligence", "test-vd-window"]},
+   "run_after": ["build-app", "build-tests", "test-binary-rain", "test-web-media-name", "test-desktop-scaling", "test-vd-desktop", "test-video-player", "test-perf-intelligence", "test-vd-window"]},
   {"id": "registry-after", "action": "registry_snapshot", "params": {"key": "Software\\Motiva", "baseline": "registry-before"}, "expect": {"unchanged": true}, "depends_on": ["registry-before"], "optional": true,
-   "run_after": ["test-binary-rain", "test-desktop-scaling", "test-vd-desktop", "test-video-player", "test-perf-intelligence", "test-vd-window"]}
+   "run_after": ["test-binary-rain", "test-web-media-name", "test-desktop-scaling", "test-vd-desktop", "test-video-player", "test-perf-intelligence", "test-vd-window"]}
  ]
 }

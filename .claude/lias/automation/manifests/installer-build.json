@@ -1,11 +1,18 @@
 {
   "id": "installer-build",
   "name": "Build installer",
-  "description": "Run scripts/installer/build-installer.ps1; report out/release/MotivaSetup.exe size.",
+  "description": "Run scripts/installer/build-installer.ps1; report MotivaSetup.exe size. Inputs build_dir (default out/build) and output_dir (default out/release); a non-default value keeps out/deployment untouched. Never kills processes: refuses if one runs from a directory it would overwrite.",
   "entry": "installer_build.py",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "risk": 1,
   "timeout": 600,
   "status": "active",
-  "args": {}
+  "args": {
+    "build_dir": {
+      "type": "string"
+    },
+    "output_dir": {
+      "type": "string"
+    }
+  }
 }
