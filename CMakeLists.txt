@@ -97,6 +97,7 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/WebMediaCache.cpp
     scripts/include/InstanceIpc.h
     scripts/include/WebMediaCache.h
+    scripts/include/WebMediaName.h
     scripts/src/WindowsShellIntegration.cpp
     scripts/src/LibraryDatabase.cpp
     scripts/include/LibraryDatabase.h
@@ -229,6 +230,11 @@ endif()
 add_executable(MotivaLauncher WIN32 EXCLUDE_FROM_ALL scripts/main/launcher.cpp)
 target_link_libraries(MotivaLauncher PRIVATE Shell32 User32)
 if(MINGW)
+    # Must be static: this is the one exe users double-click at the deployment
+    # root, and PATH only gets resources\Qt (which holds the MinGW runtime DLLs)
+    # once this process itself is running. A dynamic libgcc/libstdc++ import
+    # made it fail with 0xC0000135 (DLL not found) before main() ran.
+    target_link_options(MotivaLauncher PRIVATE -static -static-libgcc -static-libstdc++)
     # MinGW's default CRT startup expects an ANSI WinMain unless told
     # otherwise - -municode switches it to the wWinMainCRTStartup entry
     # point that matches launcher.cpp's wWinMain(...).

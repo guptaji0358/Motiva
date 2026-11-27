@@ -6,7 +6,7 @@ SHA-256 of the zip (matches the published SHA256SUMS): 8a9db2bad1dc79a65b3348fd8
 
 rclone.exe (85 MB) is git-ignored. To (re)create it: download the zip above, verify the hash,
 and copy rclone.exe next to this file. The CMake build copies this folder to <build>/rclone/
-and deploy/Deploy.ps1 ships it in resources/bin/rclone/.
+and scripts/deploy/Deploy.ps1 ships it in resources/bin/rclone/.
 
 Motiva modification: the sign-in result page compiled into rclone.exe is replaced by a Motiva-branded
 page of identical byte length: run  python -I scripts/tools/patch_rclone_page.py third_party/rclone/rclone.exe
