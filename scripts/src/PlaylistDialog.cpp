@@ -107,16 +107,6 @@ QString playlistIconPath() {
     return QStringLiteral(":/playlist/%1/playlist.svg").arg(Theme::iconVariant(Theme::currentTheme()));
 }
 
-bool isOnyx(Theme::AppTheme theme) {
-    return theme == Theme::AppTheme::DarkOnyx || theme == Theme::AppTheme::LightOnyx;
-}
-
-// Corner language follows the active theme family: Aurora is soft, Onyx
-// is near-square (matches the radii baked into Theme.cpp's stylesheets).
-int cardRadius() {
-    return isOnyx(Theme::currentTheme()) ? 2 : 10;
-}
-
 QPainterPath roundedPath(const QRectF& rect, qreal radius) {
     QPainterPath path;
     path.addRoundedRect(rect, radius, radius);
@@ -2314,10 +2304,6 @@ void PlaylistDialog::onClear() {
         showNotice(tr("Playlist cleared. No files were deleted."));
     }
     updateUi();
-}
-
-void PlaylistDialog::onMove(int delta) {
-    moveRow(selectedRow(), delta);
 }
 
 void PlaylistDialog::moveRow(int row, int delta) {

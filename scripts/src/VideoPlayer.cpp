@@ -107,7 +107,6 @@ VideoPlayer::VideoPlayer(QObject* parent) : QObject(parent), m_movie(this) {
     connect(&m_sink, &QVideoSink::videoFrameChanged, this, &VideoPlayer::onVideoFrameChanged);
     connect(&m_player, &QMediaPlayer::mediaStatusChanged, this, &VideoPlayer::onMediaStatusChanged);
     connect(&m_player, &QMediaPlayer::errorOccurred, this, &VideoPlayer::onErrorOccurred);
-    connect(&m_player, &QMediaPlayer::playbackStateChanged, this, &VideoPlayer::playbackStateChanged);
     connect(&m_conversionWatcher, &QFutureWatcher<QImage>::finished, this, &VideoPlayer::onConversionFinished);
     connect(&m_movie, &QMovie::frameChanged, this, &VideoPlayer::onGifFrameChanged);
     connect(&m_movie, &QMovie::finished, this, &VideoPlayer::onGifFinished);

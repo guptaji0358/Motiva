@@ -52,8 +52,6 @@ public:
     // the dialog is open).
     void refreshMonitorList();
 
-    bool isMuted() const;
-
 protected:
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
     void showEvent(QShowEvent* event) override;

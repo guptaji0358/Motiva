@@ -215,12 +215,6 @@ void WallpaperWindow::presentLastFrame() {
     }
 }
 
-void WallpaperWindow::showNative() {
-    if (m_hwnd) {
-        ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
-    }
-}
-
 void WallpaperWindow::hideNative() {
     if (m_hwnd) {
         ShowWindow(m_hwnd, SW_HIDE);

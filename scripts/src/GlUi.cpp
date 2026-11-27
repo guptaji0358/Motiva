@@ -1098,10 +1098,6 @@ void GlCanvas::paintGL() {
     }
 }
 
-QImage GlCanvas::snapshot() {
-    return grabFramebuffer();
-}
-
 GlItem* GlCanvas::itemAt(const QPointF& pt) const {
     for (int i = m_items.size() - 1; i >= 0; --i) {
         GlItem* it = m_items[i];
@@ -1830,10 +1826,6 @@ void GlTextInput::focusInput(bool selectAll) {
 
 void GlTextInput::focusChanged(bool focused) {
     if (focused) {
-        if (m_selectAll) {
-            m_anchor = 0;
-            m_cursor = int(m_text.size());
-        }
         m_blinkBase = canvas()->clock();
     } else {
         emit focusLost();

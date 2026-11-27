@@ -186,7 +186,6 @@ private:
     void previewImage(int row);
     void onRemove();
     void onClear();
-    void onMove(int delta);
     void removeRow(int row);
     void moveRow(int row, int delta);
     void onShowNow();

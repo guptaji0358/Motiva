@@ -34,10 +34,6 @@ public:
     void setClock(std::function<qint64()> nowSecs) { m_clock = std::move(nowSecs); } // tests
 
     void configure(const QUrl& endpoint, const QString& stateDir);
-    void setIntervals(int uploadSecs, int pollSecs) {
-        m_uploadSecs = uploadSecs;
-        m_pollSecs = pollSecs;
-    }
     void setTimeoutMs(int ms) { m_timeoutMs = ms; }
     bool endpointAllowed(const QUrl& u) const;
 

@@ -298,7 +298,6 @@ void BackupManager::onItemFinished(const Job& job, const BackupResult& result) {
         ++m_done;
         m_lastProblem = tr("%1: %2").arg(job.name, failure);
         qWarning() << "[Backup] Failed:" << job.path << "-" << failure;
-        emit itemFailed(job.name, failure);
     }
     emit progressChanged();
     m_statsTimer->start();

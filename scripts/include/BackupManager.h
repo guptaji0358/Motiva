@@ -67,7 +67,6 @@ public:
     int total() const { return m_total; }
     int done() const { return m_done; }
     int failed() const { return m_failed; }
-    int waitingMissing() const { return m_missing; } // originals not found - nothing to copy
     QString currentName() const { return m_currentName; }
     int currentPercent() const { return m_currentPercent; }
     QString lastProblem() const { return m_lastProblem; }
@@ -97,7 +96,6 @@ signals:
     void stateChanged();
     void progressChanged();   // done/total/current file/percent
     void statsChanged();
-    void itemFailed(const QString& name, const QString& reason);
     void restoreProgress(qint64 mediaId, int percent);
     void restoreFinished(qint64 mediaId, bool ok, const QString& path, const QString& message);
 

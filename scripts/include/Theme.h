@@ -149,24 +149,14 @@ constexpr const char* kStatusError = "#d64545";
 
 // The video preview surface is a deliberately fixed-dark backdrop
 // regardless of the active theme (the same convention most media/player
-// apps use) - see MainWindow.cpp's kPreviewSurfaceStyle.
+// apps use).
 constexpr const char* kPreviewSurfaceBg = "#161616";
-constexpr const char* kPreviewSurfaceBorder = "#2c2c2c";
 constexpr const char* kPreviewText = "#8a8a8a";
-constexpr const char* kPreviewTextStrong = "#c9c9c9";
-constexpr const char* kPreviewTextFaint = "#5a5a5a";
 
 // Same fixed brand green used by the (theme-independent) preview surface
 // and the theme-transition overlay's own decorative sweep - not one of
 // the four themes' own (per-theme) accent colors.
 constexpr const char* kBrandAccent = "#3fae5c";
-
-// Corner radius scale used by the fixed-dark preview surface above and
-// its own light-on-dark controls (which do not belong to either Aurora
-// or Onyx's own per-theme-family radius language, applied inside
-// appStyleSheet() instead).
-constexpr int kRadiusSmall = 8;
-constexpr int kRadiusMedium = 10;
 
 // The one application-wide stylesheet for `theme`, built from its
 // ThemePalette - applied once via QApplication::setStyleSheet (main.cpp)

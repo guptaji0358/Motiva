@@ -243,8 +243,7 @@ private:
     // for it at a short, fixed interval (not a long arbitrary timeout)
     // and stop the instant it succeeds - this is a bounded "wait for a
     // condition" loop, not a periodic health-check/reattach loop (which
-    // was previously the source of z-order flicker; see
-    // WindowsDesktopWallpaper.cpp's NeedsReattach comment). Also used as
+    // was previously the source of z-order flicker). Also used as
     // a safety net after TaskbarCreated if the icon layer isn't back yet
     // at that exact moment. Each tick just (re)starts the background
     // attach attempt above - it never blocks itself.

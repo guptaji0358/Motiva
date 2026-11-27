@@ -651,13 +651,6 @@ void CloudWindow::appendLog(const QString& line) {
     m_log->scrollTo(m_logModel->rowCount() - 1);
 }
 
-void CloudWindow::setLines(QStandardItemModel* model, const QStringList& lines) {
-    clearRows(model);
-    for (const QString& l : lines) {
-        model->appendRow(new QStandardItem(l));
-    }
-}
-
 void CloudWindow::fillRemoteCombo(GlDropdown* combo) {
     const QVariant previous = combo->currentData();
     const QSignalBlocker blocker(combo);
