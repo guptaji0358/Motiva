@@ -46,6 +46,16 @@ python .claude/lias/cli.py knowledge index   # re-index memory/*.md after editin
   quarantined by three `cmake` not-found runs (fixed), then released with `automation release`. All three build
   checks and `installer-build` passed in scratch dirs; default `out/` paths not run. Tests: `test_build_guard.py` (8).
 
+## Git review (added 2026-11-27)
+
+- `git-review` (risk 0, read-only): `automation run git-review --args '{"report":true,"remote":true,"base":"<ref>"}'`
+  (all optional), or `git-review.bat [base]` at the repo root. Skill `.claude/Skills/motiva-git-review/` says when to
+  run it and what still needs judgement. Standard library only. It reports and never fixes.
+- Checks: grouped files, secret hits (file:line, includes known test fixtures), unwanted files, conflict markers,
+  `.qrc` targets, references to deleted files, stale suite counts/test lists in agent notes, memory line limit,
+  commit candidates. Heuristic; history is not scanned; local tracking refs are not fetched.
+- Verified: `tests/test_git_review.py` 6 passed; live run on PR #5 range and both `.bat` forms.
+
 ## Gotchas
 
 - Tests are run as files (`python .claude/lias/tests/test_core.py`), not via `unittest discover`.

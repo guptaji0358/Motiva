@@ -2,7 +2,8 @@
 
 Start here. Read the file(s) for the task, then the source it names. Source code
 is the final authority; these notes say where to look. Last full pass: 2026-11-11;
-outdated-statement correction pass: 2026-11-27 (HEAD `8806853`).
+outdated-statement correction pass: 2026-11-27 (HEAD `8806853`). Later commits up to
+`21ed869` were merged into `main` (PR #5, 2026-11-27); no full memory pass since.
 
 ## Memory files
 
@@ -29,6 +30,7 @@ outdated-statement correction pass: 2026-11-27 (HEAD `8806853`).
 - Cloud: [data-flow](data-flow.md) §7, [modules](modules.md) Backup/cleanup/cloud.
 - UI or theme work: [architecture](architecture.md) layer 2, [modules](modules.md) UI toolkit, [development-workflow](development-workflow.md) editing rules.
 - Virtual Desktop Preview: [modules](modules.md) Virtual Desktop Preview, [known-issues](known-issues.md) §Virtual Desktop.
+- Final Git review / stale notes: [lias](lias.md) Git review (automation `git-review`).
 - Build or installer: [development-workflow](development-workflow.md), [technology-stack](technology-stack.md) Packaging.
 
 ## Historical archive (not current architecture)
