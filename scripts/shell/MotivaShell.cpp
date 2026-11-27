@@ -580,7 +580,9 @@ void Cmd::buildRootChildren() {
     const Config& cfg = m_config;
     const Selection& sel = m_selection;
     if (sel.canSetWallpaper()) {
-        m_children.push_back(new (std::nothrow) Cmd(Role::SetWallpaper, L"Set as wallpaper", cfg.exe));
+        if (Cmd* setWallpaper = new (std::nothrow) Cmd(Role::SetWallpaper, L"Set as wallpaper", cfg.exe)) {
+            m_children.push_back(setWallpaper); // a null entry would crash ~Cmd inside Explorer
+        }
     }
     if (!sel.playable()) {
         return;

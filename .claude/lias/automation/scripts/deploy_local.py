@@ -13,6 +13,7 @@ The launcher (out/deployment/Motiva.exe), Qt DLLs and settings are never touched
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -141,7 +142,11 @@ def main():
                  freshness=fresh)
 
     env = dict(os.environ)
-    env["PATH"] = os.pathsep.join(qt_dirs) + os.pathsep + env.get("PATH", "")
+    # Qt's bundled CMake is a fallback after the parent PATH. The program is resolved against this PATH here because
+    # Windows would otherwise look "cmake" up on the PARENT's PATH only.
+    bundled = os.path.join(qt_root, "Tools", "CMake_64", "bin")
+    env["PATH"] = os.pathsep.join(qt_dirs + [env.get("PATH", ""), bundled])
+    cmake = shutil.which("cmake", path=env["PATH"]) or "cmake"
     plan = {"qt": qt_info, "copy": [os.path.join(bindir, e) for e in exes], "extension": ext_dst,
             "build": not skip_build, "rollback": "best-effort, not atomic"}
     if fresh is not None:
@@ -155,7 +160,7 @@ def main():
     if not skip_build:
         STATE["stage"] = "build (cmake --build out/build)"
         try:
-            code, text = run_capture(["cmake", "--build", "out/build"], root, 540, env)
+            code, text = run_capture([cmake, "--build", "out/build"], root, 540, env)
         except subprocess.TimeoutExpired:
             fail("build timed out after 540s; only the cmake process was stopped (Ninja/compiler child processes may still be "
                  "running and writing to out/build; none were killed); no deployment destination was changed",

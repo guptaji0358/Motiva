@@ -42,15 +42,7 @@ public:
     // rect is in the virtual-desktop's physical-pixel coordinate space.
     void setMonitorRect(const QRect& rect);
 
-    void showNative();
     void hideNative();
-
-    // True once the D3D/DirectComposition pipeline reported successful
-    // initialization. AttachToDesktop() should still be called regardless
-    // of window content readiness (the HWND itself is valid either way),
-    // but callers that want to know whether frames can actually be
-    // presented should check this.
-    bool isRendererReady() const { return m_rendererReady; }
 
     // Called after Explorer has been detected to have restarted (see
     // WallpaperManager's "TaskbarCreated" handling - event-driven, not

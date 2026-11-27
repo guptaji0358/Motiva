@@ -14,3 +14,7 @@ __pycache__/
 # dev signing key (never commit)
 scripts/tools/mock-perf/*.pem
 .claude/lias/agent-data/
+
+# machine files
+desktop.ini
+.claude/scheduled_tasks.lock

@@ -75,13 +75,6 @@ public:
     // True if this kind/category would currently be delivered in-app.
     bool inAppEnabledFor(const Notification& n) const;
 
-    // Test hooks.
-    int visibleToastCount() const;
-    int deliveredInApp() const { return m_deliveredInApp; }
-    int deliveredDesktop() const { return m_deliveredDesktop; }
-    int suppressedCount() const { return m_suppressed; }
-    const Notification& lastDelivered() const { return m_last; }
-
 private:
     explicit NotificationManager(QObject* parent = nullptr);
     bool deliver(const Notification& n);
@@ -101,9 +94,5 @@ private:
     QHash<QString, Recent> m_recent;
     QList<qint64> m_burst; // delivery times, for the global flood guard
     QElapsedTimer m_clock;
-    Notification m_last;
-    int m_deliveredInApp = 0;
-    int m_deliveredDesktop = 0;
-    int m_suppressed = 0;
     bool m_loggedNoDesktop = false;
 };

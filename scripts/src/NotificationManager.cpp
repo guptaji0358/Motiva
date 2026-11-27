@@ -357,14 +357,6 @@ void NotificationManager::shutdown() {
     m_recent.clear();
 }
 
-int NotificationManager::visibleToastCount() const {
-    int n = 0;
-    for (const auto& h : m_hosts) {
-        n += h ? h->visibleCount() : 0;
-    }
-    return n;
-}
-
 bool NotificationManager::categoryAllowed(const Notification& n) const {
     if (!m_settings) {
         return true;
@@ -461,7 +453,6 @@ bool NotificationManager::sendDesktop(const Notification& n) {
     // Fire-and-forget: showMessage() returns void and Windows decides
     // whether to present it (Focus Assist etc.).
     m_tray->showMessage(n.title, n.message.isEmpty() ? n.title : n.message, icon, 6000);
-    ++m_deliveredDesktop;
     return true;
 }
 
@@ -475,7 +466,6 @@ bool NotificationManager::deliver(const Notification& n) {
         return false; // disabled by the user; the operation itself is unaffected
     }
     if (shouldSuppress(n)) {
-        ++m_suppressed;
         return false;
     }
     qInfo().noquote() << "[Notify]" << int(n.kind) << n.title << "-" << n.message;
@@ -484,8 +474,6 @@ bool NotificationManager::deliver(const Notification& n) {
     if (inApp) {
         if (ToastHost* host = hostForDisplay()) {
             host->present(n, n.durationMs > 0 ? n.durationMs : defaultDuration(n.kind));
-            ++m_deliveredInApp;
-            m_last = n;
             shown = true;
         }
     }

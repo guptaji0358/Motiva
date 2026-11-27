@@ -32,10 +32,6 @@ void GlSwatchButton::paint(QPainter& p, const GlUi::Style& s) {
     p.setFont(GlUi::uiFont(10, true));
     p.setPen(textOn(m_color));
     p.drawText(r.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, m_color.name().toUpper());
-    if (m_custom) {
-        p.setFont(GlUi::uiFont(8.5));
-        p.drawText(r.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignRight, QObject::tr("custom"));
-    }
     p.restore();
     if (hasFocus()) {
         p.save();

@@ -793,6 +793,8 @@ void WallpaperManager::onAttachAttemptFinished() {
             }
             if (allPresenting) {
                 if (m_recoveryState) {
+                    // -1 when no media player source was loaded (still image).
+                    m_recoveryState->markVideoReady(StartupDiagnostics::instance().elapsedFor("decoderReady"));
                     m_recoveryState->markVideoPresenting(StartupDiagnostics::instance().elapsedFor("firstFramePresented"));
                     m_recoveryState->setWallpaperAttached(true);
                     // First time this fires, the full startup timeline is

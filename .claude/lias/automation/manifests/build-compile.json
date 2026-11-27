@@ -1,11 +1,15 @@
 {
   "id": "build-compile",
   "name": "Compile Motiva",
-  "description": "Run cmake --build; on failure returns exit code and every error line.",
+  "description": "Run cmake --build on an already configured build dir (input build_dir, default out/build); on failure returns exit code and every error line. Never kills processes: refuses if one runs from the build dir.",
   "entry": "build_compile.py",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "risk": 1,
   "timeout": 600,
   "status": "active",
-  "args": {}
+  "args": {
+    "build_dir": {
+      "type": "string"
+    }
+  }
 }

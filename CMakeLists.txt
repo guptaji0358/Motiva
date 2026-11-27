@@ -97,6 +97,7 @@ set(IMPLEMENTATION_SOURCES
     scripts/src/WebMediaCache.cpp
     scripts/include/InstanceIpc.h
     scripts/include/WebMediaCache.h
+    scripts/include/WebMediaName.h
     scripts/src/WindowsShellIntegration.cpp
     scripts/src/LibraryDatabase.cpp
     scripts/include/LibraryDatabase.h
@@ -229,6 +230,11 @@ endif()
 add_executable(MotivaLauncher WIN32 EXCLUDE_FROM_ALL scripts/main/launcher.cpp)
 target_link_libraries(MotivaLauncher PRIVATE Shell32 User32)
 if(MINGW)
+    # Must be static: this is the one exe users double-click at the deployment
+    # root, and PATH only gets resources\Qt (which holds the MinGW runtime DLLs)
+    # once this process itself is running. A dynamic libgcc/libstdc++ import
+    # made it fail with 0xC0000135 (DLL not found) before main() ran.
+    target_link_options(MotivaLauncher PRIVATE -static -static-libgcc -static-libstdc++)
     # MinGW's default CRT startup expects an ANSI WinMain unless told
     # otherwise - -municode switches it to the wWinMainCRTStartup entry
     # point that matches launcher.cpp's wWinMain(...).
@@ -245,6 +251,9 @@ endif()
 get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
 add_custom_target(deploy
+    # Must stay first: a non-zero exit stops the target before anything is changed.
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_SOURCE_DIR}/scripts/deploy/AssertNotRunning.ps1"
     COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
             "${CMAKE_SOURCE_DIR}/scripts/deploy/Deploy.ps1"
             -BuildDir "${CMAKE_BINARY_DIR}"

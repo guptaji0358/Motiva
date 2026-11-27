@@ -18,6 +18,10 @@ qt_add_executable(BinaryRainTests
 target_include_directories(BinaryRainTests PRIVATE ../include)
 target_link_libraries(BinaryRainTests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
 
+qt_add_executable(WebMediaNameTests WebMediaNameTests.cpp)
+target_include_directories(WebMediaNameTests PRIVATE ../include)
+target_link_libraries(WebMediaNameTests PRIVATE Qt6::Core Qt6::Test)
+
 qt_add_executable(DesktopScalingTests DesktopScalingTests.cpp)
 target_include_directories(DesktopScalingTests PRIVATE ../include)
 target_link_libraries(DesktopScalingTests PRIVATE Qt6::Core Qt6::Test)

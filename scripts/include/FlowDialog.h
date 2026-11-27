@@ -155,7 +155,6 @@ private:
     QVector<FlowNodeItem*> m_nodes;     // sequence order
     QVector<QVector<qint64>> m_undo;    // previous FULL playlist orders
     QVector<QVector<qint64>> m_redo;
-    QSet<qint64> m_keepSelected;
     bool m_rebuildPending = false;
     QVector<qint64> m_lastSequence; // scope order at the previous rebuild (graph-change detection)
     bool m_layoutPending = true;    // force an organize on the next rebuild

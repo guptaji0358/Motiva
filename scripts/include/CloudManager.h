@@ -92,7 +92,6 @@ public:
     // --- the rclone tool ---
     using ToolCallback = std::function<void(const CloudToolInfo&)>;
     void checkTool(ToolCallback done);
-    const CloudToolInfo& toolInfo() const { return m_tool; }
     // Where rclone is looked up: user override, the copy shipped beside Motiva, then PATH.
     static QString locateRclone(bool* bundled = nullptr);
 
@@ -103,9 +102,6 @@ public:
     // Deletes ONLY Motiva's own rclone config + key (all connected accounts are forgotten).
     bool resetAccounts();
     static QString configPath();
-    // Tests may point Motiva at a private config folder / rclone binary.
-    void setConfigDirectoryForTesting(const QString& dir);
-    void setRclonePathForTesting(const QString& exe);
 
     // --- API credentials (the product owner's own app registrations) ---
     // Order: value saved in Motiva > motiva-cloud.ini beside rclone.exe > none
@@ -118,7 +114,6 @@ public:
     // --- accounts ---
     using RemotesCallback = std::function<void(const QList<CloudRemote>&, const QString& error)>;
     void listRemotes(RemotesCallback done);
-    static bool isValidRemoteName(const QString& name, QString* why = nullptr);
     // Starts rclone's own sign-in (opens the system browser). Reports through
     // connectStatus / connectFinished. One at a time.
     bool connectAccount(const QString& providerId, const QString& name); // always read-only access
@@ -183,8 +178,6 @@ private:
 
     void runNextStep();
     void finishPlan();
-    QString m_configDirOverride;
-    QString m_rcloneOverride;
 
     mutable QSettings m_settings;
     CloudToolInfo m_tool;

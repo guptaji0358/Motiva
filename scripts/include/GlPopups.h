@@ -90,7 +90,6 @@ private:
     QAction* m_result = nullptr;
     QEventLoop* m_loop = nullptr;
     QTimer* m_subTimer = nullptr;
-    bool m_hasCheck = false;
 };
 
 // Motiva-styled message and input boxes with QMessageBox / QInputDialog
@@ -187,6 +186,5 @@ private:
     // Optional input field (getText / getItem).
     GlTextInput* m_input = nullptr;
     GlDropdown* m_choice = nullptr;
-    GlLabel* m_inputLabel = nullptr;
     friend class GlInputHelper;
 };

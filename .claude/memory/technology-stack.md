@@ -105,7 +105,7 @@ README and the history logs. Versions are as recorded in the repo's own scripts.
 
 ## Not used (verified absent)
 
-No Electron, no Node build, no test framework in the repo (verification has been
-out-of-tree harnesses and live runs). No OAuth/token library in Motiva itself.
+No Electron, no Node build. No OAuth/token library in Motiva itself. Tests are opt-in only: QtTest targets in
+`scripts/tests/` and `node --test scripts/extension/tests`; other verification is harnesses and live runs.
 
 Related: [[development-workflow]] · [[architecture]] · [[decisions]]

@@ -94,20 +94,13 @@ QString wallpaperIconPath(const char* name) {
 }
 constexpr int kStatusDotSize = 14;
 constexpr const char* kOpenVideoIconResourcePath = ":/video/open-video.svg";
-constexpr const char* kOpenVideoIconHoverPath = ":/video/open-video-hover.svg";
-constexpr const char* kOpenVideoIconPressedPath = ":/video/open-video-pressed.svg";
 constexpr const char* kLinkIconResourcePath = ":/video/link.svg";
-constexpr const char* kLinkIconHoverPath = ":/video/link-hover.svg";
-constexpr const char* kLinkIconPressedPath = ":/video/link-pressed.svg";
 // "Remove Current Video" - unloads the loaded video from Motiva's own
 // player/preview. Deliberately its own icon (a video frame with an X),
 // distinct from wallpaper/{light,dark}/remove-wallpaper.svg's monitor-with-X
 // glyph, so the two different actions never look the same at a glance -
 // see the "Remove Current Video" task.
 constexpr const char* kRemoveVideoIconResourcePath = ":/video/remove-video.svg";
-constexpr const char* kRemoveVideoIconHoverPath = ":/video/remove-video-hover.svg";
-constexpr const char* kRemoveVideoIconPressedPath = ":/video/remove-video-pressed.svg";
-constexpr const char* kRemoveVideoIconDisabledPath = ":/video/remove-video-disabled.svg";
 constexpr const char* kPlayIconResourcePath = ":/playback/play.svg";
 constexpr const char* kPlayIconHoverPath = ":/playback/play-hover.svg";
 constexpr const char* kPauseIconResourcePath = ":/playback/pause.svg";
@@ -133,17 +126,6 @@ constexpr const char* kStatusNeutralColor = Theme::kStatusNeutral;
 constexpr const char* kStatusWarningColor = Theme::kStatusWarning;
 constexpr const char* kStatusSuccessColor = Theme::kStatusSuccess;
 constexpr const char* kStatusErrorColor = Theme::kStatusError;
-
-// Fixed dark preview surface, independent of the OS theme - a live video
-// preview reads best against a neutral dark backdrop regardless of the
-// surrounding app theme, the same convention most media/player apps use.
-// Also see Theme::kRadiusMedium, the same corner radius used for every
-// other panel/card-like surface in the app.
-const QString kPreviewSurfaceStyle = QStringLiteral(
-    "background-color: %1; border: 1px solid %2; border-radius: %3px; color: %4;")
-    .arg(Theme::kPreviewSurfaceBg, Theme::kPreviewSurfaceBorder)
-    .arg(Theme::kRadiusMedium)
-    .arg(Theme::kPreviewText);
 
 const QSet<QString>& supportedVideoContainerExtensions() {
     return VideoPlayer::supportedVideoExtensions();
@@ -210,54 +192,6 @@ QStringList MainWindow::explorerIntegrationExtensions() {
     exts.append(VideoPlayer::supportedStaticImageExtensions().values());
     return exts;
 }
-
-// Fills whatever space the main layout gives the preview and places the panel
-// inside it: the largest rectangle of the media's aspect ratio, centred. With
-// no aspect (nothing loaded, drop zone shown) the panel simply fills the host.
-// Geometry is recomputed from the host's current size on every resize and
-// aspect change - nothing is cached.
-class PreviewAspectHost : public QWidget {
-public:
-    using QWidget::QWidget;
-    void setPanel(QWidget* panel) {
-        m_panel = panel;
-        place();
-    }
-    void setAspect(double aspect) {
-        if (qFuzzyCompare(aspect + 1.0, m_aspect + 1.0)) {
-            return;
-        }
-        m_aspect = aspect;
-        place();
-    }
-
-protected:
-    void resizeEvent(QResizeEvent* event) override {
-        QWidget::resizeEvent(event);
-        place();
-    }
-
-private:
-    void place() {
-        if (!m_panel) {
-            return;
-        }
-        QRect r = rect();
-        if (m_aspect > 0.0 && r.width() > 0 && r.height() > 0) {
-            int w = r.width();
-            int h = qRound(w / m_aspect);
-            if (h > r.height()) {
-                h = r.height();
-                w = qRound(h * m_aspect);
-            }
-            r = QRect((width() - w) / 2, (height() - h) / 2, w, h);
-        }
-        m_panel->setGeometry(r);
-    }
-
-    QWidget* m_panel = nullptr;
-    double m_aspect = 0.0; // width / height of the shown media; 0 = fill
-};
 
 MainWindow::MainWindow(bool startMinimized, const QString& initialExplorerFile,
     qint64 initialPlaylistId, const QString& initialPlaylistFile, QWidget* parent)
@@ -1366,11 +1300,6 @@ QString MainWindow::extractDroppedVideoSource(const QMimeData* mimeData, int* ex
     }
     return firstMatch;
 }
-
-namespace {
-constexpr int kVideoPageIndex = 0;
-constexpr int kDropZonePageIndex = 1;
-} // namespace
 
 void MainWindow::refreshDropZoneVisual() {
     if (!m_preview) {

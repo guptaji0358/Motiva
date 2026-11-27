@@ -49,7 +49,7 @@ em { font-style: normal; color: #fff; font-weight: 600; }
 
 :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 6px; }
 
-.container { width: min(1160px, 100% - 48px); margin-inline: auto; }
+.container { width: min(1440px, 100% - clamp(48px, 8vw, 160px)); margin-inline: auto; }
 .skip-link {
   position: absolute; left: 16px; top: -60px; z-index: 100;
   background: #fff; color: #0c0e1e; padding: 10px 16px; border-radius: 10px; font-weight: 600;

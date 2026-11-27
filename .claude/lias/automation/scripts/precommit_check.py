@@ -5,6 +5,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _build_guard import safe_build  # noqa: E402
 from _common import qt_env, run, tool  # noqa: E402
 
 a = json.loads(sys.stdin.read() or "{}")
@@ -34,10 +35,16 @@ for rel in changed:
                         hits.append("%s:%d: %s" % (rel, i, ln.strip()[:120]))
 res["debug_markers"] = hits[:50]
 if a.get("build", True):
-    code, text = run(["cmake", "--build", "out/build"], root, 540, qt_env())
-    res["build_exit"] = code
-    if code:
-        res["build_errors"] = [x.strip()[:300] for x in text.splitlines() if "error" in x.lower()][:40]
-res["ok"] = not over and not res.get("build_exit", 0)
+    b = safe_build(root, a.get("build_dir"), qt_env())
+    res["build_dir"] = b["build_dir"]
+    if "refused" in b:
+        res["build_refused"] = b["refused"]
+        if "running" in b:
+            res["running"] = b["running"]
+    else:
+        res["build_exit"] = b["exit_code"]
+        if b["exit_code"]:
+            res["build_errors"] = [x.strip()[:300] for x in b["output"].splitlines() if "error" in x.lower()][:40]
+res["ok"] = not over and not res.get("build_exit", 0) and "build_refused" not in res
 res["note"] = "debug markers are informational" if hits else ""
 print(json.dumps(res))

@@ -47,7 +47,6 @@ public:
     GlWindow(const QString& title, const QString& subtitle, QWidget* parent = nullptr, bool resizable = true);
 
     GlCanvas* canvas() const { return m_canvas; }
-    GlPanel* contentPanel() const { return m_content; }
     // Called whenever the canvas lays out. `content` is the inner area of the
     // content panel; `footer` is the strip below it for footer buttons.
     virtual void layoutContent(const QRectF& content, const QRectF& footer) = 0;

@@ -1,7 +1,8 @@
 # Motiva memory index
 
 Start here. Read the file(s) for the task, then the source it names. Source code
-is the final authority; these notes say where to look. Last full pass: 2026-11-11.
+is the final authority; these notes say where to look. Last full pass: 2026-11-11;
+outdated-statement correction pass: 2026-11-27 (HEAD `8806853`).
 
 ## Memory files
 

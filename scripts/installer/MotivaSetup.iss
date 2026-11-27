@@ -11,7 +11,10 @@
 #define AppName "Motiva"
 #define AppVersion "2.0.0"
 #define AppPublisher "Robin Gupta Studios"
-#define StagingDir "..\..\out\release\staging"
+; build-installer.ps1 passes /DStagingDir (and /O for the output folder).
+#ifndef StagingDir
+  #define StagingDir "..\..\out\release\staging"
+#endif
 
 [Setup]
 AppId={{6D0F3B52-7A1E-4C1B-9B0B-4D0E5A6F2C91}

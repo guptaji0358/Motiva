@@ -67,6 +67,16 @@ if it is interrupted or fails, a new approval is required.
 - Duplicate submission: same spec on the same source revision returns the existing task.
 - Resume: verified steps are kept unless sources changed between runs; final comparisons always re-run.
 
+## Report
+
+Ten fixed sections, built from the task record only. Section 1 lists grants (present at submission, or added
+later with a timestamp) and every recorded approval with what the history shows (used by run N, interrupted,
+replaced, not used). The store keeps **no identity** of who granted or approved. Section 2 has the execution
+history (runs, resumes, runs without a recorded end, per-step starts, attempts, evidence reuses, interruptions).
+Section 5 lists each recorded check (expected vs. got), labelled when it comes from reused evidence or an earlier
+execution. Commands and checks are kept only for a step's latest execution (an interrupted step's record is reset).
+`report.md` is rewritten only when a run ends, so a grant or approval recorded afterwards appears after the next run.
+
 ## Storage
 
 `.claude/lias/agent-data/` (gitignored): `tasks/<id>/{task.json,report.md,logs/}`, `evidence/`, `*.lock`.

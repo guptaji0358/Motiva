@@ -173,16 +173,6 @@ QString CloudManager::configPath() {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/rclone/rclone.conf");
 }
 
-void CloudManager::setConfigDirectoryForTesting(const QString& dir) {
-    m_configDirOverride = dir;
-}
-
-void CloudManager::setRclonePathForTesting(const QString& exe) {
-    m_rcloneOverride = exe;
-    m_toolChecked = false;
-    m_ready = false;
-}
-
 QString CloudManager::cachePathFor(const QString& remote, const CloudEntry& entry) const {
     const QString key = QString::fromLatin1(
         QCryptographicHash::hash((remote + QLatin1Char(':') + entry.path).toUtf8(), QCryptographicHash::Sha1).toHex().left(10));
@@ -238,7 +228,7 @@ QProcessEnvironment CloudManager::environment(bool withConfigPassword) const {
 }
 
 QStringList CloudManager::commonArgs() const {
-    const QString conf = m_configDirOverride.isEmpty() ? configPath() : QDir(m_configDirOverride).filePath(QStringLiteral("rclone.conf"));
+    const QString conf = configPath();
     return {QStringLiteral("--config"), QDir::toNativeSeparators(conf), QStringLiteral("--ask-password=false")};
 }
 
@@ -253,7 +243,7 @@ void CloudManager::checkTool(ToolCallback done) {
     }
     CloudToolInfo info;
     bool bundled = false;
-    info.path = m_rcloneOverride.isEmpty() ? locateRclone(&bundled) : m_rcloneOverride;
+    info.path = locateRclone(&bundled);
     info.bundled = bundled;
     if (info.path.isEmpty()) {
         info.error = tr("The cloud component was not found. Reinstall Motiva.");
@@ -304,7 +294,7 @@ void CloudManager::clearKey() {
 }
 
 bool CloudManager::isConfigEncrypted() const {
-    const QString conf = m_configDirOverride.isEmpty() ? configPath() : QDir(m_configDirOverride).filePath(QStringLiteral("rclone.conf"));
+    const QString conf = configPath();
     QFile f(conf);
     if (!f.open(QIODevice::ReadOnly)) {
         return false;
@@ -342,7 +332,7 @@ void CloudManager::finishReady(bool ok, const QString& error) {
 }
 
 void CloudManager::prepareConfig() {
-    const QString conf = m_configDirOverride.isEmpty() ? configPath() : QDir(m_configDirOverride).filePath(QStringLiteral("rclone.conf"));
+    const QString conf = configPath();
     QDir().mkpath(QFileInfo(conf).absolutePath());
     m_configUnreadable = false;
 
@@ -416,7 +406,7 @@ bool CloudManager::resetAccounts() {
     if (m_planActive || m_connectActive) {
         return false;
     }
-    const QString conf = m_configDirOverride.isEmpty() ? configPath() : QDir(m_configDirOverride).filePath(QStringLiteral("rclone.conf"));
+    const QString conf = configPath();
     bool ok = true;
     if (QFileInfo::exists(conf)) {
         ok = QFile::remove(conf);
@@ -477,26 +467,6 @@ void CloudManager::setClientCredentials(const QString& providerId, const QString
 }
 
 // ------------------------------------------------------------------ accounts
-
-bool CloudManager::isValidRemoteName(const QString& name, QString* why) {
-    static const QRegularExpression ok(QStringLiteral(R"(^[A-Za-z0-9_.+@][A-Za-z0-9 _.+@-]*[A-Za-z0-9_.+@-]$)"));
-    auto fail = [why](const QString& m) {
-        if (why) {
-            *why = m;
-        }
-        return false;
-    };
-    if (name.size() < 2) {
-        return fail(QObject::tr("The account name needs at least 2 characters."));
-    }
-    if (name.size() > 40) {
-        return fail(QObject::tr("The account name is too long (40 characters at most)."));
-    }
-    if (!ok.match(name).hasMatch()) {
-        return fail(QObject::tr("Use only letters, digits, spaces and . _ + @ - in the account name."));
-    }
-    return true;
-}
 
 void CloudManager::listRemotes(RemotesCallback done) {
     ensureReady([this, done](bool ok, const QString& error) {

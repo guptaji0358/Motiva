@@ -1,5 +1,6 @@
 """Reporting engine: one concise Markdown report per run, built only from recorded results."""
 import os
+import re
 
 from .util import atomic_write_text, redact
 
@@ -11,7 +12,97 @@ def _cell(text, limit=160):
 
 
 def _commands(rec):
-    return [c for a in rec["attempts"] for c in a["commands"]]
+    return [(a.get("run"), c) for a in rec["attempts"] for c in a["commands"]]
+
+
+def _approvals(task):
+    """Every recorded approval and what the history shows happened to it. No identity is stored."""
+    events = task["history"]
+    out = []
+    for i, e in enumerate(events):
+        m = re.match(r"approval recorded for step (\S+) \(([^)]*)\)\s*(.*)", e["event"], re.S)
+        if not m:
+            continue
+        step, digest_, note = m.groups()
+        run = sum(1 for x in events[:i] if re.match(r"run \d+ started", x["event"]))
+        status = None
+        for later in events[i + 1:]:
+            text = later["event"]
+            started = re.match(r"run (\d+) started", text)
+            if started:
+                run = int(started.group(1))
+            elif text.startswith(f"approval recorded for step {step} "):
+                status = status or "replaced by a later approval before any recorded use"
+                break
+            elif text == f"{step}: started" and not status:
+                status = f"used by run {run}"
+            elif status and text.startswith(f"{step} was interrupted"):
+                status += ", which was interrupted (outcome unknown)"
+                break
+        if not status:
+            current = task["approvals"].get(step)
+            if not current:
+                status = "no longer held; no step start is recorded for it"
+            elif current["used"]:
+                status = "marked used, but no step start is recorded"
+            else:
+                status = "not used so far"
+        out.append({"step": step, "digest": digest_, "at": e["ts"], "note": note, "status": status})
+    return out
+
+
+def _grant_lines(task):
+    added = {}
+    for e in task["history"]:
+        if e["event"].startswith("grant added: "):
+            added[e["event"][len("grant added: "):]] = e["ts"]
+    return [f"- grant `{g}`: " + (f"added after submission at {added[g]}" if g in added
+                                  else "present at submission") for g in task["spec"]["grants"]]
+
+
+def _history_lines(task, order):
+    events = [(e["ts"], e["event"]) for e in task["history"]]
+    started = sum(1 for _, t in events if re.match(r"run \d+ started", t))
+    ended = sum(1 for _, t in events if re.match(r"run \d+ ended", t))
+    lines = [f"Runs started: {task['runs']} (resumes after the first: {max(task['runs'] - 1, 0)}); "
+             f"runs without a recorded end: {max(started - ended, 0)}", "",
+             "| step | executions started | attempts recorded | evidence reuses | interruptions |",
+             "|---|---|---|---|---|"]
+    for sid in order:
+        done = re.compile(re.escape(sid) + r": \w+ after (\d+) attempt")
+        starts = sum(1 for _, t in events if t == f"{sid}: started")
+        attempts = sum(int(m.group(1)) for m in (done.match(t) for _, t in events) if m)
+        reuses = sum(1 for _, t in events if t.startswith(f"{sid}: reused evidence"))
+        broken = sum(1 for _, t in events if t.startswith(f"{sid} was interrupted"))
+        lines.append(f"| {sid} | {starts} | {attempts} | {reuses} | {broken} |")
+    wanted = re.compile(r"submitted|cancelled|run \d+ |sources changed|interrupted:|\S+ was interrupted")
+    timeline = [f"- {ts} {_cell(t, 200)}" for ts, t in events if wanted.match(t)]
+    if len(timeline) > 40:
+        timeline = [f"- ... {len(timeline) - 40} earlier events in task.json"] + timeline[-40:]
+    return lines + [""] + timeline
+
+
+def _verification_lines(task, order, rel):
+    lines = []
+    for sid in order:
+        r = task["steps"][sid]
+        v = r["verification"]
+        if not v:
+            continue
+        if r["reused_from"]:
+            origin = f", checks recorded by task {r['reused_from']['task']} at {r['reused_from']['when']}"
+        elif r["state"] not in ("verified", "failed", "unverified"):
+            origin = f", checks from an earlier execution (result then: {v['status']}); not the current state"
+        else:
+            origin = ""
+        log = v.get("evidence", {}).get("log")
+        lines.append(f"- `{sid}` {r['state']}{origin}" + (f"; evidence log {rel(log)}" if log else ""))
+        checks = sorted(v["checks"], key=lambda c: c["ok"])  # unmet first, so truncation never hides one
+        lines += [f"    - {'met' if c['ok'] else 'NOT MET'}: {_cell(c['check'], 80)}: expected "
+                  f"{_cell(c['expected'], 100)}, got {_cell(c['actual'], 100)}" for c in checks[:12]]
+        if len(checks) > 12:
+            lines.append(f"    - ... {len(checks) - 12} more checks in task.json")
+    return lines or ["- no verification is recorded"]
 
 
 def build_report(task, plan, log_dir):
@@ -22,21 +113,31 @@ def build_report(task, plan, log_dir):
     for r in records.values():
         count[r["state"]] = count.get(r["state"], 0) + 1
     rel = lambda p: os.path.relpath(p, log_dir).replace("\\", "/") if p and p.startswith(log_dir) else p  # noqa
+    approvals = _approvals(task)
     L = [f"# LIAS agent report: {task['title']}", "",
          f"**Task** `{task['id']}` | **Result: {task['state'].upper()}** | run {task['runs']} | {task['updated']}",
          "Steps: " + ", ".join(f"{v} {k}" for k, v in sorted(count.items())),
          f"Logs: `{log_dir}` (log names below are relative to it)", "",
          "## 1. Original task", spec["task"],
          f"Grants: {', '.join(spec['grants']) or 'none'} | scratch: `{spec['scratch_root']}`", "",
-         "## 2. Actions performed", "| step | state | note |", "|---|---|---|"]
+         "### Approvals and grants"]
+    L += _grant_lines(task) or ["- no grants"]
+    L += [f"- approval of `{a['step']}` (digest {a['digest']}) recorded {a['at']}: {a['status']}"
+          + (f"; note: {_cell(a['note'])}" if a["note"] else "") for a in approvals] \
+        or ["- no approvals recorded"]
+    L += ["The store records no identity for who issued a grant or approval.", "",
+          "## 2. Actions performed", "| step | state | note |", "|---|---|---|"]
     for sid in order:
         r = records[sid]
         note = r["note"] or ""
         if r["reused_from"]:
             note = f"reused evidence of {r['reused_from']['task']} ({r['reused_from']['when']}); not re-executed"
+            if r["attempts"]:
+                note += " for this result (an earlier execution in this task is also recorded)"
         elif len(r["attempts"]) > 1:
             note = f"{len(r['attempts'])} attempts"
-        L.append(f"| {sid} | {r['state']} | {_cell(note)} |")
+        L.append(f"| {sid} | {r['state']} | {_cell(note, 240)} |")
+    L += ["", "### Execution history"] + _history_lines(task, order)
 
     L += ["", "## 3. Files changed"]
     edits = [r["data"] for s, r in records.items()
@@ -57,11 +158,15 @@ def build_report(task, plan, log_dir):
     L += ["", "## 4. Commands executed"]
     n = 0
     for sid in order:
-        for c in _commands(records[sid]):
+        for run, c in _commands(records[sid]):
             n += 1
-            L.append(f"- `{sid}` exit {c['exit_code']}: `{_cell(c['cmd'], 200)}` -> {rel(c['log'])}")
+            when = f" (run {run})" if run else ""
+            L.append(f"- `{sid}`{when} exit {c['exit_code']}: `{_cell(c['cmd'], 200)}` -> {rel(c['log'])}")
     if not n:
-        L.append("- none in this task (all results blocked or reused)")
+        L.append("- no commands are recorded for this task's steps")
+    else:
+        L.append("Commands are kept for the latest execution of each step only; "
+                 "the execution history also counts earlier ones.")
 
     L += ["", "## 5. Tests and build results"]
     tests = [s for s in order if steps[s]["action"] == "qt_test"]
@@ -81,7 +186,9 @@ def build_report(task, plan, log_dir):
                 L.append(f"- skipped in `{sid}`: {_cell(s)}")
     for sid in order:
         r, a = records[sid], steps[sid]["action"]
-        if a in ("cmake_configure", "cmake_build"):
+        if a in ("cmake_configure", "cmake_build") and r["state"] not in OK + ("failed", "unverified"):
+            L.append(f"- `{sid}`: {r['state']}")
+        elif a in ("cmake_configure", "cmake_build"):
             extra = ""
             if a == "cmake_build" and r["data"]:
                 extra = f", {r['data'].get('warnings', 0)} warning lines" + \
@@ -97,6 +204,8 @@ def build_report(task, plan, log_dir):
         elif a == "cmake_cache_inspect" and r["data"]:
             L += [f"- `{sid}` finding: {_cell(x, 250)}" for x in r["data"].get("findings", [])] \
                 or [f"- `{sid}`: no findings"]
+
+    L += ["", "### Verification details"] + _verification_lines(task, order, rel)
 
     L += ["", "## 6. Failures encountered"]
     failures, fixes = [], []
@@ -149,9 +258,12 @@ def build_report(task, plan, log_dir):
     L += ["", "## 8. Remaining problems"] + (problems or ["- none detected by this task's checks"])
     L += ["", "## 9. Human decisions required"] + (decisions or ["- none"])
     if task["state"] == "completed":
-        nxt = "Review any advisory items above. Nothing was committed, pushed or deployed by this task."
-        if any(x["permission"] == "approval" for x in plan.values()):
-            nxt = "Review the results; approval-level steps ran only with the recorded approvals."
+        used = sorted({a["step"] for a in approvals if a["status"].startswith("used by")})
+        if used:
+            nxt = f"Review the results; step(s) run under a recorded approval: {', '.join(used)} (section 1)."
+        else:
+            nxt = ("Review any advisory items above. No use of an approval is recorded. The report covers only the "
+                   "recorded steps; it is not proof that nothing was committed, pushed or deployed.")
     elif task["state"] == "blocked":
         nxt = f"Answer section 9, then `agent resume {task['id']}`."
     else:

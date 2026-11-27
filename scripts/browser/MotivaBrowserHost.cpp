@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -105,13 +106,26 @@ HWND FindMotivaWindow() {
     return w ? w : FindWindowW(kMotivaClass, nullptr);
 }
 
+// Deployed layout: this host sits in <root>\resources\bin, next to the real
+// Qt-linked Motiva.exe. That binary cannot start on its own (its Qt/MinGW DLLs
+// live in <root>\resources\Qt and only the root launcher puts that folder on
+// PATH), so start the root launcher. Any other layout (build tree), or no
+// launcher there: Motiva.exe beside this host.
 std::wstring MotivaExePath() {
     wchar_t path[MAX_PATH * 2];
     const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH * 2);
     std::wstring dir(path, n);
     const size_t slash = dir.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) dir.resize(slash + 1);
-    return dir + L"Motiva.exe";
+    if (slash != std::wstring::npos) dir.resize(slash);
+    const std::wstring binSuffix = L"\\resources\\bin";
+    if (dir.size() > binSuffix.size()) {
+        const size_t rootLength = dir.size() - binSuffix.size();
+        if (_wcsicmp(dir.c_str() + rootLength, binSuffix.c_str()) == 0) {
+            const std::wstring launcher = dir.substr(0, rootLength) + L"\\Motiva.exe";
+            if (GetFileAttributesW(launcher.c_str()) != INVALID_FILE_ATTRIBUTES) return launcher;
+        }
+    }
+    return dir + L"\\Motiva.exe";
 }
 
 // Starts Motiva (tray-only, like Windows autostart) and waits for its IPC window.

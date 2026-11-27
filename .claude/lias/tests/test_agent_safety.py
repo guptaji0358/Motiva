@@ -8,10 +8,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_fixtures import AgentCase
+from agent_fixtures import APPEND, AgentCase
 
 from lias.agent import exec_actions, planner, policy  # noqa: E402
 from lias.agent.inspect_actions import outcome  # noqa: E402
+from lias.agent.report import build_report  # noqa: E402
 from lias.agent.util import clean_env, file_hash, redact  # noqa: E402
 
 DESTRUCTIVE = [
@@ -159,6 +160,13 @@ class SecretTests(AgentCase):
                 self.assertNotIn("hunter2", text, f)
         self.assertIn("[REDACTED]", redact("api_key: abcdef123456"))
 
+    def test_key_prefixes_need_a_separator(self):
+        for word in ("skipped_dependency", "pkg_config_search_path"):
+            self.assertEqual(redact(word), word)
+        tail = "A1b2" * 5
+        for prefix in ("sk-", "sk_live_", "pk_test_", "ghp_", "gho_", "xoxb-", "AKIA", "AIza"):
+            self.assertEqual(redact(prefix + tail), "[REDACTED]", prefix)
+
     def test_spec_containing_a_secret_is_rejected(self):
         with self.assertRaises(planner.SpecError):
             self.submit([command(["git", "status"])], grants=[], task="use token=abcdef123456")
@@ -250,6 +258,74 @@ class ReportTests(AgentCase):
                                    "Remaining problems", "Human decisions required",
                                    "Recommended next action"), 1):
             self.assertIn(f"## {n}. {title}", text)
+        self.assertIn("- no grants\n- no approvals recorded\n", text)
+        self.assertIn("No use of an approval is recorded", text)
+
+    def test_report_states_approvals_and_grants_without_inventing_identity(self):
+        task, _ = self.submit([{"id": "c", "action": "command", "params": {"argv": ["git", "gc"]},
+                                "expect": {"output_contains": ["OK"]}}], grants=["edit"])
+        task = self.engine.run(task["id"])
+        self.assertIn("- no approvals recorded", self.report(task))
+        digest = self.engine.plan(task["id"])[1][0]["digest"]
+        self.engine.grant(task["id"], "recovery")
+        self.engine.approve(task["id"], "c", digest, "first try")
+        self.engine.approve(task["id"], "c", digest, "second try")
+        pending = build_report(self.engine.store.load(task["id"]), self.plan_of(task), "logs")
+        self.assertIn("not used so far; note: second try", pending)
+        with mock.patch.dict(exec_actions.REGISTRY, {"command": lambda s, c: outcome(0, output="OK")}):
+            done = self.engine.run(task["id"])
+        text = self.report(done)
+        self.assertIn("- grant `edit`: present at submission", text)
+        self.assertIn("- grant `recovery`: added after submission at ", text)
+        self.assertIn("replaced by a later approval before any recorded use; note: first try", text)
+        self.assertIn("used by run 2; note: second try", text)
+        self.assertIn("records no identity", text)
+        self.assertIn("step(s) run under a recorded approval: c", text)
+
+    def test_report_marks_an_interrupted_approval_use(self):
+        task, _ = self.submit([{"id": "c", "action": "command", "params": {"argv": ["git", "gc"]}}], grants=[])
+        self.engine.approve(task["id"], "c", self.plan_of(task)["c"]["digest"])
+
+        def interrupt(step, ctx):
+            raise KeyboardInterrupt
+        with mock.patch.dict(exec_actions.REGISTRY, {"command": interrupt}):
+            with self.assertRaises(KeyboardInterrupt):
+                self.engine.run(task["id"])
+        text = self.report(self.engine.run(task["id"]))
+        self.assertIn("used by run 1, which was interrupted (outcome unknown)", text)
+        self.assertIn("runs without a recorded end: 1", text)
+        self.assertIn("| c | 1 | 0 | 0 | 1 |", text)
+        self.assertNotIn("run under a recorded approval", text)
+
+    def test_report_history_counts_resumes_and_reuse(self):
+        self.write("input.txt", "1")
+        flag = self.scratch / "go"
+        steps = [self.script("a", APPEND.format("a"), cacheable=True, inputs=["input.txt", "scripts/a.py"]),
+                 self.script("b", f"import os\nassert os.path.exists(r'{flag}')\nprint('OK')", depends_on=["a"])]
+        task = self.run_steps(steps)
+        first = self.report(task)
+        self.assertIn("Runs started: 1 (resumes after the first: 0)", first)
+        self.assertIn("(run 1) exit 0", first)
+        self.assertIn("NOT MET: exit code: expected 0, got 1", first)
+        flag.write_text("")
+        self.write("source.txt", "edited between runs")
+        text = self.report(self.engine.run(task["id"]))
+        self.assertIn("Runs started: 2 (resumes after the first: 1); runs without a recorded end: 0", text)
+        self.assertIn("| a | 1 | 1 | 1 | 0 |", text)
+        self.assertIn("| b | 2 | 2 | 0 | 0 |", text)
+        self.assertIn("(an earlier execution in this task is also recorded)", text)
+        self.assertIn(f"`a` reused, checks recorded by task {task['id']}", text)
+        self.assertIn("(run 2) exit 0", text)
+        self.assertIn("met: output contains: expected OK, got found", text)
+
+    def test_report_labels_stale_verification(self):
+        task = self.run_steps([self.script("a", "raise SystemExit(1)")])
+        task["steps"]["a"].update(state="blocked", note="x")
+        text = build_report(task, self.plan_of(task), "logs")
+        self.assertIn("checks from an earlier execution (result then: failed); not the current state", text)
+
+    def plan_of(self, task):
+        return {p["id"]: p for p in self.engine.plan(task["id"])[1]}
 
 
 class WorkflowTests(AgentCase):
@@ -258,7 +334,7 @@ class WorkflowTests(AgentCase):
         plan = {p["id"]: p for p in self.engine.plan(task["id"])[1]}
         self.assertEqual([i for i, p in plan.items() if p["permission"] == policy.APPROVAL], [])
         self.assertEqual({i for i, p in plan.items() if p["blocked_on"]}, {"test-vd-window"})
-        self.assertEqual(sum(p["action"] == "qt_test" for p in plan.values()), 6)
+        self.assertEqual(sum(p["action"] == "qt_test" for p in plan.values()), 7)
         self.assertEqual({p["action"] for p in plan.values()} - policy.OBSERVE_ACTIONS,
                          {"cmake_configure", "cmake_build", "qt_test"})
 

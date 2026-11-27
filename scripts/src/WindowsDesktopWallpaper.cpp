@@ -212,14 +212,6 @@ void LogChildren(const char* context, const char* parentLabel, HWND parent) {
         reinterpret_cast<LPARAM>(&ctx));
 }
 
-// Set once, on every successful AttachToDesktop() - NOT touched anywhere
-// else. NeedsReattach() only ever compares against these; nothing polls or
-// re-derives z-order state, which is what previously caused a
-// reattach-on-every-perceived-drift loop (visible as flicker).
-HWND g_attachedHost = nullptr;
-HWND g_attachedProgman = nullptr;
-bool g_hasAttached = false;
-
 // Guards the bounded one-shot 0x052C spawn message in FindOrCreateWorkerW
 // so it fires at most once per attach generation, not on every call.
 // WallpaperManager's 300ms retry timer re-enters FindOrCreateWorkerW on
@@ -360,7 +352,7 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd, uint64_t generation) {
     // background thread (WallpaperManager's async attach) concurrently
     // with DetachFromDesktop on the GUI thread. Held for the whole
     // discovery+reparent sequence, not just the state writes at the end,
-    // so a concurrent Detach can't yank g_attachedHost/g_hasAttached out
+    // so a concurrent Detach can't change the window hierarchy out
     // from under a reparent that's still in progress.
     std::lock_guard<std::mutex> lock(g_desktopStateMutex);
 
@@ -459,9 +451,6 @@ bool WindowsDesktopWallpaper::AttachToDesktop(HWND hwnd, uint64_t generation) {
                  SWP_NOACTIVATE | SWP_FRAMECHANGED);
 
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    g_attachedHost = worker;
-    g_attachedProgman = progman;
-    g_hasAttached = true;
     StartupDiagnostics::instance().mark("wallpaperHostCreated");
     StartupDiagnostics::instance().mark("wallpaperAttached");
     StartupDiagnostics::instance().mark("attachToDesktopEnd");
@@ -496,10 +485,6 @@ void WindowsDesktopWallpaper::DetachFromDesktop(HWND hwnd) {
     style &= ~WS_CHILD;
     style |= WS_POPUP;
     SetWindowLongPtrW(hwnd, GWL_STYLE, style);
-
-    g_hasAttached = false;
-    g_attachedHost = nullptr;
-    g_attachedProgman = nullptr;
 }
 
 std::wstring WindowsDesktopWallpaper::GetCurrentWallpaperPath() {
@@ -586,24 +571,6 @@ void WindowsDesktopWallpaper::RefreshDesktopBackground() {
     }
     qInfo() << "[Wallpaper] RefreshDesktopBackground: re-applied Explorer's own current wallpaper "
                 "to force it to reclaim/redraw the desktop background layer after we detached.";
-}
-
-bool WindowsDesktopWallpaper::IsWorkerWStillValid(HWND workerW) {
-    return workerW != nullptr && IsWindow(workerW);
-}
-
-bool WindowsDesktopWallpaper::NeedsReattach() {
-    if (!g_hasAttached) {
-        return false;
-    }
-    HWND currentProgman = FindWindowW(L"Progman", nullptr);
-    if (!currentProgman || currentProgman != g_attachedProgman) {
-        return true; // Explorer restarted - Progman itself is a new HWND
-    }
-    if (!IsWindow(g_attachedHost)) {
-        return true; // our host window was destroyed
-    }
-    return false;
 }
 
 void WindowsDesktopWallpaper::DumpDesktopState(HWND wallpaperHwnd, const char* context) {

@@ -14,7 +14,8 @@ CONFIDENCE = {"verified": 0.9, "documented": 0.6, "unverified": 0.3, "invalidate
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?key|auth[_-]?token|bearer)\b\s*[:=]\s*\S{4,}"),
-    re.compile(r"\b(sk|pk|ghp|gho|xox[abp]|AKIA|AIza)[-_A-Za-z0-9]{16,}"),
+    # sk/pk/ghp/gho/xox keys need their separator, or words such as "skipped_dependency" match
+    re.compile(r"\b(?:(?:sk|pk|ghp|gho|xox[abp])[-_][-_A-Za-z0-9]{15,}|(?:AKIA|AIza)[-_A-Za-z0-9]{16,})"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{20,}"),
 ]

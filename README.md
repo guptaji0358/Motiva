@@ -10,7 +10,7 @@ Native C++ · Qt 6 · Win32 · DirectComposition · a GPU-drawn UI. No Electron.
 [![Release](https://img.shields.io/badge/release-v2.0.0-7C5CFF?style=for-the-badge)](https://github.com/guptaji0358/Motiva/releases)
 [![Platform](https://img.shields.io/badge/Windows-11-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](#)
 [![C++](https://img.shields.io/badge/C%2B%2B-Qt%206-41CD52?style=for-the-badge&logo=qt&logoColor=white)](#building)
-[![Privacy](https://img.shields.io/badge/telemetry-none-2ea44f?style=for-the-badge)](#privacy-by-design)
+[![Privacy](https://img.shields.io/badge/telemetry-opt--in,%20off%20by%20default-2ea44f?style=for-the-badge)](#privacy-by-design)
 
 [**Download**](https://github.com/guptaji0358/Motiva/releases) &nbsp;·&nbsp; [**Website**](https://robinlab.pages.dev/projects/Motiva/) &nbsp;·&nbsp; [**How it works**](#under-the-hood) &nbsp;·&nbsp; [**Build it**](#building)
 
@@ -128,10 +128,10 @@ cmake --build out/build
 Installer (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
 ```powershell
-installer\build-installer.ps1
+scripts\installer\build-installer.ps1
 ```
 
-This deploys the Qt runtime (including `Qt6OpenGL.dll` and `Qt6OpenGLWidgets.dll`) and writes `release\MotivaSetup.exe`.
+This deploys the Qt runtime (including `Qt6OpenGL.dll` and `Qt6OpenGLWidgets.dll`) and writes `out\release\MotivaSetup.exe`.
 
 <details>
 <summary><b>Project layout</b></summary>
@@ -156,7 +156,7 @@ Key pieces: `GlUi` / `GlWindow` / `GlPopups` (GL toolkit), `PlaylistLibrary` / `
 `FlowDialog`, `ThemeEditorDialog`, `NotificationManager`, `CleanupManager`, `BackupManager`,
 `MediaRecovery`, `CloudManager` / `RcloneRunner`, `WebMediaCache`, `BrowserIntegration`,
 `scripts/shell/MotivaShell.cpp` (Explorer menu), `WallpaperManager`, `D3DWallpaperRenderer`, `WindowsDesktopWallpaper`.
-Deeper history lives in [`CLAUDE.md`](CLAUDE.md).
+Developer notes live in [`.claude/memory/index.md`](.claude/memory/index.md).
 
 </details>
 
@@ -166,7 +166,8 @@ Deeper history lives in [`CLAUDE.md`](CLAUDE.md).
 - Library: a `.mtv` SQLite file in local app data
 - Log: `%TEMP%\Motiva.log`
 - Web media cache: `web-cache` in local app data (removed by Cleanup ▸ *Downloaded media*)
-- No telemetry. Backups are local, opt-in, and originals are only read.
+- Telemetry is off unless you turn on *Help improve performance (anonymous)* in Settings. It is limited to timing, hardware-class and coarse media-format statistics (never file names, paths or web addresses). No production server or signing key exists yet, so nothing is sent unless a developer endpoint is configured.
+- Backups are local, opt-in, and originals are only read.
 - Cloud is opt-in and read-only: sign-in is handled by rclone with read-only scopes, its config is encrypted, and nothing is ever uploaded.
 - The browser extension talks only to the local Motiva app through Native Messaging.
 
@@ -177,7 +178,7 @@ Deeper history lives in [`CLAUDE.md`](CLAUDE.md).
 - The GL interface has no screen-reader support yet, and there is no reduced-motion setting.
 - No automatic pause on idle or lock yet.
 - The browser extension is loaded unpacked for now, and does not handle streaming (HLS/DRM) sources or sites that block hotlinking.
-- Cloud sign-in needs your own OAuth app registration for Google; Dropbox access cannot be restricted to read-only by the client.
+- Cloud sign-in and downloads are not yet verified against real accounts, and only one account can be connected at a time. A release should ship its own OAuth app registrations (otherwise rclone's shared ones are used, and the Google one may stop working); Dropbox access cannot be restricted to read-only by the client. See [docs/CLOUD_STORAGE.md](docs/CLOUD_STORAGE.md).
 - On Windows 11 the Explorer menu appears under *Show more options*; a top-level entry needs a signed package.
 - Moving wallpapers use more power than a static one; use *Show video on battery* on laptops.
 

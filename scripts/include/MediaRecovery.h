@@ -160,7 +160,6 @@ public:
     ~BulkMediaRecoveryDialog() override;
 
     QVector<Resolution> resolutions() const;
-    int entryCount() const { return int(m_entries.size()); }
     // Outcome of the search itself (valid once the dialog has finished):
     int locatedCount() const { return m_located; }       // files with a single convincing match
     int unreadableFolders() const { return m_unreadable; } // folders that couldn't be listed

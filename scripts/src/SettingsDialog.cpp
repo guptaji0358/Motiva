@@ -630,10 +630,6 @@ void SettingsDialog::refreshMonitorList() {
     m_monitorCombo->blockSignals(false);
 }
 
-bool SettingsDialog::isMuted() const {
-    return m_muteCheck && m_muteCheck->isChecked();
-}
-
 void SettingsDialog::setMuted(bool muted) {
     if (m_muteCheck) {
         m_muteCheck->setChecked(muted);

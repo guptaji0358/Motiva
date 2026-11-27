@@ -11,7 +11,6 @@ public:
     explicit GlSwatchButton(GlCanvas* canvas) : GlItem(canvas) {}
     void setColor(const QColor& c) { m_color = c; update(); }
     QColor color() const { return m_color; }
-    void setCustom(bool on) { m_custom = on; update(); }
     bool isInteractive() const override { return true; }
     void paint(QPainter& p, const GlUi::Style& s) override;
     void activate() override { emit clicked(); }
@@ -20,7 +19,6 @@ signals:
 
 private:
     QColor m_color;
-    bool m_custom = false;
 };
 
 // Saturation / value square for a given hue.

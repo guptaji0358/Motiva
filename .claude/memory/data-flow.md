@@ -111,7 +111,7 @@ real Explorer right-click and the Windows 11 top-level menu are NOT verified.
 
 ## 7. Cloud (read-only)
 
-`CloudWindow` -> `CloudManager` builds a `CloudPlan` (ordered rclone steps,
+`CloudWindow` -> `CloudManager` builds a download `CloudPlan` (ordered rclone steps,
 run one at a time) -> `RcloneRunner` (`RcloneJob`) runs `rclone.exe` with JSON
 logs, filtered to media only. Config is an rclone-encrypted file; the password
 comes from `RCLONE_CONFIG_PASS` (DPAPI-protected key in QSettings).

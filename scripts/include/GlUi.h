@@ -90,8 +90,6 @@ public:
 
     // Interactive items receive hover/press/focus; labels and panels don't.
     virtual bool isInteractive() const { return false; }
-    bool isHovered() const { return m_hovered; }
-    bool isPressed() const { return m_pressed; }
     bool hasFocus() const;
 
     void update();
@@ -221,7 +219,6 @@ public:
     void setStateIcon(const QIcon& normal, const QIcon& = QIcon(), const QIcon& = QIcon(), const QIcon& = QIcon()) {
         setIcon(normal);
     }
-    void setDefaultAction(bool d) { m_default = d; }
     void setSelected(bool on) { m_selected = on; update(); }
     bool isSelected() const { return m_selected; }
     void setAlignLeft(bool on) { m_alignLeft = on; update(); }
@@ -239,7 +236,6 @@ private:
     Kind m_kind;
     QString m_text;
     QIcon m_icon;
-    bool m_default = false;
     bool m_selected = false;
     bool m_alignLeft = false;
     bool m_tint = true;
@@ -403,9 +399,6 @@ public:
     void paint(QPainter& p, const GlUi::Style& s) override;
     bool advance(qreal dt) override;
 
-signals:
-    void contentResized();
-
 private:
     QImage m_image;
     QString m_loading;
@@ -415,7 +408,6 @@ private:
     qreal m_activity = 0, m_invalid = 0, m_success = 0;
     qreal m_successTarget = 0;
     std::unique_ptr<QSvgRenderer> m_icon;
-    QSizeF m_lastSize;
 };
 
 // Single-line text field (search boxes, inline rename).
@@ -428,7 +420,6 @@ public:
     void clear() { setText(QString()); }
     void setPlaceholder(const QString& t) { m_placeholder = t; update(); }
     void setClearable(bool c) { m_clearable = c; update(); }
-    void setSelectAllOnFocus(bool on) { m_selectAll = on; }
     void setConsumeEscape(bool on) { m_escConsumed = on; }
     // Moves keyboard focus here (and selects everything when asked to).
     void focusInput(bool selectAll = false);
@@ -455,7 +446,7 @@ private:
     QString m_text, m_placeholder;
     int m_cursor = 0, m_anchor = 0;
     qreal m_scroll = 0;
-    bool m_clearable = false, m_selectAll = false, m_escConsumed = false;
+    bool m_clearable = false, m_escConsumed = false;
     qreal m_blinkBase = 0;
 };
 
@@ -622,7 +613,6 @@ public:
     qreal clock() const { return m_clock; }
     void setBackgroundAnimated(bool animated);
     void requestAnimation(); // keep the tick running a little longer
-    QImage snapshot(); // offscreen-capable test hook
 
 protected:
     void initializeGL() override;

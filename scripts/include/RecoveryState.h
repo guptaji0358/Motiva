@@ -37,7 +37,6 @@ public:
         // enough evidence without needing to reproduce it again.
         QJsonObject previousStartupDiagnostics;
     };
-    const PreviousSession& previousSession() const { return m_previous; }
 
     // --- lastSession fields ---
     void setCleanExit(bool clean);
@@ -62,7 +61,7 @@ public:
     static QString tempFilePath();
 
     // Cleanup & Reset (see CleanupManager). Neither is a crash/recovery
-    // signal: previousSession() is only ever logged, never used to decide
+    // signal: the previous session is only ever logged, never used to decide
     // whether to re-attach anything, so a missing file just reads as
     // "first run" on the next launch.
     //

@@ -99,7 +99,6 @@ public:
     // Video playlist mode: play each video once (ignoring the Loop
     // preference) so endOfMedia() fires and the playlist can advance.
     void setSequencedPlayback(bool sequenced);
-    bool isSequencedPlayback() const { return m_sequenced; }
     // Seeks a loaded video back to 0 and plays (single-item video playlist
     // that should repeat).
     void restartFromBeginning();
@@ -108,7 +107,6 @@ public:
     int volume() const { return m_volumePercent; }
 
     void setMuted(bool muted);
-    bool isMuted() const { return m_muted; }
 
     // Stops playback AND releases the loaded source (decoder input, QMovie
     // file, decoded still image) - used by "Remove Media". stop() alone
@@ -173,7 +171,6 @@ signals:
     // loadSeq identifies the load the values belong to; origin is an allowlisted token.
     void videoMetadataAvailable(quint64 loadSeq, int width, int height, double fps, const QString& codec,
                                 const QString& origin);
-    void playbackStateChanged(QMediaPlayer::PlaybackState state);
 
 private:
     // Error raised by loadFile() itself (synchronous): always belongs to the current load.

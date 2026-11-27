@@ -103,7 +103,9 @@ Read the header first; this file only says what each piece owns.
   path-based cache `g_foundCache`, unreadable-folder counting.
 - **MediaPreview** — preview frame, CPU-scaled before upload.
 - **WebMediaCache** — downloads/caches web media under `web-cache/`, validates
-  (http(s) only, no text/HLS, 2 GB cap, images must decode).
+  (http(s) only, no text/HLS, 2 GB cap, images must decode). File-name rules
+  (extension kept when shortening, Windows device names prefixed `_`) are in
+  `WebMediaName.h`; bytes still buffered at `finished` are appended when there was no error.
 
 ## Backup, cleanup, cloud
 
@@ -113,12 +115,12 @@ Read the header first; this file only says what each piece owns.
 - **CleanupManager** — only code that deletes Motiva data (exact paths inside
   approved roots, rmdir-only for folders). **CleanupWindow** is its UI.
 - **CloudManager** — singleton: tool check, encrypted rclone config, accounts,
-  `lsjson` browsing, "plans" (ordered rclone steps), media-only filter
+  `lsjson` browsing, download "plans" (ordered rclone steps), media-only filter
   (`isAllowedMediaName`, GIF = picture). Enforces read-only policy.
 - **RcloneRunner** — `RcloneJob`: one async QProcess, JSON-log progress, timeouts,
   Ctrl+C-then-kill cancel, `scrub()` of secrets, error classification.
-- **CloudWindow** — GL window: Accounts / Browse / Sync / Backup & Restore pages
-  (pages 3-4 are legacy from the removed feature set, see [[known-issues]]).
+- **CloudWindow** — GL window: Accounts and Browse pages plus a transfer panel; one connected account
+  at a time. Details: `docs/CLOUD_STORAGE.md`.
 
 ## Shell & browser integration
 

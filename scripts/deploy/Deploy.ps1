@@ -73,6 +73,15 @@ if (-not $QtBinDir) {
 }
 $windeployqt = Resolve-RequiredPath (Join-Path $QtBinDir "windeployqt.exe") "windeployqt.exe"
 
+# Checked here, before $OutDir is removed, so a failed run keeps the previous deployment.
+$rcloneSrc = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\third_party\rclone"))
+$rcloneExe = Join-Path $rcloneSrc "rclone.exe"
+if (-not (Test-Path -LiteralPath $rcloneExe -PathType Leaf)) {
+    throw ("DEPLOY ABORTED: required rclone.exe not found. Expected file: $rcloneExe. " +
+        "It is not kept in git: follow $(Join-Path $rcloneSrc 'README.txt') to download, verify and place it " +
+        "at that path, then run the deployment again.")
+}
+
 Write-Host "Building deployment tree at: $OutDir"
 
 if (Test-Path $OutDir) {
@@ -103,22 +112,19 @@ $extSrc = Join-Path $PSScriptRoot "..\extension"
 if (Test-Path (Join-Path $extSrc "manifest.json")) {
     $extDst = Join-Path $binDir "extension"
     New-Item -ItemType Directory -Force -Path $extDst | Out-Null
-    Copy-Item (Join-Path $extSrc "*") $extDst -Recurse -Force
+    Copy-Item (Join-Path $extSrc "*") $extDst -Recurse -Force -Exclude "tests" # not shipped
+    $extTests = Join-Path $extDst "tests"
+    if (Test-Path -LiteralPath $extTests) { Remove-Item -LiteralPath $extTests -Recurse -Force }
 }
 
 # --- rclone (MIT): the cloud-storage engine. Its licence must travel with it. ---
-$rcloneSrc = Join-Path $PSScriptRoot "..\..\third_party\rclone"
 $rcloneDst = Join-Path $binDir "rclone"
-if (Test-Path (Join-Path $rcloneSrc "rclone.exe")) {
-    New-Item -ItemType Directory -Force -Path $rcloneDst | Out-Null
-    Copy-Item (Join-Path $rcloneSrc "rclone.exe") $rcloneDst -Force
-    Copy-Item (Join-Path $rcloneSrc "LICENSE.txt") $rcloneDst -Force
-    Copy-Item (Join-Path $rcloneSrc "README.txt") $rcloneDst -Force
-    $ini = Join-Path $rcloneSrc "motiva-cloud.ini"
-    if (Test-Path $ini) { Copy-Item $ini $rcloneDst -Force }
-} else {
-    Write-Warning "third_party/rclone/rclone.exe not found - cloud storage will not work in this deployment."
-}
+New-Item -ItemType Directory -Force -Path $rcloneDst | Out-Null
+Copy-Item $rcloneExe $rcloneDst -Force
+Copy-Item (Join-Path $rcloneSrc "LICENSE.txt") $rcloneDst -Force
+Copy-Item (Join-Path $rcloneSrc "README.txt") $rcloneDst -Force
+$ini = Join-Path $rcloneSrc "motiva-cloud.ini"
+if (Test-Path $ini) { Copy-Item $ini $rcloneDst -Force }
 
 # Tells Qt's OWN plugin loader (independent of the OS DLL search PATH
 # the launcher sets up) where to find platforms/styles/imageformats/...
@@ -144,10 +150,9 @@ Write-Host "Running windeployqt against a staged copy..."
 if ($LASTEXITCODE -ne 0) {
     throw "windeployqt failed with exit code $LASTEXITCODE"
 }
-# --no-system-d3d-compiler above only skips windeployqt's OWN bundled
-# fallback copy - D3Dcompiler_47.dll is still required (D3DWallpaperRenderer
-# uses it) and is picked up as a normal loose DLL below since Motiva.exe
-# already links it directly (see CMakeLists.txt's target_link_libraries).
+# --no-system-d3d-compiler only skips windeployqt's bundled fallback copy.
+# D3DCOMPILER_47.dll is NOT copied: Motiva links the system d3dcompiler import
+# library (CMakeLists.txt) and Windows 8.1+ ships that DLL in System32.
 
 Get-ChildItem $stageDir -Filter "*.dll" | ForEach-Object {
     Move-Item $_.FullName (Join-Path $qtDllDir $_.Name) -Force
@@ -156,6 +161,56 @@ Get-ChildItem $stageDir -Directory | ForEach-Object {
     Move-Item $_.FullName (Join-Path $pluginsDir $_.Name) -Force
 }
 Remove-Item -Recurse -Force $stageDir
+
+# --- Fail if the tree is incomplete: a missing DLL or plugin otherwise only
+# shows up on the user's machine (0xC0000135 "DLL not found", no video, ...).
+# Keep in step with the Qt modules in CMakeLists.txt. FFmpeg and style file
+# names carry versions, hence the wildcards.
+$required = @(
+    "Motiva.exe",
+    "resources\bin\Motiva.exe",
+    "resources\bin\qt.conf",
+    "resources\bin\MotivaShell.dll",
+    "resources\bin\MotivaBrowserHost.exe",
+    "resources\bin\extension\manifest.json",
+    "resources\bin\rclone\rclone.exe",
+    "resources\Qt\Qt6Core.dll",
+    "resources\Qt\Qt6Gui.dll",
+    "resources\Qt\Qt6Widgets.dll",
+    "resources\Qt\Qt6OpenGL.dll",
+    "resources\Qt\Qt6OpenGLWidgets.dll",
+    "resources\Qt\Qt6Multimedia.dll",
+    "resources\Qt\Qt6MultimediaWidgets.dll",
+    "resources\Qt\Qt6Network.dll",
+    "resources\Qt\Qt6Sql.dll",
+    "resources\Qt\Qt6Svg.dll",
+    "resources\Qt\libgcc_s_seh-1.dll",
+    "resources\Qt\libstdc++-6.dll",
+    "resources\Qt\libwinpthread-1.dll",
+    "resources\Qt\avcodec-*.dll",
+    "resources\Qt\avformat-*.dll",
+    "resources\Qt\avutil-*.dll",
+    "resources\Qt\swresample-*.dll",
+    "resources\Qt\swscale-*.dll",
+    "resources\plugins\platforms\qwindows.dll",
+    "resources\plugins\styles\*.dll",
+    "resources\plugins\multimedia\ffmpegmediaplugin.dll",
+    "resources\plugins\imageformats\qgif.dll",
+    "resources\plugins\imageformats\qjpeg.dll",
+    "resources\plugins\imageformats\qsvg.dll",
+    "resources\plugins\imageformats\qwebp.dll",
+    "resources\plugins\iconengines\qsvgicon.dll",
+    "resources\plugins\sqldrivers\qsqlite.dll",
+    "resources\plugins\tls\qschannelbackend.dll"
+)
+$missing = @($required | Where-Object {
+    $dir = Join-Path $OutDir (Split-Path $_ -Parent)
+    -not ((Test-Path -LiteralPath $dir) -and
+          (Get-ChildItem -LiteralPath $dir -Filter (Split-Path $_ -Leaf) -File))
+})
+if ($missing.Count -gt 0) {
+    throw "Deployment tree is incomplete, missing: $($missing -join ', ')"
+}
 
 Write-Host ""
 Write-Host "Deployment tree:"

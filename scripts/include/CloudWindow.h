@@ -64,7 +64,6 @@ private:
     void fillRemoteCombo(GlDropdown* combo);
     void showBanner(const QString& text, bool isError, const QString& reconnectName = QString());
     void appendLog(const QString& line);
-    static void setLines(QStandardItemModel* model, const QStringList& lines);
 
     // accounts
     void connectProvider(const QString& providerId);
