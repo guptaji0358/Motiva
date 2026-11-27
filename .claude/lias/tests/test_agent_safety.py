@@ -159,6 +159,13 @@ class SecretTests(AgentCase):
                 self.assertNotIn("hunter2", text, f)
         self.assertIn("[REDACTED]", redact("api_key: abcdef123456"))
 
+    def test_key_prefixes_need_a_separator(self):
+        for word in ("skipped_dependency", "pkg_config_search_path"):
+            self.assertEqual(redact(word), word)
+        tail = "A1b2" * 5
+        for prefix in ("sk-", "sk_live_", "pk_test_", "ghp_", "gho_", "xoxb-", "AKIA", "AIza"):
+            self.assertEqual(redact(prefix + tail), "[REDACTED]", prefix)
+
     def test_spec_containing_a_secret_is_rejected(self):
         with self.assertRaises(planner.SpecError):
             self.submit([command(["git", "status"])], grants=[], task="use token=abcdef123456")

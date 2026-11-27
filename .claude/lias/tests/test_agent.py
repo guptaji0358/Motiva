@@ -218,6 +218,18 @@ class ResumeTests(AgentCase):
         self.assertEqual(task["state"], "completed")
         self.assertEqual(self.runs_of(), ["a"])
 
+    def test_dependent_of_blocked_step_runs_after_approval(self):
+        steps = [cmd("a", params={"argv": ["git", "gc"]}),
+                 self.script("b", APPEND.format("b"), depends_on=["a"])]
+        task = self.run_steps(steps)
+        saved = self.engine.store.load(task["id"])
+        self.assertEqual((self.state(saved, "a"), self.state(saved, "b")), ("blocked", "skipped_dependency"))
+        self.engine.approve(task["id"], "a", self.engine.plan(task["id"])[1][0]["digest"])
+        with mock.patch.dict(exec_actions.REGISTRY, {"command": scripted((0, "OK"))}):
+            done = self.engine.run(task["id"])
+        self.assertEqual((done["state"], self.state(done, "b")), ("completed", "verified"))
+        self.assertEqual(self.runs_of(), ["b"])
+
     def test_changed_sources_invalidate_checkpoints(self):
         steps = [self.script("a", APPEND.format("a")), self.script("b", "raise SystemExit(1)", depends_on=["a"])]
         task = self.run_steps(steps)
