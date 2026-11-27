@@ -1,6 +1,7 @@
 # Motiva — overview
 
-Last verified: 2026-11-11 against the working tree (branch `main`, HEAD `9c653e6`).
+Updated 2026-11-27 against branch `feature/virtual-desktop-preview` (HEAD `8806853`): location and capability
+list checked against git/source; the rest dates from the 2026-11-11 pass.
 
 ## What it is
 
@@ -12,8 +13,8 @@ window title, tray tooltip, registry `HKCU\Software\Motiva`, log
 `%TEMP%\Motiva.log`). Source folder names (`VideoWallpaper` history, class
 names like `WallpaperManager`) are historical and intentionally kept.
 
-Repo location: `D:\Apps\MyApps\Pendiing\Motiva` (under OneDrive; see
-[[development-workflow]] for the build-lock caveat).
+Repo location: `D:\Apps\MyApps\Pendiing\projects\Motiva` (see [[development-workflow]] for the older
+OneDrive build-lock caveat).
 
 ## Major capabilities (as implemented)
 
@@ -41,7 +42,11 @@ Repo location: `D:\Apps\MyApps\Pendiing\Motiva` (under OneDrive; see
   data (cache, data, factory reset).
 - **Notifications**: unified `NotificationManager` (in-app toasts + Windows
   notifications when not foreground).
-- **Theme**: Onyx and other themes plus a theme editor with per-theme overrides.
+- **Theme**: Dark/Light Aurora and Onyx, plus one app-wide Accent Color picker.
+- **Binary Rain**: procedural wallpaper (runtime behaviour unverified).
+- **Virtual Desktop Preview**: simulated desktop for previewing a wallpaper; never touches the real one.
+- **Performance intelligence**: opt-in, off by default; no production backend or signing key
+  ([[perf-intelligence]]).
 
 ## Current maturity (honest summary)
 

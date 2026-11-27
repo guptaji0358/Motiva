@@ -1,71 +1,72 @@
 # Cloud storage (rclone)
 
-Motiva talks to Google Drive, Microsoft OneDrive and Dropbox **only through
-[rclone](https://rclone.org)**. Motiva contains no OAuth code, no token refresh
-and no provider API client: rclone signs the user in (in their browser), refreshes
-tokens, lists and transfers files; Motiva starts rclone with `QProcess` and reads
-its structured output (`lsjson`, `--use-json-log`, `--combined`).
+Motiva reads pictures and videos from Google Drive, Microsoft OneDrive and Dropbox **only through
+[rclone](https://rclone.org)**. Motiva contains no OAuth code, no token refresh and no provider API client:
+rclone signs the user in (in their browser), refreshes tokens, lists and downloads files; Motiva starts rclone
+with `QProcess` and reads its output (`lsjson`, `--use-json-log`).
 
-Open it from **Playlists → Cloud…** (it then also offers *Add to playlist*).
+Cloud access is **read-only and media-only**. Motiva has no upload, sync, backup, restore, folder-creation or
+cloud-delete function. (Older versions of this document described such features; they were removed.)
+
+Status: checked against the source on 2026-11-27. No sign-in, listing or download against a real
+Google, OneDrive or Dropbox account has been verified, and the repository has no cloud tests.
+
+Open it from **Playlists → Cloud…**.
 
 ## What the user can do
 
-| Tab | Function | rclone command |
+| Page | Function | rclone command |
 |---|---|---|
-| Accounts | Connect / reconnect / test / remove several named accounts | `config create`, `config update … config_refresh_token=true`, `lsjson`, `config delete` |
-| Browse | List, open folders, make folders | `lsjson`, `mkdir` |
-| Browse | Download selected items to a folder | `copy … --immutable` |
-| Browse | Add files to a playlist (downloads into Motiva's local cache first, so playback never waits on the network) | `copyto` into `%LOCALAPPDATA%\…\cloud-cache` |
-| Browse | Upload files / folders | `copy … --immutable` (or `--backup-dir` after the user chose *Replace*) |
-| Sync | Preview, then **Copy** (adds/updates) or **Mirror** (also removes) a PC folder ↔ cloud folder; Verify | `copy`/`sync --dry-run --combined -`, `copy`/`sync --backup-dir … --max-delete N`, `check` |
-| Backup & Restore | Snapshot of the `.mtv` library (`VACUUM INTO`, consistent while Motiva runs) → `Motiva Backup/Library/`; back up a folder → `Motiva Backup/Files/`; restore saves a copy under a fresh name | `copyto`, `copy` |
+| Accounts | Connect, reconnect, test, remove the account; reset cloud accounts | `config create`, `config update … config_refresh_token=true`, `lsjson`, `config delete` |
+| Browse | List and open folders, search the open folder, page through 200 items at a time | `lsjson` |
+| Browse | Download selected files to a PC folder | `copy <folder> <dest> --include /<name> --max-depth 1 --immutable` |
+| Browse | Add files to the playlist (downloaded into Motiva's local cache, so playback never waits on the network) | `copyto` into `cloud-cache` in local app data |
 
-### Safety rules built in
-* Imports, uploads and backups use `copy`, never `sync`; nothing is deleted by them.
-* `--immutable`: a *different* existing file is reported (“left untouched”), not replaced.
-  (Single-file `copyto` ignores `--immutable`, so single files are copied with an exact
-  `--include` filter instead — covered by a test.)
-* **Mirror** only runs after a dry-run preview and a confirmation that lists the counts;
-  replaced/removed destination files are moved (`--backup-dir`) to `Motiva Sync Trash/<time>`
-  on the same cloud account (or `%LOCALAPPDATA%\…\cloud-trash\<time>` for a PC destination),
-  `--max-delete` aborts an unexpectedly large removal, and mirroring a drive root, the user's
-  home/Documents/Desktop/Pictures folder or a cloud account root is refused.
-* Motiva never touches `Motiva Sync Trash` / `Motiva Backup` itself except to write new items.
-  Those safety folders are not cleaned automatically (Cleanup & Reset does not know them yet).
-* Restore never replaces the live library; it saves `MotivaLibrary-<time> (n).mtv` next to the files.
-* Cancel sends Ctrl+C to rclone (it removes its partial files), then a hard kill after 4 s;
-  leftover `*.partial` files in the destination folder are swept.
+* **One account at a time.** A second connect is refused until the current account is removed. The account is
+  named after the service.
+* The path line shows where you are; **Up** and **Refresh** navigate.
+
+### Safety rules in the code
+* Only picture and video names (`CloudManager::isAllowedMediaName`; GIF counts as a picture) are listed or
+  fetched. Folders are never copied whole.
+* Download to folder uses `--immutable`: an existing, different local file is reported, not replaced.
+* Connecting asks for read-only access where the service allows the client to choose: Google
+  `scope=drive.readonly`; OneDrive `Files.Read Files.Read.All Sites.Read.All offline_access`.
+  Dropbox fixes permissions in the app registration, so register that app with read scopes only.
+* Cancel sends Ctrl+C to rclone, then hard-kills it after 4 s; `*.partial` leftovers in the plan's destination
+  folders are removed.
+* **Remove account** deletes it from Motiva's rclone config. Access granted at the provider stays until the user
+  revokes it in the provider's security settings.
 
 ## Credentials and secrets
-* rclone's config (which holds the OAuth tokens) lives in `%LOCALAPPDATA%\Motiva\Motiva\rclone\rclone.conf`
-  and is **encrypted by rclone** with a random password. That password is stored under
-  Windows DPAPI (current user) in Motiva's settings (`cloud/rcloneKey`) and reaches rclone only
-  through its process environment (`RCLONE_CONFIG_PASS`). It is never on a command line or in a log.
-  If the key is lost (new Windows account, settings wiped) the file cannot be read; Motiva says so
-  and offers **Reset cloud accounts** (deletes only that file; the user connects again).
-* The optional client secret typed into *API credentials…* is stored DPAPI-encrypted. It is passed
-  to `rclone config create` on the command line **once**, while connecting (Google's desktop
-  “secrets” are not confidential; OneDrive/Dropbox public clients have none).
+* rclone's config (which holds the OAuth tokens) is `rclone/rclone.conf` under Motiva's local app data and is
+  **encrypted by rclone** with a random password. The password is stored under Windows DPAPI (current user) in
+  Motiva's settings (`cloud/rcloneKey`) and reaches rclone through its process environment, not the command
+  line. The user's own `RCLONE_*` variables are removed from that environment.
+  If the config cannot be decrypted, Motiva says so and offers **Reset cloud accounts** (deletes only that file
+  and the key; the user connects again).
+* A client secret saved in Motiva is DPAPI-encrypted. It is passed to `rclone config create` on the command
+  line while connecting (Google's desktop "secrets" are not confidential; OneDrive/Dropbox public clients have
+  none).
 * Error text from rclone is scrubbed (`RcloneJob::scrub`) before it reaches the UI.
-* Factory Reset clears Motiva's settings (including the key); the then-unreadable
-  `rclone.conf` is offered for reset the next time the Cloud window opens.
+* Factory Reset clears Motiva's settings (including the key). It does not delete `rclone.conf`.
+  Cleanup's downloaded-media deletion removes the cloud and web caches, never cloud originals.
 
-## Setup required from the product owner  ⚠
-rclone ships with its own shared API registrations. **Do not rely on them in a commercial release.**
+## API registrations (product owner)
 
-* **Google Drive — required.** rclone itself reports that its shared Google client ID *“is being
-  retired and will stop working during 2026”*, and it is rate limited. Motiva therefore **refuses to
-  connect Google Drive until you supply your own client ID**. Create a Google Cloud project, enable
-  the *Google Drive API*, configure the OAuth consent screen, and create an OAuth client of type
-  **Desktop app** (https://rclone.org/drive/#making-your-own-client-id). Note: the `drive` scope is a
-  *restricted* scope — publishing to the public needs Google's OAuth verification (and possibly a
-  security assessment); only listed test users work before that. Motiva cannot do this for you.
-* **OneDrive / Dropbox — strongly recommended.** They work with rclone's shared registration for
-  testing, but register your own app (Entra ID “Mobile and desktop” app with redirect
-  `http://localhost:53682/`; Dropbox “Scoped access” app, same redirect) for a release.
-* Where the IDs go (first match wins): *Cloud → Accounts → API credentials…* (per user, saved in
-  Motiva) → `motiva-cloud.ini` placed in `resources/bin/rclone/` (shipped by you, copied there by
-  `scripts/deploy/Deploy.ps1` from `third_party/rclone/`):
+If no client ID is configured, Motiva lets rclone use **its shared registration**, Google included; the code
+does not refuse a Google connection. **Do not rely on shared registrations in a release.**
+
+* **Google Drive.** rclone has announced that its shared Google client ID is being retired during 2026 (recorded
+  2026-10; not re-checked, and whether it still works is unverified). Create a Google Cloud project, enable the
+  *Google Drive API*, configure the OAuth consent screen and create an OAuth client of type **Desktop app**
+  (https://rclone.org/drive/#making-your-own-client-id). Publishing to the public may require Google's OAuth
+  verification.
+* **OneDrive / Dropbox.** Register your own app (Entra ID "Mobile and desktop" app; Dropbox "Scoped access"
+  app), redirect `http://localhost:53682/`.
+* Where the IDs go (first match wins): value saved through *API credentials…* (the button is shown only when the
+  environment variable `MOTIVA_CLOUD_DEV` is set) → `rclone/motiva-cloud.ini` beside `Motiva.exe`
+  (`scripts/deploy/Deploy.ps1` copies it from `third_party/rclone/` if present) → rclone's shared registration.
 
 ```ini
 [gdrive]
@@ -77,29 +78,13 @@ client_id=...
 client_id=...
 client_secret=...
 ```
-All redirect URIs must be `http://localhost:53682/` (rclone's loopback listener).
 
 ## rclone packaging and licence
-* Bundled: rclone **1.75.2**, `windows-amd64`, from
-  `https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-windows-amd64.zip`
-  (SHA-256 `8a9db2ba…aff818`, equal to the published `SHA256SUMS`; the PGP signature of that file
-  was not verified). Source of truth: `third_party/rclone/README.txt`.
-* Licence: **MIT** (“Copyright (C) 2012 by Nick Craig-Wood”). `LICENSE.txt` is copied beside
-  `rclone.exe` in every build and deployment (`resources/bin/rclone/`) — it must stay with the binary.
-  rclone's binary also contains many Go modules under their own licences (mostly BSD/MIT/Apache,
-  some MPL); their notices are not collected yet — do that audit before a commercial release
-  (see https://rclone.org/licence/ and the module list in the rclone source tag).
-* Lookup order at run time: `cloud/rclonePath` setting, `<Motiva>/rclone/rclone.exe`, then `PATH`.
-  Motiva runs `rclone version`, requires ≥ 1.65 and shows the version and licence-file status in the window.
-* `rclone.exe` (85 MB) is git-ignored; the CMake build copies `third_party/rclone/` into `<build>/rclone/`.
-
-## 2026-10-23 addendum - end-user flow
-* End users never see client IDs: the "API credentials..." button is hidden unless the env var
-  `MOTIVA_CLOUD_DEV` is set. IDs come from `motiva-cloud.ini` (shipped by the publisher).
-* Browse tab: breadcrumbs (click any level), search box (filters the open folder), 200-item pages.
-* Sync tab, mode **Two-way**: files on one side only are copied to the other (`--ignore-existing`);
-  a file that differs on both sides is a conflict - the cloud version is saved beside the local one as
-  `name (cloud copy <time>).ext`; deletions are never propagated; the run is blocked if the preview
-  had comparison errors. (`CloudManager::planTwoWay`; preview = `check --combined`.)
-* Fixed: `check --combined` marks `+` = only on the source, `-` = only on the destination
-  (the Verify report had these swapped).
+* Bundled: rclone **1.75.2**, `windows-amd64`. Download URL, zip hash and the Motiva modifications (sign-in page
+  patch, executable branding) are recorded in `third_party/rclone/README.txt`.
+* Licence: **MIT**. `LICENSE.txt` must stay beside `rclone.exe` in every build and deployment. rclone's binary
+  also contains Go modules under their own licences; their notices are not collected yet - audit that before a
+  commercial release (https://rclone.org/licence/).
+* Lookup order at run time: `cloud/rclonePath` setting, `rclone/rclone.exe` or `rclone.exe` beside Motiva, then
+  `PATH`. Motiva runs `rclone version` and requires 1.65 or newer.
+* `rclone.exe` is git-ignored; the CMake build copies `third_party/rclone/` into `<build>/rclone/`.

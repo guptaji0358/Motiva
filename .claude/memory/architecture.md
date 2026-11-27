@@ -29,7 +29,8 @@ MultimediaWidgets, Concurrent, Svg, Sql, Network. C++17.
    restart, generations), `PlaylistModel` / `PlaylistRotation` /
    `PlaylistLibrary`, `CloudManager` + `RcloneRunner`, `BackupManager`
    (+ `LocalBackupProvider`), `CleanupManager`, `WebMediaCache`,
-   `NotificationManager`, `RecoveryState`.
+   `NotificationManager`, `RecoveryState`, `VirtualDesktopSession` (simulated preview),
+   `BrowserApplyTracker`, performance intelligence ([[perf-intelligence]]).
 4. **Persistence**: `SettingsManager` (QSettings in HKCU), `LibraryDatabase`
    (SQLite `.mtv`, schema migrations up to v9), `RecoveryState` (JSON in
    AppData, diagnostic only).

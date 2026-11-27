@@ -66,8 +66,9 @@ one of these without re-reading the cited reason.
   transfers all run in rclone. [status-log-01 "cloud storage via rclone"]
 - **Cloud is read-only and media-only, enforced in `CloudManager`**, not only in
   the UI: no upload, sync, backup or restore. [status-log-01 "read-only"]
-- **Google needs the user's own OAuth client ID**; Motiva refuses the shared one.
-  See `docs/CLOUD_STORAGE.md`, which is partly stale.
+- **Client IDs are the publisher's job** (`motiva-cloud.ini`); the entry button is developer-only. Without an ID
+  rclone's shared registration is used, Google included: current source does not refuse it, although the
+  history log says Google required an own ID. See `docs/CLOUD_STORAGE.md`.
 
 ## Browser and Explorer
 
