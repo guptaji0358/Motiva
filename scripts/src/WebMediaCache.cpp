@@ -3,6 +3,7 @@
 #include "PlaylistModel.h"
 #include "ProfileStore.h"
 #include "VideoPlayer.h"
+#include "WebMediaName.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -72,13 +73,7 @@ QString WebMediaCache::incomingPath(const QString& uploadId) {
 }
 
 QString WebMediaCache::sanitizedName(const QString& name) {
-    QString clean = QFileInfo(name).fileName(); // no folders
-    clean.replace(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|\\x00-\\x1f]")), QStringLiteral("_"));
-    clean = clean.trimmed();
-    while (clean.endsWith(QLatin1Char('.'))) {
-        clean.chop(1);
-    }
-    return clean.left(120);
+    return WebMediaName::sanitized(name);
 }
 
 void WebMediaCache::sweepIncomplete() {
@@ -154,7 +149,7 @@ QString WebMediaCache::finalName(const Request& request, const QString& contentT
     if (base.isEmpty()) {
         base = QStringLiteral("web-media");
     }
-    return base + QLatin1Char('.') + ext;
+    return sanitizedName(base + QLatin1Char('.') + ext); // appending may exceed the length limit
 }
 
 // Rejects what is not really a picture/video (an HTML error page saved under
@@ -279,6 +274,17 @@ void WebMediaCache::download(const Request& request, Callback done) {
         }
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, file, failed, partialPath, request, done]() {
+        // Bytes still buffered when the reply finishes (no readyRead took them)
+        // would otherwise be lost and the file truncated. Never after an error
+        // or an abort.
+        if (failed->isEmpty() && reply->error() == QNetworkReply::NoError && reply->bytesAvailable() > 0) {
+            const QByteArray rest = reply->readAll();
+            if (file->size() + rest.size() > kMaxBytes) {
+                *failed = tr("The file is larger than 2 GB.");
+            } else if (file->write(rest) != rest.size()) {
+                *failed = tr("Motiva could not write to its cache.");
+            }
+        }
         file->close();
         reply->deleteLater();
         auto cleanupAndFail = [&](const QString& why) {
